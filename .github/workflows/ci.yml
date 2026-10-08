@@ -16,7 +16,7 @@ permissions:
 jobs:
   frontend:
     name: Frontend test, build, and audit
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: music-holo-web
@@ -24,7 +24,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -40,7 +40,7 @@ jobs:
 
   backend:
     name: Backend compile
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: music-holo-server
