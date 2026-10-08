@@ -144,6 +144,30 @@ test('demo 用户可以收藏歌曲并查看个人播放历史', async ({ page }
   await expect(page.locator('.player-bar .pb-title')).toHaveText('云端信使')
 })
 
+test('设置页支持主题同步、个人资料保存与修改密码校验', async ({ page }) => {
+  await loginAs(page, 'demo')
+  await openMenu(page, '设置')
+  await expect(page.locator('.settings-eyebrow')).toBeVisible()
+
+  await page.getByRole('button', { name: /矩阵声场/ }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'lime')
+  await page.getByRole('tab', { name: '个人资料' }).click()
+  const nickname = page.getByPlaceholder('请输入昵称')
+  await expect(nickname).toHaveValue('演示用户')
+  await nickname.fill('全息体验者')
+  await page.getByRole('button', { name: '保存资料' }).click()
+  await expect(page.getByText('资料保存成功', { exact: true })).toBeVisible()
+  await expect(nickname).toHaveValue('全息体验者')
+  expect(await page.evaluate(() => localStorage.getItem('mh_settings_tab'))).toBe('profile')
+
+  await page.getByRole('tab', { name: '修改密码' }).click()
+  await page.getByPlaceholder('请输入原密码').fill('123456')
+  await page.getByPlaceholder('6-32 位新密码').fill('newpass123')
+  await page.getByPlaceholder('请再次输入新密码').fill('not-the-same')
+  await page.getByRole('button', { name: '修改密码' }).click()
+  await expect(page.getByText('两次输入的新密码不一致', { exact: true })).toBeVisible()
+})
+
 test('专辑库按歌曲曲库聚合，可从专辑详情播放整张专辑', async ({ page }) => {
   await page.goto('/albums')
   const albumCard = page.locator('.album-card').filter({ hasText: '霓虹海' }).first()

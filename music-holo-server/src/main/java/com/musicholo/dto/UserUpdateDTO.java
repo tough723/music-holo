@@ -1,8 +1,8 @@
 package com.musicholo.dto;
 
-import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Pattern;
 import lombok.Data;
 
 import java.io.Serializable;
@@ -17,7 +17,7 @@ public class UserUpdateDTO implements Serializable {
 
     private String avatar;
 
-    @Email(message = "邮箱格式不正确")
+    @Pattern(regexp = "^$|^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$", message = "邮箱格式不正确")
     private String email;
 
     private String phone;

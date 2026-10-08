@@ -66,12 +66,13 @@ export const useThemeStore = defineStore('theme', {
     async setTheme(key) {
       this.apply(key)
       const userStore = useUserStore()
-      if (userStore.isLogin) {
-        try {
-          await systemApi.setTheme({ theme: key, scope: 'user' })
-        } catch (e) {
-          // 同步失败不影响本地主题
-        }
+      if (!userStore.isLogin) return { synced: false, localOnly: true }
+      try {
+        await systemApi.setTheme({ theme: key, scope: 'user' })
+        return { synced: true, localOnly: false }
+      } catch (e) {
+        // 同步失败不影响本地主题；由设置页明确提示并允许用户重试。
+        return { synced: false, localOnly: false }
       }
     }
   }

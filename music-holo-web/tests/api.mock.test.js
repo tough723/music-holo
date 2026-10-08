@@ -15,6 +15,7 @@ import * as reviewApi from '@/api/review'
 import * as historyApi from '@/api/history'
 import * as songApi from '@/api/song'
 import * as systemApi from '@/api/system'
+import * as userApi from '@/api/user'
 import { useThemeStore, THEMES } from '@/store/theme'
 import { buildPublicPlaylistShareUrl, shareOrCopy } from '@/utils/share'
 
@@ -517,6 +518,32 @@ describe('内置 Mock API 集成测试', () => {
 
     await loginAs('demo')
     await reviewApi.remove(created.id)
+  })
+
+  it('设置页资料接口可更新和恢复，主题状态可区分账号同步与本机保存', async () => {
+    await loginAs('demo')
+    const original = await userApi.getProfile()
+    const updated = await userApi.updateProfile({
+      nickname: '全息设置测试',
+      avatar: original.avatar,
+      email: original.email,
+      phone: original.phone,
+      gender: original.gender
+    })
+    expect(updated).toMatchObject({ username: 'demo', nickname: '全息设置测试' })
+    await userApi.updateProfile({
+      nickname: original.nickname,
+      avatar: original.avatar,
+      email: original.email,
+      phone: original.phone,
+      gender: original.gender
+    })
+
+    const themeStore = useThemeStore()
+    await expect(themeStore.setTheme('ruby')).resolves.toEqual({ synced: true, localOnly: false })
+    await themeStore.setTheme('magenta')
+    await useUserStore().logoutLocal()
+    await expect(themeStore.setTheme('amber')).resolves.toEqual({ synced: false, localOnly: true })
   })
 
   it('绯红 3D 主题可从接口获取并同步至用户设置', async () => {

@@ -1,13 +1,26 @@
 <template>
   <div class="page">
-    <div class="page-head">
-      <div>
-        <div class="page-title">设置</div>
-        <div class="page-subtitle">打造属于你的全息视界</div>
+    <div class="page-head glass-panel">
+      <div class="page-heading-copy">
+        <div class="settings-eyebrow">MUSIC HOLO · PERSONAL CONSOLE</div>
+        <div class="page-title">设置中心</div>
+        <div class="page-subtitle">打造属于你的全息视界，管理外观、账号资料与安全选项。</div>
+      </div>
+      <div class="settings-overview" aria-label="当前设置概览">
+        <div class="overview-chip">
+          <span class="overview-dot"></span>
+          <span>主题</span>
+          <strong>{{ themeStore.current.label }}</strong>
+        </div>
+        <div class="overview-chip">
+          <span class="overview-dot glass-dot"></span>
+          <span>玻璃</span>
+          <strong>{{ themeStore.glassOpacity }}%</strong>
+        </div>
       </div>
     </div>
 
-    <el-tabs v-model="activeTab" class="settings-tabs">
+    <el-tabs v-model="activeTab" class="settings-tabs" @tab-change="persistActiveTab">
       <!-- 主题设置 -->
       <el-tab-pane label="全息主题" name="theme">
         <div class="theme-grid">
@@ -61,9 +74,10 @@
           </div>
           <div class="glass-control-foot"><el-icon><InfoFilled /></el-icon> 玻璃强度保存在此设备；主题色可同步至账号。</div>
         </div>
-        <div class="theme-tip">
+        <div class="theme-tip" role="status" :class="`theme-sync-${themeSyncState}`">
           <el-icon><InfoFilled /></el-icon>
-          主题会即时生效并自动同步到你的账号（登录后），下次登录自动恢复。
+          <span>{{ themeSyncMessage }}</span>
+          <el-button v-if="themeSyncState === 'error'" text type="primary" size="small" @click="retryThemeSync">重试同步</el-button>
         </div>
         <div class="theme-preview-panel glass-panel">
           <div class="preview-title">实时预览</div>
@@ -82,39 +96,52 @@
 
       <!-- 个人资料 -->
       <el-tab-pane label="个人资料" name="profile">
-        <div class="profile-panel glass-panel">
-          <el-form :model="profileForm" label-width="80px" style="max-width: 520px">
+        <div v-loading="loadingProfile" class="profile-panel glass-panel">
+          <el-alert v-if="profileLoadError" type="error" :closable="false" show-icon class="profile-load-error">
+            <template #title>资料暂时无法读取</template>
+            <el-button text type="primary" @click="loadProfile">重试</el-button>
+          </el-alert>
+          <el-form ref="profileFormRef" :model="profileForm" :rules="profileRules" label-width="80px" style="max-width: 520px">
             <el-form-item label="头像">
               <div class="avatar-row">
                 <div class="avatar-preview">
                   <Cover :src="profileForm.avatar" :text="profileForm.nickname || profileForm.username" :size="72" />
                 </div>
-                <el-upload :show-file-list="false" :http-request="onUploadAvatar" accept="image/*">
-                  <el-button>上传头像</el-button>
-                </el-upload>
+                <div class="avatar-actions">
+                  <el-upload
+                    :show-file-list="false"
+                    :http-request="onUploadAvatar"
+                    :before-upload="beforeAvatarUpload"
+                    accept=".png,.jpg,.jpeg,.webp"
+                    :disabled="avatarUploading"
+                  >
+                    <el-button :loading="avatarUploading">上传头像</el-button>
+                  </el-upload>
+                  <small>支持 JPG、PNG、WebP，最大 5 MB</small>
+                </div>
               </div>
             </el-form-item>
             <el-form-item label="用户名">
               <el-input v-model="profileForm.username" disabled />
             </el-form-item>
-            <el-form-item label="昵称">
-              <el-input v-model="profileForm.nickname" placeholder="请输入昵称" />
+            <el-form-item label="昵称" prop="nickname">
+              <el-input v-model="profileForm.nickname" maxlength="32" show-word-limit placeholder="请输入昵称" />
             </el-form-item>
-            <el-form-item label="性别">
+            <el-form-item label="性别" prop="gender">
               <el-radio-group v-model="profileForm.gender">
                 <el-radio :value="0">保密</el-radio>
                 <el-radio :value="1">男</el-radio>
                 <el-radio :value="2">女</el-radio>
               </el-radio-group>
             </el-form-item>
-            <el-form-item label="邮箱">
-              <el-input v-model="profileForm.email" placeholder="请输入邮箱" />
+            <el-form-item label="邮箱" prop="email">
+              <el-input v-model="profileForm.email" type="email" maxlength="100" placeholder="选填，name@example.com" />
             </el-form-item>
-            <el-form-item label="手机号">
-              <el-input v-model="profileForm.phone" placeholder="请输入手机号" />
+            <el-form-item label="手机号" prop="phone">
+              <el-input v-model="profileForm.phone" maxlength="24" placeholder="选填" />
             </el-form-item>
             <el-form-item>
-              <el-button type="primary" :loading="savingProfile" @click="onSaveProfile">保存资料</el-button>
+              <el-button type="primary" :loading="savingProfile" :disabled="loadingProfile || !!profileLoadError" @click="onSaveProfile">保存资料</el-button>
             </el-form-item>
           </el-form>
         </div>
@@ -123,15 +150,19 @@
       <!-- 修改密码 -->
       <el-tab-pane label="修改密码" name="password">
         <div class="profile-panel glass-panel">
-          <el-form :model="passwordForm" label-width="90px" style="max-width: 420px">
-            <el-form-item label="原密码">
-              <el-input v-model="passwordForm.oldPassword" type="password" show-password placeholder="请输入原密码" />
+          <div class="security-note">
+            <el-icon><Lock /></el-icon>
+            <span>为保护账号安全，密码修改成功后会退出当前账号，需要使用新密码重新登录。</span>
+          </div>
+          <el-form ref="passwordFormRef" :model="passwordForm" :rules="passwordRules" label-width="90px" style="max-width: 420px">
+            <el-form-item label="原密码" prop="oldPassword">
+              <el-input v-model="passwordForm.oldPassword" type="password" show-password autocomplete="current-password" placeholder="请输入原密码" />
             </el-form-item>
-            <el-form-item label="新密码">
-              <el-input v-model="passwordForm.newPassword" type="password" show-password placeholder="6-32 位新密码" />
+            <el-form-item label="新密码" prop="newPassword">
+              <el-input v-model="passwordForm.newPassword" type="password" show-password autocomplete="new-password" placeholder="6-32 位新密码" />
             </el-form-item>
-            <el-form-item label="确认新密码">
-              <el-input v-model="passwordForm.confirm" type="password" show-password placeholder="请再次输入新密码" />
+            <el-form-item label="确认新密码" prop="confirm">
+              <el-input v-model="passwordForm.confirm" type="password" show-password autocomplete="new-password" placeholder="请再次输入新密码" @keyup.enter="onChangePassword" />
             </el-form-item>
             <el-form-item>
               <el-button type="primary" :loading="savingPassword" @click="onChangePassword">修改密码</el-button>
@@ -158,7 +189,13 @@ const userStore = useUserStore()
 const themeStore = useThemeStore()
 const playerStore = usePlayerStore()
 
-const activeTab = ref('theme')
+const SETTINGS_TAB_KEY = 'mh_settings_tab'
+const SETTINGS_TABS = ['theme', 'profile', 'password']
+const savedTab = localStorage.getItem(SETTINGS_TAB_KEY)
+const activeTab = ref(SETTINGS_TABS.includes(savedTab) ? savedTab : 'theme')
+const persistActiveTab = (tab) => {
+  if (SETTINGS_TABS.includes(tab)) localStorage.setItem(SETTINGS_TAB_KEY, tab)
+}
 const glassOpacity = computed({
   get: () => themeStore.glassOpacity,
   set: (value) => themeStore.setGlassOpacity(value)
@@ -166,6 +203,12 @@ const glassOpacity = computed({
 const formatOpacity = (value) => `${value}%`
 const savingProfile = ref(false)
 const savingPassword = ref(false)
+const loadingProfile = ref(false)
+const profileLoadError = ref(false)
+const avatarUploading = ref(false)
+const profileFormRef = ref(null)
+const passwordFormRef = ref(null)
+const themeSyncState = ref('ready')
 
 const profileForm = reactive({
   username: '',
@@ -176,71 +219,185 @@ const profileForm = reactive({
   phone: ''
 })
 
+const profileRules = {
+  nickname: [
+    { required: true, message: '请输入昵称', trigger: 'blur' },
+    { max: 32, message: '昵称最多 32 个字符', trigger: 'blur' }
+  ],
+  email: [{
+    validator: (_rule, value, callback) => {
+      const email = String(value || '').trim()
+      if (!email || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) callback()
+      else callback(new Error('邮箱格式不正确'))
+    },
+    trigger: 'blur'
+  }],
+  phone: [{
+    validator: (_rule, value, callback) => {
+      const phone = String(value || '').trim()
+      if (!phone || /^[0-9+().\s-]{7,24}$/.test(phone)) callback()
+      else callback(new Error('手机号格式不正确'))
+    },
+    trigger: 'blur'
+  }]
+}
+
 const passwordForm = reactive({
   oldPassword: '',
   newPassword: '',
   confirm: ''
 })
 
+const passwordRules = {
+  oldPassword: [{ required: true, message: '请输入原密码', trigger: 'blur' }],
+  newPassword: [
+    { required: true, message: '请输入新密码', trigger: 'blur' },
+    { min: 6, max: 32, message: '新密码长度需为 6-32 位', trigger: 'blur' }
+  ],
+  confirm: [{
+    validator: (_rule, value, callback) => {
+      if (!value) callback(new Error('请确认新密码'))
+      else if (value !== passwordForm.newPassword) callback(new Error('两次输入的新密码不一致'))
+      else callback()
+    },
+    trigger: 'blur'
+  }]
+}
+
+const themeSyncMessage = computed(() => {
+  if (themeSyncState.value === 'saving') return '正在应用主题并同步账号设置…'
+  if (themeSyncState.value === 'error') return '主题已应用到本机，但账号同步失败；可稍后重试。'
+  if (themeSyncState.value === 'local') return '主题已应用到此设备；登录后切换主题即可同步到账号。'
+  if (themeSyncState.value === 'synced') return '主题已同步到账号；玻璃透明度仅保存在此设备。'
+  return userStore.isLogin
+    ? '切换主题会即时生效并同步到账号，下次登录自动恢复。'
+    : '游客模式下主题保存在此设备；登录后可同步到账号。'
+})
+
+async function syncTheme(key) {
+  const wasLoggedIn = userStore.isLogin
+  themeSyncState.value = 'saving'
+  try {
+    const result = await themeStore.setTheme(key)
+    if (!wasLoggedIn) {
+      themeSyncState.value = 'local'
+      ElMessage.success(`已在此设备切换主题：${THEMES.find((theme) => theme.key === key)?.label}`)
+    } else if (result?.synced) {
+      themeSyncState.value = 'synced'
+      ElMessage.success(`主题已切换并同步到账号：${THEMES.find((theme) => theme.key === key)?.label}`)
+    } else {
+      themeSyncState.value = 'error'
+      ElMessage.warning('主题已在本机生效，但账号同步失败；可稍后重试')
+    }
+  } catch {
+    themeSyncState.value = wasLoggedIn ? 'error' : 'local'
+    ElMessage.warning(wasLoggedIn ? '主题已在本机生效，但账号同步失败；可稍后重试' : '主题已在此设备应用')
+  }
+}
+
 const onTheme = (key) => {
-  themeStore.setTheme(key)
-  ElMessage.success(`已切换主题：${THEMES.find((t) => t.key === key)?.label}`)
+  if (themeStore.theme === key && themeSyncState.value !== 'error') return
+  syncTheme(key)
+}
+
+const retryThemeSync = () => {
+  if (userStore.isLogin) syncTheme(themeStore.theme)
+  else themeSyncState.value = 'local'
 }
 
 const loadProfile = async () => {
-  const info = await userApi.getProfile()
-  Object.assign(profileForm, {
-    username: info.username,
-    nickname: info.nickname || '',
-    avatar: info.avatar || '',
-    gender: info.gender ?? 0,
-    email: info.email || '',
-    phone: info.phone || ''
-  })
-  userStore.userInfo = info
-  localStorage.setItem('mh_user', JSON.stringify(info))
+  loadingProfile.value = true
+  profileLoadError.value = false
+  try {
+    const info = await userApi.getProfile()
+    Object.assign(profileForm, {
+      username: info.username,
+      nickname: info.nickname || '',
+      avatar: info.avatar || '',
+      gender: info.gender ?? 0,
+      email: info.email || '',
+      phone: info.phone || ''
+    })
+    userStore.userInfo = info
+    localStorage.setItem('mh_user', JSON.stringify(info))
+  } catch {
+    profileLoadError.value = true
+  } finally {
+    loadingProfile.value = false
+  }
+}
+
+const ALLOWED_AVATAR_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
+function beforeAvatarUpload(file) {
+  if (!ALLOWED_AVATAR_TYPES.has(file?.type)) {
+    ElMessage.warning('头像仅支持 JPG、PNG 或 WebP 格式')
+    return false
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    ElMessage.warning('头像文件不能超过 5 MB')
+    return false
+  }
+  return true
 }
 
 const onUploadAvatar = async ({ file }) => {
-  const res = await commonApi.upload(file)
-  profileForm.avatar = res.url
-  ElMessage.success('头像上传成功')
+  if (!beforeAvatarUpload(file)) return
+  avatarUploading.value = true
+  try {
+    const result = await commonApi.upload(file)
+    profileForm.avatar = result.url
+    ElMessage.success('头像上传成功，保存资料后完成更新')
+  } catch {
+    // API 拦截器负责展示上传错误。
+  } finally {
+    avatarUploading.value = false
+  }
 }
 
 const onSaveProfile = async () => {
+  const valid = await profileFormRef.value?.validate().catch(() => false)
+  if (!valid) return
   savingProfile.value = true
   try {
-    const info = await userApi.updateProfile({ ...profileForm })
+    const info = await userApi.updateProfile({
+      nickname: profileForm.nickname.trim(),
+      avatar: profileForm.avatar,
+      gender: profileForm.gender,
+      email: profileForm.email.trim(),
+      phone: profileForm.phone.trim()
+    })
+    Object.assign(profileForm, {
+      username: info.username,
+      nickname: info.nickname || '',
+      avatar: info.avatar || '',
+      gender: info.gender ?? 0,
+      email: info.email || '',
+      phone: info.phone || ''
+    })
     userStore.userInfo = info
     localStorage.setItem('mh_user', JSON.stringify(info))
     ElMessage.success('资料保存成功')
+  } catch {
+    // API 拦截器负责展示保存错误。
   } finally {
     savingProfile.value = false
   }
 }
 
 const onChangePassword = async () => {
-  if (!passwordForm.oldPassword || !passwordForm.newPassword) {
-    ElMessage.warning('请填写完整')
-    return
-  }
-  if (passwordForm.newPassword.length < 6) {
-    ElMessage.warning('新密码长度需为 6-32 位')
-    return
-  }
-  if (passwordForm.newPassword !== passwordForm.confirm) {
-    ElMessage.warning('两次输入的新密码不一致')
-    return
-  }
+  const valid = await passwordFormRef.value?.validate().catch(() => false)
+  if (!valid) return
   savingPassword.value = true
   try {
     await userApi.changePassword({
       oldPassword: passwordForm.oldPassword,
       newPassword: passwordForm.newPassword
     })
-    ElMessage.success('密码修改成功，请重新登录')
+    ElMessage.success('密码修改成功，请使用新密码重新登录')
     await userStore.logout()
     location.href = '/login'
+  } catch {
+    // API 拦截器负责展示密码修改错误。
   } finally {
     savingPassword.value = false
   }
@@ -256,10 +413,29 @@ onMounted(loadProfile)
   gap: 16px;
 }
 .page-head {
+  position: relative;
+  min-height: 118px;
+  padding: 20px 24px;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
+  gap: 20px;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse at 82% 44%, color-mix(in srgb, var(--holo-primary) 18%, transparent), transparent 38%),
+    linear-gradient(115deg, color-mix(in srgb, var(--holo-secondary) 8%, transparent), transparent 68%);
 }
+.page-heading-copy { position: relative; z-index: 1; }
+.settings-eyebrow { color: var(--holo-primary); font-size: 9px; letter-spacing: 2px; }
+.page-head .page-title { margin-top: 7px; }
+.settings-overview { position: relative; z-index: 1; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 9px; }
+.overview-chip {
+  display: flex; align-items: center; gap: 7px; padding: 9px 12px; border: 1px solid color-mix(in srgb, var(--holo-primary) 22%, var(--border-color));
+  border-radius: 999px; color: var(--text-sub); background: color-mix(in srgb, var(--bg-panel) 70%, transparent); font-size: 10px;
+}
+.overview-chip strong { color: var(--text-main); font-size: 11px; font-weight: 650; }
+.overview-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--holo-primary); box-shadow: 0 0 10px var(--holo-primary); }
+.glass-dot { background: var(--holo-secondary); box-shadow: 0 0 10px var(--holo-secondary); }
 .settings-tabs {
   padding: 0 4px;
 }
@@ -535,8 +711,12 @@ onMounted(loadProfile)
   color: var(--text-sub);
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
 }
+.theme-tip span { flex: 1 1 260px; }
+.theme-sync-error { color: var(--el-color-warning); }
+.theme-sync-synced { color: var(--el-color-success); }
 .theme-preview-panel {
   margin-top: 16px;
   padding: 20px;
@@ -562,11 +742,20 @@ onMounted(loadProfile)
 .profile-panel {
   padding: 28px;
 }
+.profile-load-error { max-width: 520px; margin-bottom: 16px; }
 .avatar-row {
   display: flex;
   align-items: center;
   gap: 16px;
 }
+.avatar-actions { display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
+.avatar-actions small { color: var(--text-sub); font-size: 10px; }
+.security-note {
+  max-width: 620px; display: flex; align-items: flex-start; gap: 9px; margin: 0 0 20px; padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--holo-primary) 22%, var(--border-color)); border-radius: 12px;
+  color: var(--text-sub); background: color-mix(in srgb, var(--holo-primary) 6%, transparent); font-size: 12px; line-height: 1.6;
+}
+.security-note :deep(.el-icon) { flex: 0 0 auto; margin-top: 2px; color: var(--holo-primary); }
 .avatar-preview {
   width: 72px;
   height: 72px;
@@ -575,12 +764,18 @@ onMounted(loadProfile)
   border: 2px solid color-mix(in srgb, var(--holo-primary) 50%, transparent);
 }
 @media (max-width: 760px) {
+  .page-head { min-height: 110px; }
+  .settings-overview { flex-direction: column; align-items: flex-end; }
   .glass-control-body {
     grid-template-columns: minmax(0, 1fr) 205px;
     gap: 16px;
   }
 }
 @media (max-width: 560px) {
+  .page-head { align-items: flex-start; flex-direction: column; gap: 12px; padding: 16px; }
+  .settings-overview { width: 100%; flex-direction: row; justify-content: flex-start; }
+  .overview-chip { padding: 7px 10px; }
+  .profile-panel { padding: 16px; }
   .theme-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;
