@@ -134,6 +134,32 @@ describe('本地音乐播放', () => {
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:music/night.wav')
   })
 
+  it('自定义源曲目只在内存播放，不写入持久队列或调用后端 API', async () => {
+    const playRequest = vi.spyOn(songApi, 'play').mockResolvedValue(undefined)
+    const lyricRequest = vi.spyOn(lyricApi, 'parse').mockResolvedValue({ lines: [] })
+    const customTrack = {
+      id: 'custom-session-123',
+      title: '隔离试听',
+      audioUrl: 'https://media.example.test/signed/short-lived',
+      customLyrics: [{ time: 0, text: '临时歌词' }],
+      isCustomSource: true
+    }
+    localStorage.setItem('mh_player', JSON.stringify({ queue: [customTrack], currentIndex: 0 }))
+    setActivePinia(createPinia())
+    const player = usePlayerStore()
+    expect(player.queue).toEqual([])
+    player.queue = [customTrack]
+
+    await player.playAt(0)
+
+    expect(player.currentSong).toMatchObject(customTrack)
+    expect(player.lyrics).toEqual(customTrack.customLyrics)
+    expect(JSON.parse(localStorage.getItem('mh_player'))).toMatchObject({ queue: [], currentIndex: -1 })
+    expect(localStorage.getItem('mh_player')).not.toContain('signed/short-lived')
+    expect(playRequest).not.toHaveBeenCalled()
+    expect(lyricRequest).not.toHaveBeenCalled()
+  })
+
   it('清空或替换队列时释放残留的本地 Blob URL', async () => {
     const revokeObjectURL = vi.fn()
     vi.stubGlobal('URL', {

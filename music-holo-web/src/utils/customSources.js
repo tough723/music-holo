@@ -3,7 +3,10 @@ export const MAX_CUSTOM_SOURCE_BYTES = 128 * 1024
 export const MAX_CUSTOM_SOURCES = 24
 
 const ALLOWED_EXTENSIONS = new Set(['.js', '.mjs'])
-const BLOCKED_HOST_SUFFIXES = ['.localhost', '.local', '.internal', '.lan', '.test', '.home.arpa']
+const BLOCKED_HOST_SUFFIXES = [
+  '.localhost', '.local', '.internal', '.lan', '.test', '.home.arpa',
+  '.nip.io', '.sslip.io', '.xip.io', '.localtest.me', '.lvh.me', '.vcap.me', '.traefik.me', '.local.gd', '.localhost.run'
+]
 
 function byteLength(value) {
   return new TextEncoder().encode(value).byteLength
@@ -16,11 +19,12 @@ function normalizePublicHttpsUrl(value) {
   } catch {
     return null
   }
-  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/g, '')
   const isIpv4Literal = /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)
   const isIpv6Literal = host.includes(':')
-  const isLocalHost = host === 'localhost' || BLOCKED_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix))
-  if (url.protocol !== 'https:' || url.username || url.password || !host || isIpv4Literal || isIpv6Literal || isLocalHost) {
+  const isSingleLabelHost = !host.includes('.')
+  const isLocalHost = host === 'localhost' || BLOCKED_HOST_SUFFIXES.some((suffix) => host === suffix.slice(1) || host.endsWith(suffix))
+  if (url.protocol !== 'https:' || url.username || url.password || !host || isIpv4Literal || isIpv6Literal || isSingleLabelHost || isLocalHost) {
     return null
   }
   return url

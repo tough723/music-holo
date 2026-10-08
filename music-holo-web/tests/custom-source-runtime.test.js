@@ -3,7 +3,9 @@ import {
   MAX_CUSTOM_SOURCE_REQUEST_BYTES,
   MAX_CUSTOM_SOURCE_RESPONSE_BYTES,
   normalizeLxSourceCapabilities,
-  performCustomSourceRequest
+  parseCustomSourceLyrics,
+  performCustomSourceRequest,
+  validateCustomSourceMediaUrl
 } from '@/utils/customSourceRuntime'
 
 afterEach(() => {
@@ -59,6 +61,25 @@ describe('隔离自定义音源兼容检测', () => {
     expect(request.headers.has('authorization')).toBe(false)
   })
 
+  it('外部取消信号会中止浏览器网络请求', async () => {
+    let requestSignal
+    const fetchMock = vi.fn((_, options) => {
+      requestSignal = options.signal
+      return new Promise((resolve, reject) => {
+        options.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true })
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const controller = new AbortController()
+    const request = performCustomSourceRequest('https://api.example.org/song', {}, { signal: controller.signal })
+    await Promise.resolve()
+    controller.abort()
+
+    await expect(request).rejects.toThrow('音源请求已取消')
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(requestSignal.aborted).toBe(true)
+  })
+
   it('supports bounded form POST while refusing unsafe methods and internal targets', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response('{"ok":true}', { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
@@ -79,6 +100,42 @@ describe('隔离自定义音源兼容检测', () => {
       body: 'x'.repeat(MAX_CUSTOM_SOURCE_REQUEST_BYTES + 1)
     })).rejects.toThrow('请求体超过 64 KB')
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('支持有界 multipart formData，且由浏览器生成 boundary', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('ok', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await performCustomSourceRequest('https://api.example.org/submit', {
+      method: 'POST',
+      headers: { 'content-type': 'multipart/form-data; boundary=source-controlled' },
+      formData: { keyword: '星海', quality: '320k' }
+    })
+    const [, request] = fetchMock.mock.calls[0]
+    expect(request.body).toBeInstanceOf(FormData)
+    expect(request.headers.has('content-type')).toBe(false)
+  })
+
+  it('把 LX 歌词结果和多时间戳 LRC 规范化为播放器行', () => {
+    expect(parseCustomSourceLyrics({ lyric: '[00:01.25]第一行\\n[00:02.00][00:03.00]重复行' })).toEqual([
+      { time: 1.25, text: '第一行' },
+      { time: 2, text: '重复行' },
+      { time: 3, text: '重复行' }
+    ])
+    expect(parseCustomSourceLyrics([{ time: 2, text: '二' }, { time: 1, text: '一' }])).toEqual([
+      { time: 1, text: '一' },
+      { time: 2, text: '二' }
+    ])
+  })
+
+  it('仅接受公网 HTTPS 试听 URL，拒绝内网与可执行协议', () => {
+    expect(validateCustomSourceMediaUrl('https://cdn.example.org/music.mp3?token=abc')).toEqual({
+      href: 'https://cdn.example.org/music.mp3?token=abc',
+      origin: 'https://cdn.example.org'
+    })
+    expect(() => validateCustomSourceMediaUrl('http://cdn.example.org/music.mp3')).toThrow('公网 HTTPS')
+    expect(() => validateCustomSourceMediaUrl('javascript:alert(1)')).toThrow('公网 HTTPS')
+    expect(() => validateCustomSourceMediaUrl('https://localhost/music.mp3')).toThrow('公网 HTTPS')
+    expect(() => validateCustomSourceMediaUrl('')).toThrow('没有返回')
   })
 
   it('响应超过 512 KB 会终止读取', async () => {

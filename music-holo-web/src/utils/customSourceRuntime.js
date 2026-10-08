@@ -1,7 +1,9 @@
 import workerBootstrap from './customSourceWorker.js?raw'
-import { parseCustomSourceUrl } from './customSources'
+import { MAX_CUSTOM_SOURCE_BYTES, parseCustomSourceUrl } from './customSources'
 
 export const CUSTOM_SOURCE_RUNTIME_TIMEOUT_MS = 15000
+export const CUSTOM_SOURCE_SESSION_TIMEOUT_MS = 45000
+export const CUSTOM_SOURCE_ACTION_TIMEOUT_MS = 20000
 export const MAX_CUSTOM_SOURCE_REQUEST_BYTES = 64 * 1024
 export const MAX_CUSTOM_SOURCE_RESPONSE_BYTES = 512 * 1024
 const MAX_CUSTOM_SOURCE_URL_LENGTH = 4096
@@ -50,6 +52,50 @@ export function normalizeLxSourceCapabilities(payload) {
   return { sources, initializedAt: new Date().toISOString() }
 }
 
+export function validateCustomSourceMediaUrl(value) {
+  const rawUrl = typeof value === 'string' ? value : value && typeof value === 'object' ? value.url : ''
+  if (typeof rawUrl !== 'string' || !rawUrl.trim()) throw new Error('音源没有返回可播放的 HTTPS 音频地址')
+  const url = parseCustomSourceUrl(rawUrl.trim())
+  url.hash = ''
+  return { href: url.href, origin: url.origin }
+}
+
+export function parseCustomSourceLyrics(value) {
+  const raw = typeof value === 'string' ? value : value && typeof value === 'object'
+    ? (value.lyric || value.lrc || value.text || '') : ''
+  if (Array.isArray(value)) {
+    return value.map((line) => ({ time: Number(line?.time), text: cleanText(line?.text, 300) }))
+      .filter((line) => Number.isFinite(line.time) && line.time >= 0 && line.text)
+      .sort((left, right) => left.time - right.time).slice(0, 1000)
+  }
+  if (typeof raw !== 'string' || !raw.trim()) return []
+  const lines = []
+  const timestamp = /\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g
+  const normalizedLyrics = raw.slice(0, 256 * 1024)
+    .replace(/\\+r?\\+n/g, '\n')
+    .replace(/\\+n/g, '\n')
+    .replace(/\\+r/g, '\n')
+  for (const rawLine of normalizedLyrics.split(/\r?\n/)) {
+    const line = rawLine.trim()
+    const timestamps = []
+    let textStart = 0
+    let match
+    timestamp.lastIndex = 0
+    while ((match = timestamp.exec(line)) !== null) {
+      const minutes = Number(match[1])
+      const seconds = Number(match[2])
+      const fraction = match[3] ? Number(`0.${match[3]}`) : 0
+      timestamps.push(minutes * 60 + seconds + fraction)
+      textStart = timestamp.lastIndex
+    }
+    if (!timestamps.length) continue
+    const text = cleanText(line.slice(textStart), 300)
+    if (!text) continue
+    for (const time of timestamps) lines.push({ time, text })
+  }
+  return lines.sort((left, right) => left.time - right.time).slice(0, 1000)
+}
+
 async function readResponseBody(response, maxBytes) {
   if (!response.body?.getReader) {
     const buffer = await response.arrayBuffer()
@@ -84,6 +130,12 @@ async function readResponseBody(response, maxBytes) {
 
 function normalizeRequestBody(options, headers, method) {
   if (method === 'GET' || method === 'HEAD') return undefined
+  if (options.formData && typeof options.formData === 'object') {
+    const formData = new FormData()
+    for (const [key, value] of Object.entries(options.formData)) formData.append(key, String(value))
+    headers.delete('content-type')
+    return formData
+  }
   if (options.form && typeof options.form === 'object') {
     const form = new URLSearchParams()
     for (const [key, value] of Object.entries(options.form)) form.set(key, String(value))
@@ -100,7 +152,7 @@ function normalizeRequestBody(options, headers, method) {
   return String(body)
 }
 
-export async function performCustomSourceRequest(rawUrl, rawOptions = {}) {
+export async function performCustomSourceRequest(rawUrl, rawOptions = {}, { signal: externalSignal } = {}) {
   if (String(rawUrl || '').length > MAX_CUSTOM_SOURCE_URL_LENGTH) throw new Error('音源请求 URL 超过 4096 个字符')
   const url = parseCustomSourceUrl(rawUrl)
   url.hash = ''
@@ -129,11 +181,16 @@ export async function performCustomSourceRequest(rawUrl, rawOptions = {}) {
       ? requestBody.byteLength
       : ArrayBuffer.isView(requestBody)
         ? requestBody.byteLength
-        : 0
+        : options.formData
+          ? new TextEncoder().encode(JSON.stringify(options.formData)).byteLength
+          : 0
   if (bodyBytes > MAX_CUSTOM_SOURCE_REQUEST_BYTES) throw new Error('音源请求体超过 64 KB')
 
   const timeoutMs = Math.max(500, Math.min(15000, Number(options.timeout) || 10000))
   const controller = new AbortController()
+  const abortFromOuter = () => controller.abort()
+  if (externalSignal?.aborted) controller.abort()
+  else externalSignal?.addEventListener('abort', abortFromOuter, { once: true })
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
     const response = await fetch(url.href, {
@@ -157,13 +214,16 @@ export async function performCustomSourceRequest(rawUrl, rawOptions = {}) {
     }
     return { statusCode: response.status, headers: responseHeaders, body }
   } catch (error) {
-    if (error?.name === 'AbortError') throw new Error('音源接口请求超时')
+    if (error?.name === 'AbortError') {
+      throw new Error(externalSignal?.aborted ? '音源请求已取消' : '音源接口请求超时')
+    }
     if (error instanceof TypeError) {
       throw new Error('请求失败：目标站点可能不支持浏览器跨域访问（CORS），或网络不可达')
     }
     throw error
   } finally {
     clearTimeout(timer)
+    externalSignal?.removeEventListener('abort', abortFromOuter)
   }
 }
 
@@ -195,6 +255,7 @@ function createSandboxDocument() {
     }
     if (!token || message.token !== token) return;
     if (message.type === 'request-result' && worker) worker.postMessage(message.payload);
+    if (message.type === 'dispatch' && worker) worker.postMessage(message.payload);
     if (message.type === 'terminate') {
       worker && worker.terminate();
       worker = null;
@@ -212,83 +273,178 @@ function createRunToken() {
   return Array.from(values, (value) => value.toString(16)).join('-') || `${Date.now()}-${Math.random()}`
 }
 
-export function runCustomSourceCompatibility(source, { onRequest = performCustomSourceRequest, timeoutMs = CUSTOM_SOURCE_RUNTIME_TIMEOUT_MS } = {}) {
+export function createCustomSourceSession(source, {
+  onRequest = performCustomSourceRequest,
+  startupTimeoutMs = CUSTOM_SOURCE_RUNTIME_TIMEOUT_MS,
+  sessionTimeoutMs = CUSTOM_SOURCE_SESSION_TIMEOUT_MS,
+  actionTimeoutMs = CUSTOM_SOURCE_ACTION_TIMEOUT_MS,
+  signal
+} = {}) {
   if (typeof document === 'undefined' || typeof window === 'undefined') {
     return Promise.reject(new Error('音源隔离检测只能在浏览器页面中运行'))
   }
   if (!source || typeof source.script !== 'string' || !source.script.trim()) {
     return Promise.reject(new Error('音源脚本为空'))
   }
+  if (new TextEncoder().encode(source.script).byteLength > MAX_CUSTOM_SOURCE_BYTES) {
+    return Promise.reject(new Error(`音源脚本不能超过 ${Math.round(MAX_CUSTOM_SOURCE_BYTES / 1024)} KB`))
+  }
   if (!document.body) return Promise.reject(new Error('页面尚未准备好，无法创建隔离环境'))
+  if (signal?.aborted) return Promise.reject(new Error('隔离音源会话已取消'))
 
   return new Promise((resolve, reject) => {
     const iframe = document.createElement('iframe')
     const token = createRunToken()
-    let completed = false
-    let activeRequests = 0
-    const maxWait = Math.max(1000, Math.min(30000, Number(timeoutMs) || CUSTOM_SOURCE_RUNTIME_TIMEOUT_MS))
+    const pendingActions = new Map()
+    const pendingNetwork = new Map()
+    let capabilities = null
+    let initialized = false
+    let destroyed = false
+    let initSettled = false
+    let requestSequence = 0
+    let activeNetworkCount = 0
+    const startupLimit = Math.max(1000, Math.min(30000, Number(startupTimeoutMs) || CUSTOM_SOURCE_RUNTIME_TIMEOUT_MS))
+    const sessionLimit = Math.max(1000, Math.min(60000, Number(sessionTimeoutMs) || CUSTOM_SOURCE_SESSION_TIMEOUT_MS))
+    const actionLimit = Math.max(1000, Math.min(30000, Number(actionTimeoutMs) || CUSTOM_SOURCE_ACTION_TIMEOUT_MS))
+    let startupTimer
+    let sessionTimer
 
     iframe.setAttribute('sandbox', 'allow-scripts')
-    iframe.setAttribute('title', '自定义音源隔离检测')
+    iframe.setAttribute('title', '自定义音源隔离运行时')
     iframe.setAttribute('aria-hidden', 'true')
     iframe.style.cssText = 'position:fixed;width:1px;height:1px;left:-10px;top:-10px;border:0;opacity:0;pointer-events:none'
     iframe.srcdoc = createSandboxDocument()
 
-    const cleanup = () => {
-      clearTimeout(timeout)
+    const removeFrame = () => {
+      clearTimeout(startupTimer)
+      clearTimeout(sessionTimer)
       window.removeEventListener('message', handleMessage)
+      signal?.removeEventListener('abort', onExternalAbort)
+      for (const controller of pendingNetwork.values()) controller.abort()
+      pendingNetwork.clear()
       iframe.remove()
     }
-    const finish = (error, value) => {
-      if (completed) return
-      completed = true
-      cleanup()
-      if (error) reject(error)
-      else resolve(value)
+    const destroy = (reason = new Error('隔离音源会话已结束')) => {
+      if (destroyed) return
+      destroyed = true
+      const error = reason instanceof Error ? reason : new Error(String(reason || '隔离音源会话已结束'))
+      removeFrame()
+      for (const pending of pendingActions.values()) {
+        clearTimeout(pending.timer)
+        pending.reject(error)
+      }
+      pendingActions.clear()
+      if (!initSettled) {
+        initSettled = true
+        reject(error)
+      }
     }
+    const onExternalAbort = () => destroy(new Error('隔离音源会话已取消'))
     const replyToWorker = (requestId, result) => {
-      if (completed || !iframe.contentWindow) return
+      if (destroyed || !iframe.contentWindow) return
       iframe.contentWindow.postMessage({
         type: 'request-result',
         token,
         payload: { type: 'request-result', requestId, ...result }
       }, '*')
     }
+    const session = {
+      get capabilities() { return capabilities },
+      get isActive() { return initialized && !destroyed },
+      request({ source: sourceKey, action, info = {} } = {}) {
+        if (destroyed) return Promise.reject(new Error('隔离音源会话已结束'))
+        if (!initialized || !capabilities) return Promise.reject(new Error('音源尚未初始化'))
+        const platform = capabilities.sources.find((item) => item.key === sourceKey)
+        if (!platform) return Promise.reject(new Error(`此脚本未声明「${cleanText(sourceKey, 40)}」平台`))
+        if (!platform.actions.includes(action)) return Promise.reject(new Error(`「${platform.name}」未声明 ${cleanText(action, 40)} 能力`))
+        if (pendingActions.size >= MAX_ACTIVE_SOURCE_REQUESTS) return Promise.reject(new Error('同时只能运行少量音源操作'))
+        if (!info || typeof info !== 'object' || Array.isArray(info)) return Promise.reject(new Error('音源请求信息必须是 JSON 对象'))
+        let serialized
+        try { serialized = JSON.stringify(info) } catch { return Promise.reject(new Error('音源请求信息无法序列化')) }
+        if (new TextEncoder().encode(serialized || '{}').byteLength > MAX_CUSTOM_SOURCE_REQUEST_BYTES) {
+          return Promise.reject(new Error('音源请求信息超过 64 KB'))
+        }
+        const requestId = `host-action-${++requestSequence}`
+        return new Promise((actionResolve, actionReject) => {
+          const timer = setTimeout(() => destroy(new Error(`音源 ${action} 操作超过 ${Math.round(actionLimit / 1000)} 秒`)), actionLimit)
+          pendingActions.set(requestId, { resolve: actionResolve, reject: actionReject, timer })
+          iframe.contentWindow?.postMessage({
+            type: 'dispatch',
+            token,
+            payload: {
+              type: 'dispatch',
+              eventName: 'request',
+              data: { source: sourceKey, action, info },
+              requestId
+            }
+          }, '*')
+        })
+      },
+      destroy: () => destroy(new Error('用户结束了隔离音源会话'))
+    }
+
     const handleMessage = (event) => {
       if (event.source !== iframe.contentWindow || !event.data || event.data.token !== token) return
       const message = event.data
       if (message.type === 'source-error') {
-        finish(new Error(cleanText(message.error, 240) || '音源脚本执行失败'))
+        destroy(new Error(cleanText(message.error, 240) || '音源脚本执行失败'))
         return
       }
       if (message.type === 'source-event' && message.eventName === 'inited') {
+        if (initialized) return
         try {
-          const capabilities = normalizeLxSourceCapabilities(message.data)
-          finish(null, { ...capabilities, sourceName: cleanText(source.name, 80), fileName: cleanText(source.fileName, 120) })
+          capabilities = normalizeLxSourceCapabilities(message.data)
+          initialized = true
+          initSettled = true
+          clearTimeout(startupTimer)
+          sessionTimer = setTimeout(() => destroy(new Error('隔离音源会话超过安全运行时限')), sessionLimit)
+          resolve(session)
         } catch (error) {
-          finish(error)
+          destroy(error)
         }
         return
       }
+      if (message.type === 'source-response') {
+        const pending = pendingActions.get(message.requestId)
+        if (!pending) return
+        pendingActions.delete(message.requestId)
+        clearTimeout(pending.timer)
+        if (message.ok) pending.resolve(message.value)
+        else pending.reject(new Error(cleanText(message.error, 240) || '音源操作失败'))
+        return
+      }
+      if (message.type === 'source-cancel') {
+        pendingNetwork.get(message.requestId)?.abort()
+        return
+      }
       if (message.type === 'source-request') {
-        if (activeRequests >= MAX_ACTIVE_SOURCE_REQUESTS) {
-          replyToWorker(message.requestId, { ok: false, error: '并发请求数量超过安全上限' })
+        if (activeNetworkCount >= MAX_ACTIVE_SOURCE_REQUESTS) {
+          replyToWorker(message.requestId, { ok: false, error: '网络并发数量超过安全上限' })
           return
         }
-        activeRequests += 1
-        Promise.resolve().then(() => onRequest(message.url, message.options || {})).then((response) => {
+        const controller = new AbortController()
+        pendingNetwork.set(message.requestId, controller)
+        activeNetworkCount += 1
+        Promise.resolve().then(() => onRequest(message.url, message.options || {}, controller.signal)).then((response) => {
           replyToWorker(message.requestId, { ok: true, response })
         }).catch((error) => {
           replyToWorker(message.requestId, { ok: false, error: cleanText(error?.message || error, 240) || '请求被拒绝' })
         }).finally(() => {
-          activeRequests -= 1
+          pendingNetwork.delete(message.requestId)
+          activeNetworkCount -= 1
         })
       }
     }
-    const timeout = setTimeout(() => finish(new Error(`音源未在 ${Math.round(maxWait / 1000)} 秒内完成初始化`)), maxWait)
+
+    signal?.addEventListener('abort', onExternalAbort, { once: true })
+    if (signal?.aborted) {
+      onExternalAbort()
+      return
+    }
+    startupTimer = setTimeout(() => destroy(new Error(`音源未在 ${Math.round(startupLimit / 1000)} 秒内完成初始化`)), startupLimit)
     window.addEventListener('message', handleMessage)
     iframe.addEventListener('load', () => {
-      if (completed || !iframe.contentWindow) return
+      if (destroyed || !iframe.contentWindow) return
       iframe.contentWindow.postMessage({
         type: 'bootstrap',
         token,
@@ -305,4 +461,17 @@ export function runCustomSourceCompatibility(source, { onRequest = performCustom
     }, { once: true })
     document.body.appendChild(iframe)
   })
+}
+
+export async function runCustomSourceCompatibility(source, options = {}) {
+  const session = await createCustomSourceSession(source, options)
+  try {
+    return {
+      ...session.capabilities,
+      sourceName: cleanText(source.name, 80),
+      fileName: cleanText(source.fileName, 120)
+    }
+  } finally {
+    session.destroy()
+  }
 }

@@ -67,10 +67,10 @@ function loadPersisted() {
 }
 
 function persist(state) {
-  // Blob URLs are session-only; never persist local file entries or stale object URLs.
-  const persistentQueue = state.queue.filter((song) => !song?.isLocal)
+  // Local blobs and custom-source signed URLs are session-only; never persist them.
+  const persistentQueue = state.queue.filter((song) => !song?.isLocal && !song?.isCustomSource)
   const currentSong = state.currentIndex >= 0 ? state.queue[state.currentIndex] : null
-  const currentIndex = currentSong && !currentSong.isLocal
+  const currentIndex = currentSong && !currentSong.isLocal && !currentSong.isCustomSource
     ? persistentQueue.findIndex((song) => song.id === currentSong.id)
     : -1
 
@@ -85,10 +85,16 @@ function persist(state) {
 export const usePlayerStore = defineStore('player', {
   state: () => {
     const saved = loadPersisted()
+    const persistedQueue = Array.isArray(saved.queue) ? saved.queue : []
+    const persistedCurrentSong = Number.isInteger(saved.currentIndex) ? persistedQueue[saved.currentIndex] : null
+    const queue = persistedQueue.filter((song) => !song?.isLocal && !song?.isCustomSource)
+    const currentIndex = persistedCurrentSong && !persistedCurrentSong.isLocal && !persistedCurrentSong.isCustomSource
+      ? queue.findIndex((song) => song.id === persistedCurrentSong.id)
+      : -1
     return {
       /** 本地播放队列（持久化） */
-      queue: Array.isArray(saved.queue) ? saved.queue : [],
-      currentIndex: typeof saved.currentIndex === 'number' ? saved.currentIndex : -1,
+      queue,
+      currentIndex,
       playing: false,
       volume: typeof saved.volume === 'number' ? saved.volume : 0.8,
       mode: saved.mode || 'order',
@@ -205,8 +211,8 @@ export const usePlayerStore = defineStore('player', {
       this.currentTime = 0
       persist(this)
       await this.loadLyrics(this.currentSong)
-      // 本地文件不请求后端、不写入服务端播放历史；远程歌曲才上报播放量。
-      if (this.currentSong?.id && !this.currentSong.isLocal) {
+      // 本地文件与临时自定义源不请求后端、不写入服务端历史；曲库歌曲才上报播放量。
+      if (this.currentSong?.id && !this.currentSong.isLocal && !this.currentSong.isCustomSource) {
         songApi.play(this.currentSong.id).catch(() => {})
       }
     },
@@ -338,6 +344,10 @@ export const usePlayerStore = defineStore('player', {
     },
     /** 加载当前歌曲歌词 */
     async loadLyrics(song) {
+      if (song?.isCustomSource) {
+        this.lyrics = Array.isArray(song.customLyrics) ? song.customLyrics : []
+        return
+      }
       if (!song?.id || song.isLocal) {
         this.lyrics = []
         return

@@ -197,6 +197,8 @@ function request(url, options, callback) {
     if (typeof options.timeout === 'number') normalizedOptions.timeout = Math.max(500, Math.min(15000, options.timeout))
     if (typeof options.body === 'string' || options.body instanceof ArrayBuffer || ArrayBuffer.isView(options.body)) {
       normalizedOptions.body = options.body
+    } else if (options.formData && typeof options.formData === 'object') {
+      normalizedOptions.formData = Object.fromEntries(Object.entries(options.formData).map(([key, value]) => [key, String(value)]))
     } else if (options.form && typeof options.form === 'object') {
       normalizedOptions.form = Object.fromEntries(Object.entries(options.form).map(([key, value]) => [key, String(value)]))
     } else if (options.body != null) {
@@ -211,8 +213,8 @@ function request(url, options, callback) {
       ? requestBody.byteLength
       : ArrayBuffer.isView(requestBody)
         ? requestBody.byteLength
-        : normalizedOptions.form
-          ? new TextEncoder().encode(JSON.stringify(normalizedOptions.form)).byteLength
+        : normalizedOptions.formData || normalizedOptions.form
+          ? new TextEncoder().encode(JSON.stringify(normalizedOptions.formData || normalizedOptions.form)).byteLength
           : 0
   if (bodyBytes > 64 * 1024) return failRequest('音源请求体超过 64 KB')
   pendingRequests.set(requestId, typeof callback === 'function' ? callback : () => {})
@@ -231,7 +233,9 @@ function dispatch(eventName, data, requestId) {
   }
   Promise.resolve().then(async () => {
     const results = await Promise.all(listeners.map((listener) => listener(data)))
-    sendParent({ type: 'source-response', requestId, ok: true, value: results[0] })
+    const serialized = JSON.stringify(results[0] ?? null)
+    if (new TextEncoder().encode(serialized).byteLength > 64 * 1024) throw new Error('音源操作返回值超过 64 KB')
+    sendParent({ type: 'source-response', requestId, ok: true, value: JSON.parse(serialized) })
   }).catch((error) => {
     sendParent({ type: 'source-response', requestId, ok: false, error: String(error?.message || error) })
   })

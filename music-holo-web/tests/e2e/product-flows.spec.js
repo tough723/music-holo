@@ -168,7 +168,7 @@ test('设置页支持主题同步、个人资料保存与修改密码校验', as
   await expect(page.getByText('两次输入的新密码不一致', { exact: true })).toBeVisible()
 })
 
-test('本机自定义源支持导入、排序、隔离兼容检测和导出', async ({ page }) => {
+test('本机自定义源支持导入、隔离检测、曲库填充、匿名 CORS 试听和导出', async ({ page }) => {
   await loginAs(page, 'demo')
   await openMenu(page, '设置')
   await page.getByRole('tab', { name: '自定义源' }).click()
@@ -185,6 +185,12 @@ test('本机自定义源支持导入、排序、隔离兼容检测和导出', as
       body: '{"ready":true}'
     })
   })
+  const testAudio = await readFile(new URL('../../public/audio/song1.wav', import.meta.url))
+  await page.route('https://media.example.org/track.wav', (route) => route.fulfill({
+    status: 200,
+    headers: { 'access-control-allow-origin': '*', 'content-type': 'audio/wav' },
+    body: testAudio
+  }))
   const scriptA = `/**
  * @name 源 A
  * @version 1.0
@@ -203,6 +209,14 @@ const lx = globalThis.lx
 if (lx.utils.crypto.md5('abc') !== '900150983cd24fb0d6963f7d28e17f72') {
   throw new Error('隔离环境 MD5 工具校验失败')
 }
+lx.on(lx.EVENT_NAMES.request, async ({ action, info }) => {
+  if (action === 'musicUrl') {
+    if (!info?.musicInfo?.title) throw new Error('musicInfo 缺少标题')
+    return { url: 'https://media.example.org/track.wav' }
+  }
+  if (action === 'lyric') return { lyric: '[00:00.00]隔离试听歌词' }
+  throw new Error('未知试听动作')
+})
 lx.request('https://api.example.org/ping', { method: 'GET' }, (error, response) => {
   if (error) throw error
   if (response?.statusCode !== 200 || response?.body !== '{"ready":true}') throw new Error('隔离网络桥接失败')
@@ -234,6 +248,36 @@ lx.request('https://api.example.org/ping', { method: 'GET' }, (error, response) 
   await expect(compatibilityResult).toContainText('酷我测试源')
   expect(bridgedRequestHeaders).not.toHaveProperty('cookie')
   expect(bridgedRequestHeaders).not.toHaveProperty('authorization')
+
+  await compatibilityResult.getByRole('button', { name: '打开试听台 源 B' }).click()
+  const auditionDialog = page.getByRole('dialog', { name: '隔离试听台 · 源 B' })
+  const musicInfoField = auditionDialog.getByRole('textbox', { name: 'musicInfo JSON' })
+  await auditionDialog.getByLabel('试听曲库搜索').fill('霓虹海')
+  await auditionDialog.getByRole('button', { name: '搜索曲库' }).click()
+  await expect(auditionDialog.locator('.source-audition-results button').first()).toContainText('霓虹海')
+  await auditionDialog.locator('.source-audition-results button').first().click()
+  await expect(musicInfoField).toHaveValue(/"title": "霓虹海"/)
+  await musicInfoField.fill(JSON.stringify({
+    title: '隔离试听曲目',
+    singerName: '测试歌手',
+    songmid: 'provider-specific-id'
+  }, null, 2))
+  await auditionDialog.getByRole('button', { name: '解析音频' }).click()
+  await page.getByRole('button', { name: '我信任并解析' }).click()
+  await expect(page.getByText('确认音源网络请求')).toBeVisible()
+  await page.getByRole('button', { name: '仅本次允许' }).click()
+  await page.getByRole('button', { name: '允许加载音频' }).click()
+  await expect(auditionDialog.getByText('音频地址已解析')).toBeVisible()
+  await expect(auditionDialog.getByText('已解析 1 行歌词')).toBeVisible()
+  await auditionDialog.getByRole('button', { name: '交给全局播放器试听' }).click()
+  await expect(page.locator('.player-bar .pb-title')).toHaveText('隔离试听曲目')
+  const customAudio = page.locator('.player-bar audio').first()
+  await expect(customAudio).toHaveAttribute('crossorigin', 'anonymous')
+  await expect(customAudio).toHaveAttribute('src', 'https://media.example.org/track.wav')
+  await expect(page.locator('.player-bar .pb-fav')).toHaveCount(0)
+  const persistedPlayer = await page.evaluate(() => JSON.parse(localStorage.getItem('mh_player') || '{}'))
+  expect(persistedPlayer).toMatchObject({ queue: [], currentIndex: -1 })
+  expect(JSON.stringify(persistedPlayer)).not.toContain('media.example.org')
 
   await page.getByRole('button', { name: '查看代码' }).first().click()
   await expect(page.getByRole('textbox', { name: '源 A 源码，只读' })).toHaveValue(/must not execute/)

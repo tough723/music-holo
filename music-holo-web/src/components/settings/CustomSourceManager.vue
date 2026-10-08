@@ -41,7 +41,7 @@
     <el-alert class="source-safety-alert" type="warning" :closable="false" show-icon>
       <template #title>脚本默认不会自动运行</template>
       <template #default>
-        可手动对可信脚本执行一次性隔离兼容检测：脚本在受限 Worker 中运行，无法访问页面 DOM、本机存储或直接联网；外部 HTTPS 请求须按域名确认，并由浏览器 CORS 策略控制。检测结束后沙箱销毁。该检测不会将音源接入歌曲搜索或播放。
+          可手动对可信脚本执行一次性隔离兼容检测：脚本在受限 Worker 中运行，无法访问页面 DOM、本机存储或直接联网；外部 HTTPS 请求须按域名确认，并由浏览器 CORS 策略控制。程序会拦截常见本地地址和私网 DNS 别名，但浏览器端无法可靠验证任意域名最终解析到的 IP，不能防住所有 DNS 重绑定。检测结束后沙箱销毁；该检测不会将音源接入歌曲搜索或播放。
       </template>
     </el-alert>
 
@@ -145,6 +145,13 @@
             <el-tag v-for="capability in compatibilityBySource[source.id].sources" :key="capability.key" size="small" effect="plain">
               {{ capability.name }} · {{ capability.actions.length }} 项能力
             </el-tag>
+            <el-button
+              v-if="supportsMusicUrl(compatibilityBySource[source.id])"
+              text
+              size="small"
+              :aria-label="`打开试听台 ${source.name}`"
+              @click="openAudition(source)"
+            >打开试听台</el-button>
           </template>
         </div>
 
@@ -161,14 +168,86 @@
       </article>
     </div>
 
+    <el-dialog
+      v-model="auditionVisible"
+      :title="auditionSource ? `隔离试听台 · ${auditionSource.name}` : '隔离试听台'"
+      width="min(760px, calc(100vw - 32px))"
+      append-to-body
+      :close-on-click-modal="false"
+      :close-on-press-escape="!auditioning"
+      @closed="onAuditionClosed"
+    >
+      <div class="source-audition">
+        <el-alert type="warning" :closable="false" show-icon>
+          <template #title>LX 自定义源负责解析，不负责搜索</template>
+          <template #default>
+            试听会重新运行此脚本并调用其 musicUrl。先选 Music Holo 曲库歌曲可自动填入通用信息；若源要求 songmid、musicmid 等平台 ID，请自行补充到 JSON。音频仅接受 HTTPS，并通过播放器以匿名 CORS 模式加载；常见本地/私网主机名会拦截，但浏览器无法验证任意域名最终解析的 IP。目标音频站未开放 CORS 时浏览器会阻止播放。
+          </template>
+        </el-alert>
+
+        <div class="source-audition-fields">
+          <label class="source-audition-field">
+            <span>音源平台</span>
+            <el-select v-model="auditionPlatformKey" aria-label="选择自定义音源平台" @change="onAuditionPlatformChange">
+              <el-option v-for="platform in auditionPlatforms" :key="platform.key" :label="`${platform.name} (${platform.key})`" :value="platform.key" />
+            </el-select>
+          </label>
+          <label class="source-audition-field">
+            <span>音质</span>
+            <el-select v-model="auditionQuality" aria-label="选择自定义源音质" :disabled="selectedAuditionPlatform?.key === 'local' || auditionQualities.length === 0">
+              <el-option v-for="quality in auditionQualities" :key="quality" :label="quality" :value="quality" />
+            </el-select>
+          </label>
+        </div>
+
+        <div class="source-audition-catalog">
+          <label>从 Music Holo 曲库选择歌曲（可选）</label>
+          <div class="source-audition-search">
+            <el-input v-model="auditionSearchKeyword" clearable placeholder="输入歌名或歌手" aria-label="试听曲库搜索" @keyup.enter="searchAuditionCatalog" />
+            <el-button :loading="auditionSearchLoading" :disabled="!auditionSearchKeyword.trim()" @click="searchAuditionCatalog">搜索曲库</el-button>
+          </div>
+          <div v-if="auditionSearchResults.length" class="source-audition-results" aria-label="试听曲库结果">
+            <el-button v-for="song in auditionSearchResults" :key="song.id" text size="small" @click="useCatalogSong(song)">
+              {{ song.title }} · {{ song.singerName || '未知歌手' }}
+            </el-button>
+          </div>
+        </div>
+
+        <label class="source-audition-info">
+          <span>传给音源的 musicInfo JSON</span>
+          <el-input v-model="auditionMusicInfoText" type="textarea" :rows="8" resize="vertical" aria-label="musicInfo JSON" />
+          <small>仅将此 JSON 传入所选自定义源。不要放入密码、Cookie 或访问令牌；音源可能把曲目信息发送到你批准的服务域名。</small>
+        </label>
+
+        <div v-if="resolvedAuditionTrack" class="source-audition-ready" role="status">
+          <div>
+            <strong>音频地址已解析</strong>
+            <span>{{ resolvedAuditionTrack.title }} · {{ resolvedAuditionTrack.singerName }}</span>
+            <small>媒体域名：{{ resolvedAuditionTrack.audioOrigin }} · 不保存到服务器/本机持久队列</small>
+            <small v-if="resolvedAuditionTrack.customLyrics.length">已解析 {{ resolvedAuditionTrack.customLyrics.length }} 行歌词</small>
+          </div>
+          <div class="source-audition-ready-actions">
+            <el-button type="primary" @click="playResolvedAudition">交给全局播放器试听</el-button>
+            <el-button text @click="resolvedAuditionTrack = null">清除结果</el-button>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <el-button :disabled="auditioning" @click="auditionVisible = false">关闭</el-button>
+        <el-button type="primary" :loading="auditioning" :disabled="!auditionPlatformKey" @click="resolveAudition">解析音频</el-button>
+      </template>
+    </el-dialog>
+
     <div class="source-footnote"><el-icon><Lock /></el-icon>脚本内容只保存在本机浏览器存储中；不会上传到 Music Holo 服务器。</div>
   </section>
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useUserStore } from '@/store/user'
+import { usePlayerStore } from '@/store/player'
+import * as searchApi from '@/api/search'
 import {
   CUSTOM_SOURCE_STORAGE_KEY,
   MAX_CUSTOM_SOURCE_BYTES,
@@ -180,9 +259,16 @@ import {
   sourceFileNameFromUrl,
   writeCustomSources
 } from '@/utils/customSources'
-import { performCustomSourceRequest, runCustomSourceCompatibility } from '@/utils/customSourceRuntime'
+import {
+  createCustomSourceSession,
+  parseCustomSourceLyrics,
+  performCustomSourceRequest,
+  runCustomSourceCompatibility,
+  validateCustomSourceMediaUrl
+} from '@/utils/customSourceRuntime'
 
 const userStore = useUserStore()
+const playerStore = usePlayerStore()
 const fileInput = ref(null)
 const backupInput = ref(null)
 const sourceUrl = ref('')
@@ -192,6 +278,19 @@ const importingUrl = ref(false)
 const checkingSourceId = ref('')
 const compatibilityBySource = ref({})
 const expandedSourceId = ref('')
+const auditionVisible = ref(false)
+const auditioning = ref(false)
+const auditionSource = ref(null)
+const auditionPlatformKey = ref('')
+const auditionQuality = ref('')
+const auditionSearchKeyword = ref('')
+const auditionSearchResults = ref([])
+const auditionSearchLoading = ref(false)
+const auditionMusicInfoText = ref('')
+const resolvedAuditionTrack = ref(null)
+let activeAuditionSession = null
+let activeAuditionController = null
+let activeCompatibilityController = null
 const sourceOwner = computed(() => userStore.userInfo?.id ?? userStore.userInfo?.username ?? 'local')
 const storageKey = computed(() => `${CUSTOM_SOURCE_STORAGE_KEY}:${String(sourceOwner.value).replace(/[^a-zA-Z0-9._-]/g, '_')}`)
 const sources = ref(readCustomSources(localStorage, storageKey.value))
@@ -202,6 +301,12 @@ const visibleSources = computed(() => {
     .filter(({ source }) => !query || [source.name, source.description, source.author, source.fileName]
       .some((value) => String(value || '').toLowerCase().includes(query)))
 })
+const auditionPlatforms = computed(() => {
+  const result = auditionSource.value ? compatibilityBySource.value[auditionSource.value.id] : null
+  return result?.sources?.filter((platform) => platform.actions.includes('musicUrl')) || []
+})
+const selectedAuditionPlatform = computed(() => auditionPlatforms.value.find((platform) => platform.key === auditionPlatformKey.value) || null)
+const auditionQualities = computed(() => selectedAuditionPlatform.value?.qualities || [])
 
 watch(storageKey, (key) => {
   sources.value = readCustomSources(localStorage, key)
@@ -209,6 +314,16 @@ watch(storageKey, (key) => {
   expandedSourceId.value = ''
   compatibilityBySource.value = {}
   checkingSourceId.value = ''
+  activeCompatibilityController?.abort()
+  activeCompatibilityController = null
+  activeAuditionController?.abort()
+  activeAuditionController = null
+  activeAuditionSession?.destroy()
+  activeAuditionSession = null
+  auditioning.value = false
+  auditionVisible.value = false
+  auditionSource.value = null
+  resolvedAuditionTrack.value = null
 })
 
 function persist(nextSources) {
@@ -380,36 +495,48 @@ function moveSource(index, offset) {
   persist(reordered)
 }
 
+function createSourceRequestBridge(source) {
+  const approvedOrigins = new Set()
+  return async (rawUrl, options, signal) => {
+    const target = parseCustomSourceUrl(rawUrl)
+    if (signal?.aborted) throw new Error('网络请求已取消')
+    if (!approvedOrigins.has(target.origin)) {
+      const requestMethod = String(options?.method || 'GET').toUpperCase()
+      await ElMessageBox.confirm(
+        `「${source.name}」请求 ${requestMethod} ${target.origin}${target.pathname}。请求不携带 Cookie 或登录态，不绕过浏览器 CORS；该来源仅在本次运行期间允许。`,
+        '确认音源网络请求',
+        { type: 'warning', confirmButtonText: '仅本次允许', cancelButtonText: '拒绝请求', closeOnClickModal: false }
+      )
+      if (signal?.aborted) throw new Error('网络请求已取消')
+      approvedOrigins.add(target.origin)
+    }
+    return performCustomSourceRequest(target.href, options, { signal })
+  }
+}
+
 async function checkCompatibility(source) {
   if (checkingSourceId.value) return
   let executionStarted = false
+  const controller = new AbortController()
+  activeCompatibilityController = controller
+  checkingSourceId.value = source.id
   try {
     await ElMessageBox.confirm(
       '此操作会执行该脚本的初始化代码。脚本仅在一次性隔离 Worker 中运行，没有页面 DOM、本机存储或直接网络能力；仍请只检测你信任的脚本。',
       '隔离兼容检测',
       { type: 'warning', confirmButtonText: '我信任并检测', cancelButtonText: '取消', closeOnClickModal: false }
     )
+    if (controller.signal.aborted) return
     executionStarted = true
-    checkingSourceId.value = source.id
-    const approvedOrigins = new Set()
     const result = await runCustomSourceCompatibility(source, {
-      onRequest: async (rawUrl, options) => {
-        const target = parseCustomSourceUrl(rawUrl)
-        if (!approvedOrigins.has(target.origin)) {
-          const requestMethod = String(options?.method || 'GET').toUpperCase()
-          await ElMessageBox.confirm(
-            `「${source.name}」请求 ${requestMethod} ${target.origin}${target.pathname}。请求不携带 Cookie 或登录态，不绕过浏览器 CORS；该来源仅在本次检测期间允许。`,
-            '确认音源网络请求',
-            { type: 'warning', confirmButtonText: '仅本次允许', cancelButtonText: '拒绝请求', closeOnClickModal: false }
-          )
-          approvedOrigins.add(target.origin)
-        }
-        return performCustomSourceRequest(target.href, options)
-      }
+      onRequest: createSourceRequestBridge(source),
+      signal: controller.signal
     })
+    if (controller.signal.aborted) return
     compatibilityBySource.value = { ...compatibilityBySource.value, [source.id]: result }
     ElMessage.success(`隔离初始化通过：声明 ${result.sources.length} 个平台；尚未接入搜索或播放`)
   } catch (error) {
+    if (controller.signal.aborted) return
     const wasCancelled = error === 'cancel' || error === 'close'
     if (!wasCancelled || executionStarted) {
       const message = wasCancelled ? '网络请求已拒绝或检测已取消' : (error?.message || '隔离兼容检测失败')
@@ -417,9 +544,219 @@ async function checkCompatibility(source) {
       ElMessage.warning(message)
     }
   } finally {
-    checkingSourceId.value = ''
+    if (activeCompatibilityController === controller) {
+      activeCompatibilityController = null
+      if (checkingSourceId.value === source.id) checkingSourceId.value = ''
+    }
   }
 }
+
+function supportsMusicUrl(result) {
+  return Boolean(result?.sources?.some((platform) => platform.actions.includes('musicUrl')))
+}
+
+function openAudition(source) {
+  if (!supportsMusicUrl(compatibilityBySource.value[source.id])) {
+    ElMessage.warning('请先完成隔离兼容检测，并确认音源声明了 musicUrl')
+    return
+  }
+  auditionSource.value = source
+  auditionPlatformKey.value = auditionPlatforms.value[0]?.key || ''
+  auditionQuality.value = auditionPlatforms.value[0]?.qualities?.[0] || ''
+  auditionSearchKeyword.value = ''
+  auditionSearchResults.value = []
+  auditionMusicInfoText.value = JSON.stringify({ title: '', singerName: '' }, null, 2)
+  resolvedAuditionTrack.value = null
+  auditionVisible.value = true
+}
+
+function onAuditionPlatformChange(platformKey) {
+  const platform = auditionPlatforms.value.find((item) => item.key === platformKey)
+  auditionQuality.value = platform?.qualities?.[0] || ''
+}
+
+async function searchAuditionCatalog() {
+  const query = auditionSearchKeyword.value.trim()
+  if (!query) return
+  auditionSearchLoading.value = true
+  try {
+    const result = await searchApi.search(query, 8)
+    auditionSearchResults.value = Array.isArray(result?.songs) ? result.songs.slice(0, 8) : []
+    if (!auditionSearchResults.value.length) ElMessage.info('Music Holo 曲库没有找到歌曲；也可直接编辑 musicInfo JSON')
+  } catch {
+    ElMessage.warning('曲库搜索失败，可以直接填写 musicInfo JSON')
+  } finally {
+    auditionSearchLoading.value = false
+  }
+}
+
+function useCatalogSong(song) {
+  auditionMusicInfoText.value = JSON.stringify({
+    musicHoloId: song.id,
+    title: song.title,
+    name: song.title,
+    singerName: song.singerName || '',
+    singer: song.singerName || '',
+    album: song.album || '',
+    duration: song.duration || 0
+  }, null, 2)
+  ElMessage.info('已填入 Music Holo 通用曲目信息；若源需要平台 ID，请继续编辑 JSON')
+}
+
+function firstMusicText(...values) {
+  for (const value of values) {
+    if (Array.isArray(value)) {
+      const joined = value.map((item) => typeof item === 'object' ? (item?.name || item?.title || '') : item)
+        .map((item) => String(item || '').trim()).filter(Boolean).join(' / ')
+      if (joined) return joined.slice(0, 120)
+    } else if (value && typeof value === 'object') {
+      const nested = value.name || value.title || value.artist || value.singerName
+      if (nested) return String(nested).trim().slice(0, 120)
+    } else if (value != null && String(value).trim()) {
+      return String(value).trim().slice(0, 120)
+    }
+  }
+  return ''
+}
+
+async function resolveAudition() {
+  if (auditioning.value || !auditionSource.value || !selectedAuditionPlatform.value) return
+  let musicInfo
+  try {
+    musicInfo = JSON.parse(auditionMusicInfoText.value || '{}')
+  } catch {
+    ElMessage.warning('musicInfo 不是有效 JSON')
+    return
+  }
+  if (!musicInfo || typeof musicInfo !== 'object' || Array.isArray(musicInfo)) {
+    ElMessage.warning('musicInfo 必须是 JSON 对象')
+    return
+  }
+  if (!String(musicInfo.title || musicInfo.name || '').trim()) {
+    ElMessage.warning('请至少填写歌曲 title 或 name')
+    return
+  }
+  const selectedPlatform = selectedAuditionPlatform.value
+  const source = auditionSource.value
+  let consentGranted = false
+  let session = null
+  const controller = new AbortController()
+  activeAuditionController = controller
+  auditioning.value = true
+  resolvedAuditionTrack.value = null
+  try {
+    await ElMessageBox.confirm(
+      `将临时执行「${source.name}」脚本，并把当前 musicInfo 发送给所选 ${selectedPlatform.name} 的 musicUrl 处理器。请勿填写密码、Cookie 或令牌，且只运行可信并获准使用的源。`,
+      '隔离解析并试听',
+      { type: 'warning', confirmButtonText: '我信任并解析', cancelButtonText: '取消', closeOnClickModal: false }
+    )
+    if (controller.signal.aborted) throw new Error('隔离试听已取消')
+    consentGranted = true
+    session = await createCustomSourceSession(source, {
+      onRequest: createSourceRequestBridge(source),
+      signal: controller.signal
+    })
+    activeAuditionSession = session
+    const runtimePlatform = session.capabilities.sources.find((platform) => platform.key === selectedPlatform.key)
+    if (!runtimePlatform?.actions.includes('musicUrl')) throw new Error('本次初始化没有声明所选平台的 musicUrl 能力')
+
+    const rawMediaUrl = await session.request({
+      source: runtimePlatform.key,
+      action: 'musicUrl',
+      info: {
+        type: runtimePlatform.key === 'local' ? null : (auditionQuality.value || runtimePlatform.qualities[0] || '128k'),
+        musicInfo
+      }
+    })
+    if (controller.signal.aborted) throw new Error('隔离试听已取消')
+    const media = validateCustomSourceMediaUrl(rawMediaUrl)
+    let customLyrics = []
+    if (runtimePlatform.actions.includes('lyric')) {
+      try {
+        const lyricResult = await session.request({
+          source: runtimePlatform.key,
+          action: 'lyric',
+          info: { musicInfo }
+        })
+        customLyrics = parseCustomSourceLyrics(lyricResult)
+      } catch {
+        // 歌词是可选能力；失败不影响已解析的音频。
+      }
+    }
+    if (controller.signal.aborted) throw new Error('隔离试听已取消')
+    await ElMessageBox.confirm(
+      `音频来自 ${media.origin}。播放器将使用 crossorigin=anonymous（不发送 Cookie/登录态）；若该站未允许 CORS，浏览器将阻止播放。请确认你有权试听。`,
+      '确认加载音频',
+      { type: 'warning', confirmButtonText: '允许加载音频', cancelButtonText: '取消', closeOnClickModal: false }
+    )
+    if (controller.signal.aborted) throw new Error('隔离试听已取消')
+    const title = firstMusicText(musicInfo.title, musicInfo.name) || '自定义源曲目'
+    const singerName = firstMusicText(musicInfo.singerName, musicInfo.singer, musicInfo.artist, musicInfo.artists) || '自定义音源'
+    const duration = Number(musicInfo.duration)
+    resolvedAuditionTrack.value = {
+      id: `custom-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      title,
+      singerName,
+      album: firstMusicText(musicInfo.album, musicInfo.albumName),
+      cover: '',
+      duration: Number.isFinite(duration) && duration > 0 && duration <= 3600 ? duration : 0,
+      audioUrl: media.href,
+      audioOrigin: media.origin,
+      customLyrics,
+      categoryName: '自定义源',
+      sourceName: source.name,
+      sourcePlatform: runtimePlatform.name,
+      isCustomSource: true
+    }
+    ElMessage.success('音频地址已解析；点击“交给全局播放器试听”开始播放')
+  } catch (error) {
+    if (controller.signal.aborted) return
+    const wasCancelled = error === 'cancel' || error === 'close'
+    if (wasCancelled) {
+      if (consentGranted) ElMessage.info('试听已取消')
+    } else {
+      ElMessage.warning(error?.message || '自定义源解析失败')
+    }
+  } finally {
+    session?.destroy()
+    if (activeAuditionSession === session) activeAuditionSession = null
+    if (activeAuditionController === controller) {
+      activeAuditionController = null
+      auditioning.value = false
+    }
+  }
+}
+
+async function playResolvedAudition() {
+  const track = resolvedAuditionTrack.value
+  if (!track) return
+  try {
+    await playerStore.playSong(track)
+    auditionVisible.value = false
+    ElMessage.success(`已交给全局播放器：《${track.title}》`)
+  } catch {
+    ElMessage.warning('加入全局播放器失败')
+  }
+}
+
+function onAuditionClosed() {
+  activeAuditionController?.abort()
+  activeAuditionController = null
+  activeAuditionSession?.destroy()
+  activeAuditionSession = null
+  auditionSource.value = null
+  auditionSearchResults.value = []
+  if (!auditioning.value) resolvedAuditionTrack.value = null
+}
+
+onUnmounted(() => {
+  activeCompatibilityController?.abort()
+  activeCompatibilityController = null
+  activeAuditionController?.abort()
+  activeAuditionController = null
+  activeAuditionSession?.destroy()
+  activeAuditionSession = null
+})
 
 async function renameSource(source) {
   try {
@@ -445,6 +782,21 @@ function toggleSourceCode(sourceId) {
 function removeSource(sourceId) {
   const next = sources.value.filter((source) => source.id !== sourceId)
   if (!persist(next)) return
+  if (checkingSourceId.value === sourceId) {
+    activeCompatibilityController?.abort()
+    activeCompatibilityController = null
+    checkingSourceId.value = ''
+  }
+  if (auditionSource.value?.id === sourceId) {
+    activeAuditionController?.abort()
+    activeAuditionController = null
+    activeAuditionSession?.destroy()
+    activeAuditionSession = null
+    auditioning.value = false
+    auditionVisible.value = false
+    auditionSource.value = null
+    resolvedAuditionTrack.value = null
+  }
   if (expandedSourceId.value === sourceId) expandedSourceId.value = ''
   const nextResults = { ...compatibilityBySource.value }
   delete nextResults[sourceId]
@@ -528,6 +880,20 @@ function formatDate(value) {
 .source-runtime-result strong { color: var(--text-main); font-size: 11px; }
 .source-runtime-result.is-error { border-color: color-mix(in srgb, var(--el-color-danger) 34%, transparent); background: color-mix(in srgb, var(--el-color-danger) 6%, transparent); }
 .source-runtime-result.is-error span { overflow-wrap: anywhere; }
+.source-audition { display: flex; flex-direction: column; gap: 16px; }
+.source-audition :deep(.el-alert__description) { line-height: 1.65; }
+.source-audition-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.source-audition-field, .source-audition-info { display: flex; min-width: 0; flex-direction: column; gap: 7px; color: var(--text-main); font-size: 12px; }
+.source-audition-field :deep(.el-select) { width: 100%; }
+.source-audition-catalog { display: flex; flex-direction: column; gap: 8px; color: var(--text-main); font-size: 12px; }
+.source-audition-search { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.source-audition-results { display: flex; max-height: 110px; flex-wrap: wrap; gap: 4px; overflow-y: auto; padding: 6px; border: 1px solid var(--border-color); border-radius: 8px; }
+.source-audition-info small, .source-audition-ready small { color: var(--text-sub); font-size: 10px; line-height: 1.5; }
+.source-audition-ready { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 12px; border: 1px solid color-mix(in srgb, var(--holo-primary) 32%, transparent); border-radius: 12px; background: color-mix(in srgb, var(--holo-primary) 6%, transparent); }
+.source-audition-ready > div:first-child { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.source-audition-ready strong { color: var(--holo-primary); }
+.source-audition-ready span { color: var(--text-main); overflow-wrap: anywhere; }
+.source-audition-ready-actions { display: flex; flex-wrap: wrap; gap: 4px; }
 .source-code-view { margin-top: 12px; }
 .source-code-view :deep(textarea) { font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .source-empty { display: flex; min-height: 220px; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 22px; text-align: center; }
@@ -546,6 +912,9 @@ function formatDate(value) {
   .source-toolbar-actions { width: 100%; align-items: stretch !important; flex-direction: column; gap: 2px; }
   .source-search { width: 100%; }
   .source-backup-actions { justify-content: flex-start; }
+  .source-audition-fields, .source-audition-search { grid-template-columns: 1fr; }
+  .source-audition-ready-actions { width: 100%; }
+  .source-audition-ready-actions :deep(.el-button) { flex: 1; }
   .source-card { padding: 12px; }
   .source-card-footer { align-items: flex-start; flex-direction: column; }
   .source-file-actions { width: 100%; justify-content: flex-start; }

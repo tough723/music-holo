@@ -18,7 +18,7 @@
       </div>
       <el-tooltip :content="isFav ? '取消收藏' : '收藏'" placement="top">
         <el-button
-          v-if="currentSong && !currentSong.isLocal"
+          v-if="currentSong && !currentSong.isLocal && !currentSong.isCustomSource"
           circle
           size="small"
           :type="isFav ? 'danger' : 'default'"
@@ -29,7 +29,7 @@
           <el-icon><StarFilled v-if="isFav" /><Star v-else /></el-icon>
         </el-button>
       </el-tooltip>
-      <el-tooltip v-if="currentSong && !currentSong.isLocal" content="以当前歌曲开启相似电台" placement="top">
+      <el-tooltip v-if="currentSong && !currentSong.isLocal && !currentSong.isCustomSource" content="以当前歌曲开启相似电台" placement="top">
         <el-button class="pb-radio" circle size="small" aria-label="开启相似歌曲电台" @click="openRadio">
           <el-icon><Headset /></el-icon>
         </el-button>
@@ -145,7 +145,7 @@
           text
           class="pb-spatial"
           :class="{ active: spatialEnabled }"
-          :disabled="!hasSong || !currentSong?.audioUrl"
+          :disabled="!hasSong || !currentSong?.audioUrl || currentSong?.isCustomSource"
           :aria-label="spatialEnabled ? '关闭 3D 空间音效' : '开启 3D 空间音效'"
           :aria-pressed="spatialEnabled"
           @click="toggleSpatialAudio"
@@ -223,6 +223,7 @@
         <div class="queue-artist">
           {{ song.singerName }}
           <el-tag v-if="song.isLocal" size="small" effect="plain" class="queue-local-tag">本地</el-tag>
+          <el-tag v-else-if="song.isCustomSource" size="small" effect="plain" class="queue-local-tag">{{ song.sourcePlatform || '自定义源' }}</el-tag>
         </div>
       </div>
       <el-button circle size="small" text @click.stop="playerStore.removeAt(index)">
@@ -300,8 +301,12 @@ function ensureSpatialAudioGraph() {
   return spatialAudioGraph
 }
 
-function setAudioSource(audio, audioUrl) {
+function setAudioSource(audio, audioUrl, { anonymous = false } = {}) {
   if (!audio) return
+  const previousCorsMode = audio.getAttribute('crossorigin')
+  if (anonymous) audio.crossOrigin = 'anonymous'
+  else audio.removeAttribute('crossorigin')
+  const corsModeChanged = previousCorsMode !== audio.getAttribute('crossorigin')
   if (!audioUrl) {
     audio.pause()
     audio.removeAttribute('src')
@@ -314,7 +319,7 @@ function setAudioSource(audio, audioUrl) {
   } catch {
     // Let the media element emit its normal error for malformed source URLs.
   }
-  if (audio.src !== resolvedUrl) audio.src = audioUrl
+  if (audio.src !== resolvedUrl || corsModeChanged) audio.src = audioUrl
 }
 
 function seekAudioWhenReady(audio, time) {
@@ -371,7 +376,7 @@ async function toggleFavorite() {
     return
   }
   const song = currentSong.value
-  if (!song || song.isLocal) return
+  if (!song || song.isLocal || song.isCustomSource) return
   try {
     if (isFav.value) {
       await favoriteApi.cancel(song.id)
@@ -522,7 +527,7 @@ async function toggleSpatialAudio() {
   const nativeAudio = audioRef.value
   const spatialAudio = spatialAudioRef.value
   const song = currentSong.value
-  if (!nativeAudio || !spatialAudio || !song?.audioUrl) return
+  if (!nativeAudio || !spatialAudio || !song?.audioUrl || song.isCustomSource) return
 
   if (spatialEnabled.value) {
     const resumeAt = spatialAudio.currentTime || playerStore.currentTime
@@ -607,7 +612,7 @@ function openQueue() {
 
 function openRadio() {
   const song = currentSong.value
-  if (!song || song.isLocal) return
+  if (!song || song.isLocal || song.isCustomSource) return
   router.push({ path: '/radio', query: { sourceId: song.id } })
 }
 
@@ -680,7 +685,7 @@ watch(currentSong, (song) => {
     return
   }
 
-  if (spatialEnabled.value && !isSpatialAudioUrl(song.audioUrl, window.location.href)) {
+  if (spatialEnabled.value && (song.isCustomSource || !isSpatialAudioUrl(song.audioUrl, window.location.href))) {
     spatialAudio.pause()
     spatialAudioGraph?.setEnabled(false)
     spatialEnabled.value = false
@@ -693,7 +698,7 @@ watch(currentSong, (song) => {
     seekAudioWhenReady(spatialAudio, playerStore.currentTime)
   } else {
     spatialAudio.pause()
-    setAudioSource(nativeAudio, song.audioUrl)
+    setAudioSource(nativeAudio, song.audioUrl, { anonymous: Boolean(song.isCustomSource) })
     seekAudioWhenReady(nativeAudio, playerStore.currentTime)
   }
 
@@ -764,7 +769,7 @@ function onAudioError(event) {
     spatialAudioGraph?.setEnabled(false)
     spatialEnabled.value = false
     if (currentSong.value?.audioUrl) {
-      setAudioSource(nativeAudio, currentSong.value.audioUrl)
+      setAudioSource(nativeAudio, currentSong.value.audioUrl, { anonymous: Boolean(currentSong.value.isCustomSource) })
       seekAudioWhenReady(nativeAudio, resumeAt)
       if (playerStore.playing) {
         nativeAudio.play().catch(() => { playerStore.playing = false })
@@ -773,7 +778,11 @@ function onAudioError(event) {
       return
     }
   }
-  if (currentSong.value) ElMessage.error(`《${currentSong.value.title}》音频加载失败`)
+  if (currentSong.value?.isCustomSource) {
+    ElMessage.error(`《${currentSong.value.title}》加载失败：链接可能已过期，或音频站未开放匿名 CORS`)
+  } else if (currentSong.value) {
+    ElMessage.error(`《${currentSong.value.title}》音频加载失败`)
+  }
   playerStore.playing = false
 }
 
@@ -799,7 +808,7 @@ onMounted(() => {
     nativeAudio.addEventListener('ended', onAudioEnded)
     nativeAudio.addEventListener('error', onAudioError)
     if (currentSong.value?.audioUrl) {
-      setAudioSource(nativeAudio, currentSong.value.audioUrl)
+      setAudioSource(nativeAudio, currentSong.value.audioUrl, { anonymous: Boolean(currentSong.value.isCustomSource) })
       playerStore.duration = currentSong.value.duration || 0
     }
   }
