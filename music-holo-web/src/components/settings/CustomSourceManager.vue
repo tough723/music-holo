@@ -396,8 +396,9 @@ async function checkCompatibility(source) {
       onRequest: async (rawUrl, options) => {
         const target = parseCustomSourceUrl(rawUrl)
         if (!approvedOrigins.has(target.origin)) {
+          const requestMethod = String(options?.method || 'GET').toUpperCase()
           await ElMessageBox.confirm(
-            `「${source.name}」请求访问 ${target.origin}。请求不携带 Cookie 或登录态，不绕过浏览器 CORS；仅本次检测允许。`,
+            `「${source.name}」请求 ${requestMethod} ${target.origin}${target.pathname}。请求不携带 Cookie 或登录态，不绕过浏览器 CORS；该来源仅在本次检测期间允许。`,
             '确认音源网络请求',
             { type: 'warning', confirmButtonText: '仅本次允许', cancelButtonText: '拒绝请求', closeOnClickModal: false }
           )
