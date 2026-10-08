@@ -99,6 +99,43 @@ function singerVO(singer) {
   return { ...clone(singer), songCount }
 }
 
+function albumVO(songs) {
+  if (!songs?.length) return null
+  const first = songs[0]
+  const singer = state.singers.find((item) => item.id === first.singerId)
+  return {
+    album: first.album,
+    singerId: first.singerId ?? null,
+    singerName: singer?.name || '未知歌手',
+    cover: songs.find((song) => song.cover)?.cover || singer?.avatar || '',
+    songCount: songs.length,
+    playCount: songs.reduce((sum, song) => sum + Number(song.playCount || 0), 0),
+    latestSongTime: songs.map((song) => song.createTime).filter(Boolean).sort().at(-1) || null
+  }
+}
+
+function albumTracks(album, singerId = null) {
+  const matches = state.songs.filter((song) => song.status === 1 && song.album === album)
+  const resolvedSingerId = singerId ?? matches[0]?.singerId ?? null
+  return matches
+    .filter((song) => (song.singerId ?? null) === resolvedSingerId)
+    .sort((a, b) => a.id - b.id)
+}
+
+function albumGroups(keyword = '') {
+  const normalized = String(keyword || '').trim().toLocaleLowerCase()
+  const groups = new Map()
+  for (const song of state.songs) {
+    if (song.status !== 1 || !String(song.album || '').trim()) continue
+    const singer = state.singers.find((item) => item.id === song.singerId)
+    if (normalized && !song.album.toLocaleLowerCase().includes(normalized) && !(singer?.name || '').toLocaleLowerCase().includes(normalized)) continue
+    const key = `${song.singerId ?? 'unknown'}::${song.album}`
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(song)
+  }
+  return Array.from(groups.values()).map(albumVO).filter(Boolean)
+}
+
 function playlistVO(playlist) {
   const songCount = state.playlistSongs.filter((ps) => ps.playlistId === playlist.id).length
   const creator = state.users.find((u) => u.id === playlist.creatorId)
@@ -382,6 +419,35 @@ route('delete', '/singer/:id', async (ctx) => {
   return null
 })
 
+// ---------- 专辑（从现有歌曲曲库聚合） ----------
+route('get', '/album/page', async (ctx) => {
+  const { pageNum = 1, pageSize = 12, keyword = '' } = ctx.params
+  const albums = albumGroups(keyword).sort((a, b) => b.playCount - a.playCount || a.album.localeCompare(b.album, 'zh-CN'))
+  return pageOf(albums, num(pageNum, 1), Math.min(48, Math.max(1, num(pageSize, 12))))
+})
+
+route('get', '/album/detail', async (ctx) => {
+  const album = String(ctx.params.album || '').trim()
+  const singerId = ctx.params.singerId ? num(ctx.params.singerId) : null
+  const tracks = albumTracks(album, singerId)
+  const result = albumVO(tracks)
+  if (!result) throw mockError(404, '专辑不存在或已下架')
+  return result
+})
+
+route('get', '/album/songs', async (ctx) => {
+  const album = String(ctx.params.album || '').trim()
+  const singerId = ctx.params.singerId ? num(ctx.params.singerId) : null
+  const tracks = albumTracks(album, singerId)
+  if (!tracks.length) throw mockError(404, '专辑不存在或已下架')
+  return tracks.map((song) => {
+    const vo = songVO(song)
+    delete vo.lyric
+    if (ctx.user) vo.favorite = state.favorites.some((favorite) => favorite.userId === ctx.user.id && favorite.songId === song.id)
+    return vo
+  })
+})
+
 // ---------- 歌曲 ----------
 route('get', '/song/page', async (ctx) => {
   const { pageNum = 1, pageSize = 10, keyword, categoryId, singerId } = ctx.params
@@ -461,6 +527,24 @@ route('get', '/recommend/songs', async (ctx) => {
   return list.slice(0, limit).map((song) => {
     const vo = songVO(song)
     delete vo.lyric
+    return vo
+  })
+})
+
+route('get', '/recommend/similar', async (ctx) => {
+  const sourceSongId = num(ctx.params.sourceSongId)
+  const limit = Math.min(24, Math.max(1, num(ctx.params.limit, 12)))
+  const source = state.songs.find((song) => song.id === sourceSongId && song.status === 1)
+  if (!source) throw mockError(404, '歌曲不存在或已下架')
+
+  const candidates = state.songs.filter((song) => song.status === 1 && song.id !== sourceSongId)
+  const score = (song) => (song.singerId === source.singerId ? 5 : 0) +
+    (song.categoryId === source.categoryId ? 3 : 0) + Math.log1p(song.playCount || 0) / 20
+  candidates.sort((a, b) => score(b) - score(a) || b.playCount - a.playCount || b.id - a.id)
+  return candidates.slice(0, limit).map((song) => {
+    const vo = songVO(song)
+    delete vo.lyric
+    if (ctx.user) vo.favorite = state.favorites.some((favorite) => favorite.userId === ctx.user.id && favorite.songId === song.id)
     return vo
   })
 })

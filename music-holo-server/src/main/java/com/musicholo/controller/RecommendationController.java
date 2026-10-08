@@ -29,4 +29,12 @@ public class RecommendationController {
         Long userId = StpUtil.isLogin() ? StpUtil.getLoginIdAsLong() : null;
         return Result.success(recommendationService.songs(userId, limit));
     }
+
+    @Operation(summary = "根据一首歌曲生成相似歌曲电台候选")
+    @GetMapping("/similar")
+    public Result<List<SongVO>> similar(
+            @RequestParam Long sourceSongId,
+            @RequestParam(defaultValue = "12") Integer limit) {
+        return Result.success(recommendationService.similar(sourceSongId, limit));
+    }
 }

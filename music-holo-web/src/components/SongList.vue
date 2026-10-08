@@ -40,7 +40,16 @@
     </el-table-column>
 
     <el-table-column v-if="showAlbum" label="专辑" min-width="140" show-overflow-tooltip>
-      <template #default="{ row }">{{ row.album || '-' }}</template>
+      <template #default="{ row }">
+        <button
+          v-if="row.album"
+          type="button"
+          class="album-link"
+          :aria-label="`打开专辑《${row.album}》`"
+          @click.stop="openAlbum(row)"
+        >{{ row.album }}</button>
+        <span v-else>-</span>
+      </template>
     </el-table-column>
 
     <el-table-column label="时长" width="80" align="center">
@@ -112,6 +121,7 @@
 
 <script setup>
 import { computed, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { usePlayerStore } from '@/store/player'
 import ReviewPanel from './ReviewPanel.vue'
 import { fmtDuration, fmtCount, fmtDateTime } from '@/utils/format'
@@ -133,9 +143,21 @@ const props = defineProps({
 const emit = defineEmits(['play', 'toggle-favorite', 'add-queue'])
 
 const playerStore = usePlayerStore()
+const router = useRouter()
 const playing = computed(() => playerStore.playing)
 const reviewVisible = ref(false)
 const activeReviewSong = ref(null)
+
+function openAlbum(song) {
+  if (!song?.album) return
+  router.push({
+    name: 'AlbumDetail',
+    query: {
+      album: song.album,
+      ...(song.singerId ? { singerId: song.singerId } : {})
+    }
+  })
+}
 
 function openReview(song) {
   activeReviewSong.value = song
@@ -234,6 +256,28 @@ const onRowClick = (row) => emit('play', row, props.songs.indexOf(row))
   font-size: 12px;
   color: var(--text-sub);
   margin-top: 2px;
+}
+.album-link {
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  color: var(--text-sub);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: color 0.16s ease, text-shadow 0.16s ease;
+}
+.album-link:hover {
+  color: var(--holo-primary);
+  text-shadow: 0 0 10px var(--holo-glow);
+}
+.album-link:focus-visible {
+  outline: 2px solid var(--holo-primary);
+  outline-offset: 2px;
 }
 .history-cell {
   display: flex;

@@ -13,12 +13,14 @@
       <el-menu-item index="/daily"><el-icon><Calendar /></el-icon><template #title>每日推荐</template></el-menu-item>
       <el-menu-item index="/search"><el-icon><Search /></el-icon><template #title>全局搜索</template></el-menu-item>
       <el-menu-item index="/charts"><el-icon><TrendCharts /></el-icon><template #title>排行榜</template></el-menu-item>
+      <el-menu-item index="/radio"><el-icon><Headset /></el-icon><template #title>相似电台</template></el-menu-item>
     </el-menu-item-group>
 
     <el-menu-item-group>
       <template #title><span>曲库</span></template>
       <el-menu-item index="/songs"><el-icon><Headset /></el-icon><template #title>歌曲</template></el-menu-item>
       <el-menu-item index="/singers"><el-icon><User /></el-icon><template #title>歌手</template></el-menu-item>
+      <el-menu-item index="/albums"><el-icon><Disc /></el-icon><template #title>专辑</template></el-menu-item>
       <el-menu-item index="/playlists"><el-icon><Collection /></el-icon><template #title>歌单</template></el-menu-item>
     </el-menu-item-group>
 
@@ -65,6 +67,7 @@ const activeIndex = computed(() => {
   const { path } = route
   if (path.startsWith('/playlists/')) return '/playlists'
   if (path.startsWith('/singers/')) return '/singers'
+  if (path.startsWith('/albums/')) return '/albums'
   return path
 })
 

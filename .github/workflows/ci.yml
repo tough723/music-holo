@@ -132,6 +132,8 @@ jobs:
           curl --fail --silent --show-error "$base/healthz" | grep -qx 'ok'
           curl --fail --silent --show-error "$base/api/system/theme" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 200'
           curl --fail --silent --show-error "$base/api/song/page?pageNum=1&pageSize=2" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and d["data"]["total"] > 0'
+          curl --fail --silent --show-error "$base/api/album/page?pageNum=1&pageSize=2" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and d["data"]["total"] > 0 and all(row["album"] and row["songCount"] > 0 for row in d["data"]["records"])'
+          curl --fail --silent --show-error "$base/api/recommend/similar?sourceSongId=1&limit=8" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and isinstance(d["data"], list) and len(d["data"]) > 0 and all(row["id"] != 1 for row in d["data"])'
           curl --fail --silent --show-error "$base/audio/song1.wav" -o /tmp/music-holo-demo.wav
           test -s /tmp/music-holo-demo.wav
           login=$(curl --fail --silent --show-error -H 'Content-Type: application/json' -d '{"username":"demo","password":"123456"}' "$base/api/auth/login")

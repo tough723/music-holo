@@ -3,6 +3,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { useUserStore } from '@/store/user'
 import { usePlayerStore } from '@/store/player'
 import * as authApi from '@/api/auth'
+import * as albumApi from '@/api/album'
 import * as commonApi from '@/api/common'
 import * as favoriteApi from '@/api/favorite'
 import * as lyricApi from '@/api/lyric'
@@ -299,6 +300,30 @@ describe('内置 Mock API 集成测试', () => {
     expect(result.songs.some((song) => song.id === 1)).toBe(true)
     expect(result.playlists.some((playlist) => playlist.name === '深夜霓虹')).toBe(true)
     expect(result.songs[0]).not.toHaveProperty('lyric')
+  })
+
+  it('专辑从现有歌曲聚合，可按歌手筛选并查询曲目', async () => {
+    const page = await albumApi.page({ pageNum: 1, pageSize: 12, keyword: '苏晚' })
+    expect(page.total).toBe(2)
+    expect(page.records.map((album) => album.singerName)).toEqual(['苏晚', '苏晚'])
+
+    const detail = await albumApi.detail('《云端信使》', 2)
+    expect(detail).toMatchObject({ album: '《云端信使》', singerId: 2, singerName: '苏晚', songCount: 1 })
+    const tracks = await albumApi.songs(detail.album, detail.singerId)
+    expect(tracks).toHaveLength(1)
+    expect(tracks[0]).toMatchObject({ id: 2, title: '云端信使' })
+    expect(tracks[0]).not.toHaveProperty('lyric')
+    await expect(albumApi.detail('不存在的专辑')).rejects.toMatchObject({ code: 404 })
+  })
+
+  it('相似歌曲电台优先返回同歌手或同分类曲目并排除起点歌曲', async () => {
+    const source = await songApi.detail(1)
+    const picks = await recommendationApi.similar(source.id, 2)
+    expect(picks).toHaveLength(2)
+    expect(picks.some((song) => song.id === source.id)).toBe(false)
+    expect(picks.every((song) => song.singerId === source.singerId || song.categoryId === source.categoryId)).toBe(true)
+    expect(picks.every((song) => !Object.hasOwn(song, 'lyric'))).toBe(true)
+    await expect(recommendationApi.similar(999, 12)).rejects.toMatchObject({ code: 404 })
   })
 
   it('个性化推荐排除最近已听/已收藏歌曲，并限制结果数量', async () => {

@@ -1,6 +1,7 @@
 package com.musicholo.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.musicholo.common.exception.BusinessException;
 import com.musicholo.entity.Song;
 import com.musicholo.entity.UserFavorite;
 import com.musicholo.entity.UserPlayHistory;
@@ -108,6 +109,61 @@ public class RecommendationService {
         return result;
     }
 
+    /** 根据当前歌曲的歌手与分类生成相似电台候选，热度榜仅用于不足时补齐。 */
+    public List<SongVO> similar(Long sourceSongId, Integer requestedLimit) {
+        if (sourceSongId == null) {
+            throw new BusinessException("请先选择一首歌曲");
+        }
+        int limit = Math.max(1, Math.min(requestedLimit == null ? 12 : requestedLimit, 24));
+        Song source = songMapper.selectById(sourceSongId);
+        if (source == null || !Integer.valueOf(1).equals(source.getStatus())) {
+            throw new BusinessException("歌曲不存在或已下架");
+        }
+
+        Map<Long, Integer> singerWeights = source.getSingerId() == null
+                ? Map.of() : Map.of(source.getSingerId(), 1);
+        Map<Long, Integer> categoryWeights = source.getCategoryId() == null
+                ? Map.of() : Map.of(source.getCategoryId(), 1);
+        Set<Long> excluded = new HashSet<>();
+        excluded.add(sourceSongId);
+        List<Song> candidates = new ArrayList<>();
+
+        if (!singerWeights.isEmpty() || !categoryWeights.isEmpty()) {
+            LambdaQueryWrapper<Song> query = new LambdaQueryWrapper<Song>()
+                    .eq(Song::getStatus, 1)
+                    .ne(Song::getId, sourceSongId)
+                    .and(w -> {
+                        boolean hasCondition = false;
+                        if (!categoryWeights.isEmpty()) {
+                            w.in(Song::getCategoryId, categoryWeights.keySet());
+                            hasCondition = true;
+                        }
+                        if (!singerWeights.isEmpty()) {
+                            if (hasCondition) w.or();
+                            w.in(Song::getSingerId, singerWeights.keySet());
+                        }
+                    });
+            candidates.addAll(songMapper.selectList(query.orderByDesc(Song::getPlayCount)
+                    .orderByAsc(Song::getId).last("LIMIT 200")));
+            candidates.sort((a, b) -> Double.compare(score(b, singerWeights, categoryWeights),
+                    score(a, singerWeights, categoryWeights)));
+        }
+
+        if (candidates.size() > limit) candidates = new ArrayList<>(candidates.subList(0, limit));
+        Set<Long> selectedIds = candidates.stream().map(Song::getId)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (candidates.size() < limit) {
+            for (Song trending : trending(excluded, limit * 3)) {
+                if (candidates.size() >= limit) break;
+                if (selectedIds.add(trending.getId())) candidates.add(trending);
+            }
+        }
+
+        List<SongVO> result = songAssembler.toVOList(candidates);
+        result.forEach(song -> song.setLyric(null));
+        return result;
+    }
+
     private List<Song> trending(Set<Long> excluded, int limit) {
         LambdaQueryWrapper<Song> query = new LambdaQueryWrapper<Song>().eq(Song::getStatus, 1);
         if (!excluded.isEmpty()) query.notIn(Song::getId, excluded);
@@ -116,8 +172,8 @@ public class RecommendationService {
     }
 
     private double score(Song song, Map<Long, Integer> singerWeights, Map<Long, Integer> categoryWeights) {
-        int singer = singerWeights.getOrDefault(song.getSingerId(), 0);
-        int category = categoryWeights.getOrDefault(song.getCategoryId(), 0);
+        int singer = song.getSingerId() == null ? 0 : singerWeights.getOrDefault(song.getSingerId(), 0);
+        int category = song.getCategoryId() == null ? 0 : categoryWeights.getOrDefault(song.getCategoryId(), 0);
         long playCount = song.getPlayCount() == null ? 0L : song.getPlayCount();
         return singer * 5.0 + category * 3.0 + Math.log1p(playCount) / 20.0;
     }

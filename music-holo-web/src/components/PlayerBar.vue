@@ -29,6 +29,11 @@
           <el-icon><StarFilled v-if="isFav" /><Star v-else /></el-icon>
         </el-button>
       </el-tooltip>
+      <el-tooltip v-if="currentSong && !currentSong.isLocal" content="以当前歌曲开启相似电台" placement="top">
+        <el-button class="pb-radio" circle size="small" aria-label="开启相似歌曲电台" @click="openRadio">
+          <el-icon><Headset /></el-icon>
+        </el-button>
+      </el-tooltip>
     </div>
 
     <!-- 中间：播放控制 + 进度 -->
@@ -229,6 +234,7 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { SLEEP_TIMER_MINUTES, usePlayerStore } from '@/store/player'
 import { useUserStore } from '@/store/user'
@@ -241,6 +247,7 @@ import Cover from './Cover.vue'
 
 const playerStore = usePlayerStore()
 const userStore = useUserStore()
+const router = useRouter()
 
 const audioRef = ref(null)
 const spatialAudioRef = ref(null)
@@ -598,6 +605,12 @@ function openQueue() {
   queueVisible.value = true
 }
 
+function openRadio() {
+  const song = currentSong.value
+  if (!song || song.isLocal) return
+  router.push({ path: '/radio', query: { sourceId: song.id } })
+}
+
 function openLocalFilePicker() {
   localFileInput.value?.click()
 }
@@ -902,7 +915,8 @@ watch(() => userStore.isLogin, (loggedIn) => {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.pb-fav {
+.pb-fav,
+.pb-radio {
   flex-shrink: 0;
 }
 
@@ -1138,6 +1152,9 @@ watch(() => userStore.isLogin, (loggedIn) => {
   .pb-left {
     min-width: 160px;
     gap: 8px;
+  }
+  .pb-radio {
+    display: none;
   }
   .pb-right {
     width: 230px;

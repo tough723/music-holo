@@ -6,3 +6,10 @@ export const songs = (limit = 8) => api({
   method: 'get',
   params: { limit }
 })
+
+/** 围绕当前歌曲生成同歌手/同分类的相似电台 */
+export const similar = (sourceSongId, limit = 24) => api({
+  url: '/recommend/similar',
+  method: 'get',
+  params: { sourceSongId, limit }
+})

@@ -144,6 +144,33 @@ test('demo 用户可以收藏歌曲并查看个人播放历史', async ({ page }
   await expect(page.locator('.player-bar .pb-title')).toHaveText('云端信使')
 })
 
+test('专辑库按歌曲曲库聚合，可从专辑详情播放整张专辑', async ({ page }) => {
+  await page.goto('/albums')
+  const albumCard = page.locator('.album-card').filter({ hasText: '霓虹海' }).first()
+  await expect(albumCard).toBeVisible()
+  await albumCard.click()
+
+  await expect(page).toHaveURL(/\/albums\/detail\?album=/)
+  await expect(page.locator('.album-title')).toHaveText('《霓虹海》')
+  const tracks = page.locator('.album-tracks .el-table__body-wrapper .el-table__row')
+  await expect(tracks).toHaveCount(1)
+  await expect(tracks.first()).toContainText('霓虹海')
+  await page.getByRole('button', { name: '播放专辑' }).click()
+  await expect(page.locator('.player-bar .pb-title')).toHaveText('霓虹海')
+})
+
+test('相似歌曲电台排除起点歌曲并可播放本轮推荐', async ({ page }) => {
+  await page.goto('/radio?sourceId=1')
+  await expect(page.locator('.radio-source')).toContainText('霓虹海')
+
+  const rows = page.locator('.radio-tracks .el-table__body-wrapper .el-table__row')
+  await expect(rows.first()).toBeVisible()
+  await expect(rows.filter({ hasText: '霓虹海' })).toHaveCount(0)
+  const firstTitle = (await rows.first().locator('.song-title').innerText()).trim()
+  await page.getByRole('button', { name: '播放本轮电台' }).click()
+  await expect(page.locator('.player-bar .pb-title')).toHaveText(firstTitle)
+})
+
 test('每日推荐可按分类筛选并播放歌曲', async ({ page }) => {
   await loginAs(page, 'demo')
   await openMenu(page, '每日推荐')
