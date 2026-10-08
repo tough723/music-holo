@@ -24,16 +24,17 @@
 
 | 技术 | 版本 | 说明 |
 | --- | --- | --- |
-| Vue | 3.4.0 | 前端框架 |
-| Vite | 5.0.10 | 构建工具 |
-| JavaScript | - | 类型支持（JSDoc / IDE 智能提示） |
-| Element Plus | 2.5.x | UI 组件库（暗色主题） |
+| Vue | 3.5.43 | 前端框架（包含 server-renderer XSS 安全修复） |
+| Vite | 8.3.4 | 构建工具 |
+| JavaScript | - | 纯 JS 单页应用 |
+| Element Plus | 2.14.7 | UI 组件库（暗色主题） |
 | Pinia | 2.1.7 | 状态管理 |
 | Vue Router | 4.2.5 | 路由管理 |
-| Axios | 1.6.2 | HTTP 客户端 |
-| ECharts | 5.4.3 | 图表库（管理后台仪表盘） |
+| Axios | 1.20.0 | HTTP 客户端 |
+| ECharts | 6.1.0 | 图表库（管理后台仪表盘，安全修复版） |
+| Vitest | 5.0.3 | Mock API 集成测试 |
 
-> 版本说明：Pinia 固定 2.1.7、Vue Router 固定 4.2.5、Vue 固定 3.4.x，保证与需求版本一致且互相兼容（新版 Pinia/Vue-Router 的 peer 依赖要求 Vue ≥ 3.5）。
+> 版本说明：安全审计后将 Vue、Vite、ECharts 与 Vitest 升级到已修复公开漏洞的版本；Pinia 2.1.7 与 Vue Router 4.2.5 仍按需求固定。Vite 8 / Vitest 5 需要 Node.js ≥ 22.12。前端锁文件固定了完整依赖树。
 
 ---
 
@@ -119,6 +120,8 @@ mvn spring-boot:run
 ```bash
 cd music-holo-web
 npm install
+npm test       # 运行 Mock API 集成测试
+npm run build  # 生产构建验证
 npm run dev
 # 浏览器打开 http://localhost:5173
 # 开发环境下 /api 与 /profile 会被 Vite 代理到 http://localhost:8080
@@ -141,6 +144,10 @@ VITE_API_MOCK=true npm run dev
 ```
 
 此时全部接口由 `src/api/mock/` 在浏览器内存中模拟实现（含登录、播放、收藏、管理后台等完整流程）。
+
+### 自动化检查
+
+`.github/workflows/ci.yml` 在推送 `main` / `arena/**` 分支或向 `main` 提交 PR 时自动执行：前端依赖安全审计、6 项 Mock API 集成测试、生产构建，以及后端 Java 17 下的 Maven `verify` 编译校验。
 
 ---
 

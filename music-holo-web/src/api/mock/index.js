@@ -558,13 +558,15 @@ route('post', '/playlist/:id/songs', async (ctx) => {
   if (!playlist) throw mockError(500, '歌单不存在')
   if (playlist.creatorId !== user.id && user.role !== 0) throw mockError(403, '只能操作自己创建的歌单')
   const songIds = Array.isArray(ctx.body) ? ctx.body : []
-  const existIds = state.playlistSongs.filter((ps) => ps.playlistId === id).map((ps) => ps.songId)
+  const existIds = new Set(state.playlistSongs.filter((ps) => ps.playlistId === id).map((ps) => ps.songId))
   let maxSort = state.playlistSongs.filter((ps) => ps.playlistId === id).reduce((m, ps) => Math.max(m, ps.sort || 0), 0)
   let added = 0
-  for (const songId of songIds) {
-    if (existIds.includes(num(songId))) continue
-    if (!state.songs.some((s) => s.id === num(songId))) continue
-    state.playlistSongs.push({ id: state.genId(), playlistId: id, songId: num(songId), sort: ++maxSort, createTime: new Date().toISOString().slice(0, 19).replace('T', ' ') })
+  for (const value of songIds) {
+    const songId = num(value)
+    if (existIds.has(songId)) continue
+    if (!state.songs.some((s) => s.id === songId)) continue
+    state.playlistSongs.push({ id: state.genId(), playlistId: id, songId, sort: ++maxSort, createTime: new Date().toISOString().slice(0, 19).replace('T', ' ') })
+    existIds.add(songId)
     added++
   }
   return added

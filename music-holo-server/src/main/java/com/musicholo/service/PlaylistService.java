@@ -23,8 +23,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -182,9 +184,9 @@ public class PlaylistService {
         if (songIds == null || songIds.isEmpty()) {
             throw new BusinessException("歌曲列表不能为空");
         }
-        List<Long> existIds = playlistSongMapper.selectList(
+        Set<Long> existIds = playlistSongMapper.selectList(
                         new LambdaQueryWrapper<PlaylistSong>().eq(PlaylistSong::getPlaylistId, playlistId))
-                .stream().map(PlaylistSong::getSongId).collect(Collectors.toList());
+                .stream().map(PlaylistSong::getSongId).collect(Collectors.toCollection(HashSet::new));
         Long maxSort = playlistSongMapper.selectList(
                         new LambdaQueryWrapper<PlaylistSong>().eq(PlaylistSong::getPlaylistId, playlistId))
                 .stream().map(PlaylistSong::getSort).filter(s -> s != null)
@@ -203,6 +205,7 @@ public class PlaylistService {
             relation.setSongId(songId);
             relation.setSort(++sort);
             playlistSongMapper.insert(relation);
+            existIds.add(songId);
             added++;
         }
         return added;
