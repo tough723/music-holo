@@ -20,6 +20,12 @@
   --player-h: 88px;
 }
 
+@media (max-width: 680px) {
+  :root {
+    --player-h: 108px;
+  }
+}
+
 * {
   margin: 0;
   padding: 0;

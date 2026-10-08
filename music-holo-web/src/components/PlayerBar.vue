@@ -34,16 +34,18 @@
     <!-- 中间：播放控制 + 进度 -->
     <div class="pb-center">
       <div class="pb-controls">
-        <el-tooltip content="上一首" placement="top">
+        <el-tooltip content="上一首 · Shift + ←" placement="top">
           <el-button circle :disabled="!hasSong" @click="prev">
             <el-icon><DArrowLeft /></el-icon>
           </el-button>
         </el-tooltip>
-        <el-button class="pb-play" circle :disabled="!hasSong" @click="togglePlay">
-          <el-icon v-if="playing"><VideoPause /></el-icon>
-          <el-icon v-else><VideoPlay /></el-icon>
-        </el-button>
-        <el-tooltip content="下一首" placement="top">
+        <el-tooltip content="播放 / 暂停 · 空格" placement="top">
+          <el-button class="pb-play" circle :disabled="!hasSong" @click="togglePlay">
+            <el-icon v-if="playing"><VideoPause /></el-icon>
+            <el-icon v-else><VideoPlay /></el-icon>
+          </el-button>
+        </el-tooltip>
+        <el-tooltip content="下一首 · Shift + →" placement="top">
           <el-button circle :disabled="!hasSong" @click="next">
             <el-icon><DArrowRight /></el-icon>
           </el-button>
@@ -59,7 +61,22 @@
       </div>
       <div class="pb-progress">
         <span class="pb-time">{{ fmtDuration(playerStore.currentTime) }}</span>
-        <div class="progress-track" ref="trackRef" @click="onSeek">
+        <div
+          class="progress-track"
+          ref="trackRef"
+          role="slider"
+          tabindex="0"
+          aria-label="播放进度"
+          :aria-valuemin="0"
+          :aria-valuemax="Math.round(playerStore.duration || 0)"
+          :aria-valuenow="Math.round(playerStore.currentTime || 0)"
+          :aria-valuetext="`${fmtDuration(playerStore.currentTime)} / ${fmtDuration(playerStore.duration)}`"
+          @click="onSeek"
+          @keydown.left.prevent="onProgressKeydown"
+          @keydown.right.prevent="onProgressKeydown"
+          @keydown.home.prevent="seekTo(0)"
+          @keydown.end.prevent="seekTo(playerStore.duration)"
+        >
           <div class="progress-inner" :style="{ width: progressPercent + '%' }">
             <div class="progress-dot"></div>
           </div>
@@ -76,12 +93,12 @@
           <el-slider v-model="volume" :min="0" :max="100" :show-tooltip="false" @input="onVolume" />
         </div>
       </el-tooltip>
-      <el-tooltip content="歌词" placement="top">
+      <el-tooltip content="歌词 · L" placement="top">
         <el-button circle text :class="{ active: playerStore.lyricVisible }" @click="toggleLyric">
           <el-icon><ChatLineSquare /></el-icon>
         </el-button>
       </el-tooltip>
-      <el-tooltip content="播放队列" placement="top">
+      <el-tooltip content="播放队列 · Q" placement="top">
         <el-badge :value="playerStore.queue.length" :hidden="playerStore.queue.length === 0" type="primary">
           <el-button circle text @click="queueVisible = true">
             <el-icon><List /></el-icon>
@@ -95,7 +112,7 @@
   </div>
 
   <!-- 播放队列抽屉 -->
-  <el-drawer v-model="queueVisible" title="播放队列" size="380px" append-to-body>
+  <el-drawer v-model="queueVisible" title="播放队列" :size="queueDrawerSize" append-to-body>
     <div class="queue-toolbar">
       <span class="queue-count">共 {{ playerStore.queue.length }} 首</span>
       <el-button size="small" type="danger" plain :disabled="playerStore.queue.length === 0" @click="clearQueue">
@@ -123,7 +140,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { usePlayerStore } from '@/store/player'
 import { useUserStore } from '@/store/user'
@@ -138,6 +155,8 @@ const userStore = useUserStore()
 const audioRef = ref(null)
 const trackRef = ref(null)
 const queueVisible = ref(false)
+const viewportWidth = ref(typeof window === 'undefined' ? 1280 : window.innerWidth)
+const queueDrawerSize = computed(() => viewportWidth.value <= 420 ? '100%' : '380px')
 const volume = ref(Math.round(playerStore.volume * 100))
 const favoriteIds = ref([])
 
@@ -218,6 +237,52 @@ function onSeek(e) {
   seekTo(ratio * playerStore.duration)
 }
 
+function seekByKeyboard(seconds) {
+  if (!playerStore.duration) return
+  seekTo(playerStore.currentTime + seconds)
+}
+
+function onProgressKeydown(event) {
+  if (event.shiftKey) {
+    event.key === 'ArrowLeft' ? prev() : next()
+    return
+  }
+  seekByKeyboard(event.key === 'ArrowLeft' ? -5 : 5)
+}
+
+/** 全局播放器快捷键；跳过输入框、按钮和滑块，避免干扰正常编辑操作 */
+function onPlayerShortcut(event) {
+  if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return
+  if (event.repeat && (event.code === 'Space' || ['l', 'q'].includes(event.key.toLowerCase()))) return
+  const target = event.target
+  if (target?.isContentEditable || target?.closest?.('input, textarea, select, button, a, [contenteditable="true"], [role="button"], [role="slider"], .el-select')) return
+
+  if (event.code === 'Space' || event.key === ' ') {
+    if (!hasSong.value) return
+    event.preventDefault()
+    togglePlay()
+    return
+  }
+  if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+    if (!hasSong.value) return
+    event.preventDefault()
+    if (event.shiftKey) {
+      event.key === 'ArrowLeft' ? prev() : next()
+    } else {
+      seekByKeyboard(event.key === 'ArrowLeft' ? -5 : 5)
+    }
+    return
+  }
+  if (event.shiftKey) return
+  if (event.key.toLowerCase() === 'l' && hasSong.value) {
+    event.preventDefault()
+    toggleLyric()
+  } else if (event.key.toLowerCase() === 'q') {
+    event.preventDefault()
+    queueVisible.value = !queueVisible.value
+  }
+}
+
 function onVolume(val) {
   playerStore.setVolume(val / 100)
 }
@@ -247,6 +312,12 @@ watch(currentSong, (song) => {
     return
   }
   if (!song.audioUrl) {
+    audio.pause()
+    audio.removeAttribute('src')
+    audio.load()
+    playerStore.playing = false
+    playerStore.currentTime = 0
+    playerStore.duration = 0
     ElMessage.warning(`《${song.title}》暂无音频地址`)
     return
   }
@@ -276,35 +347,68 @@ watch(() => playerStore.volume, (v) => {
   if (audioRef.value) audioRef.value.volume = v
 })
 
+function onAudioTimeUpdate() {
+  if (audioRef.value) playerStore.currentTime = audioRef.value.currentTime
+}
+
+function onAudioLoadedMetadata() {
+  const audio = audioRef.value
+  if (audio) playerStore.duration = audio.duration || currentSong.value?.duration || 0
+}
+
+function onAudioEnded() {
+  const audio = audioRef.value
+  if (playerStore.mode === 'single' && audio) {
+    audio.currentTime = 0
+    audio.play().catch(() => {})
+    return
+  }
+  playerStore.next()
+}
+
+function onAudioError() {
+  if (currentSong.value) ElMessage.error(`《${currentSong.value.title}》音频加载失败`)
+  playerStore.playing = false
+}
+
+function onLyricSeek(event) {
+  seekTo(event.detail)
+}
+
+function onViewportResize() {
+  viewportWidth.value = window.innerWidth
+}
+
 onMounted(() => {
   const audio = audioRef.value
-  audio.volume = playerStore.volume
-
-  audio.addEventListener('timeupdate', () => {
-    playerStore.currentTime = audio.currentTime
-  })
-  audio.addEventListener('loadedmetadata', () => {
-    playerStore.duration = audio.duration || currentSong.value?.duration || 0
-  })
-  audio.addEventListener('ended', () => {
-    if (playerStore.mode === 'single') {
-      audio.currentTime = 0
-      audio.play().catch(() => {})
-      return
+  if (audio) {
+    audio.volume = playerStore.volume
+    audio.addEventListener('timeupdate', onAudioTimeUpdate)
+    audio.addEventListener('loadedmetadata', onAudioLoadedMetadata)
+    audio.addEventListener('ended', onAudioEnded)
+    audio.addEventListener('error', onAudioError)
+    if (currentSong.value?.audioUrl) {
+      audio.src = currentSong.value.audioUrl
+      playerStore.duration = currentSong.value.duration || 0
     }
-    playerStore.next()
-  })
-  audio.addEventListener('error', () => {
-    if (currentSong.value) {
-      ElMessage.error(`《${currentSong.value.title}》音频加载失败`)
-    }
-    playerStore.playing = false
-  })
-
-  // 监听歌词面板的跳转事件
-  window.addEventListener('mh-seek', (e) => seekTo(e.detail))
-
+  }
+  window.addEventListener('mh-seek', onLyricSeek)
+  window.addEventListener('keydown', onPlayerShortcut)
+  window.addEventListener('resize', onViewportResize)
   loadFavorites()
+})
+
+onUnmounted(() => {
+  const audio = audioRef.value
+  if (audio) {
+    audio.removeEventListener('timeupdate', onAudioTimeUpdate)
+    audio.removeEventListener('loadedmetadata', onAudioLoadedMetadata)
+    audio.removeEventListener('ended', onAudioEnded)
+    audio.removeEventListener('error', onAudioError)
+  }
+  window.removeEventListener('mh-seek', onLyricSeek)
+  window.removeEventListener('keydown', onPlayerShortcut)
+  window.removeEventListener('resize', onViewportResize)
 })
 
 watch(() => userStore.isLogin, (loggedIn) => {
@@ -334,6 +438,9 @@ watch(() => userStore.isLogin, (loggedIn) => {
   -webkit-backdrop-filter: blur(24px) saturate(1.4);
   box-shadow: 0 -18px 50px -34px var(--holo-glow), 0 -1px 0 rgba(255, 255, 255, 0.1) inset;
   transform-style: preserve-3d;
+}
+.player-bar > audio {
+  display: none;
 }
 .pb-left,
 .pb-center,
@@ -455,6 +562,10 @@ watch(() => userStore.isLogin, (loggedIn) => {
 .progress-track:hover .progress-dot {
   opacity: 1;
 }
+.progress-track:focus-visible {
+  outline: 2px solid var(--holo-primary);
+  outline-offset: 5px;
+}
 
 /* 右侧 */
 .pb-right {
@@ -533,5 +644,150 @@ watch(() => userStore.isLogin, (loggedIn) => {
 .queue-artist {
   font-size: 12px;
   color: var(--text-sub);
+}
+
+@media (max-width: 900px) {
+  .player-bar {
+    gap: 12px;
+    padding: 0 14px;
+  }
+  .pb-left {
+    min-width: 160px;
+    gap: 8px;
+  }
+  .pb-right {
+    width: 230px;
+    min-width: 158px;
+    gap: 4px;
+  }
+  .pb-volume {
+    width: 105px;
+  }
+  .pb-controls {
+    gap: 8px;
+  }
+}
+
+@media (max-width: 680px) {
+  .player-bar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: 42px 50px;
+    gap: 0 8px;
+    padding: 6px 12px;
+    align-content: center;
+  }
+  .pb-left {
+    grid-column: 1;
+    grid-row: 1;
+    width: auto;
+    min-width: 0;
+    gap: 8px;
+  }
+  .pb-holo {
+    display: none;
+  }
+  .pb-info {
+    flex: 1;
+  }
+  .pb-title {
+    font-size: 13px;
+  }
+  .pb-artist {
+    font-size: 10px;
+  }
+  .pb-fav {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+  }
+  .pb-center {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    width: 100%;
+    flex-direction: row;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .pb-controls {
+    flex: 0 0 auto;
+    gap: 4px;
+  }
+  .pb-controls :deep(.el-button:not(.pb-play)) {
+    width: 28px;
+    height: 28px;
+    padding: 6px;
+  }
+  .pb-play {
+    width: 36px !important;
+    height: 36px !important;
+  }
+  .pb-progress {
+    flex: 1;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    gap: 6px;
+  }
+  .pb-time {
+    width: 32px;
+    font-size: 10px;
+  }
+  .progress-track {
+    height: 4px;
+  }
+  .pb-right {
+    grid-column: 2;
+    grid-row: 1;
+    width: auto;
+    min-width: 0;
+    gap: 2px;
+  }
+  .pb-volume {
+    width: 80px;
+    gap: 4px;
+  }
+  .pb-volume :deep(.el-slider) {
+    width: 54px;
+    min-width: 0;
+  }
+  .pb-right :deep(.el-button) {
+    width: 28px;
+    height: 28px;
+    padding: 6px;
+  }
+}
+
+@media (max-width: 380px) {
+  .player-bar {
+    padding-right: 8px;
+    padding-left: 8px;
+    column-gap: 5px;
+  }
+  .pb-right {
+    gap: 0;
+  }
+  .pb-volume {
+    width: 68px;
+  }
+  .pb-volume :deep(.el-slider) {
+    width: 42px;
+  }
+  .pb-controls {
+    gap: 2px;
+  }
+  .pb-controls :deep(.el-button:not(.pb-play)) {
+    width: 26px;
+    height: 26px;
+    padding: 5px;
+  }
+  .pb-play {
+    width: 34px !important;
+    height: 34px !important;
+  }
+  .pb-time {
+    width: 28px;
+    font-size: 9px;
+  }
 }
 </style>
