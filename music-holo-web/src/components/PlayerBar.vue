@@ -146,17 +146,18 @@
         </el-button>
       </el-tooltip>
       <el-tooltip content="播放队列 · Q" placement="top">
-        <el-badge :value="playerStore.queue.length" :hidden="playerStore.queue.length === 0" type="primary">
-          <el-button
-            circle
-            text
-            aria-label="播放队列"
-            :aria-expanded="queueVisible"
-            @click="openQueue"
-          >
-            <el-icon><List /></el-icon>
-          </el-button>
-        </el-badge>
+        <span class="queue-trigger" @click.stop="openQueue">
+          <el-badge :value="playerStore.queue.length" :hidden="playerStore.queue.length === 0" type="primary">
+            <el-button
+              circle
+              text
+              aria-label="播放队列"
+              :aria-expanded="queueVisible"
+            >
+              <el-icon><List /></el-icon>
+            </el-button>
+          </el-badge>
+        </span>
       </el-tooltip>
     </div>
 
@@ -799,6 +800,9 @@ watch(() => userStore.isLogin, (loggedIn) => {
 }
 
 /* 队列抽屉 */
+.queue-trigger {
+  display: inline-flex;
+}
 .queue-toolbar {
   display: flex;
   align-items: center;
