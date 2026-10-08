@@ -85,8 +85,55 @@
       </div>
     </div>
 
-    <!-- 右侧：音量 / 歌词 / 队列 -->
+    <!-- 右侧：睡眠定时 / 音量 / 歌词 / 队列 -->
     <div class="pb-right">
+      <el-popover v-model:visible="sleepTimerVisible" placement="top" trigger="click" :width="260">
+        <template #reference>
+          <el-button
+            circle
+            text
+            class="pb-sleep"
+            :class="{ active: sleepTimerActive }"
+            :aria-label="sleepTimerActive ? `睡眠定时：${sleepTimerSummary}` : '睡眠定时'"
+            :title="sleepTimerActive ? sleepTimerSummary : '睡眠定时'"
+          >
+            <el-icon><AlarmClock /></el-icon>
+          </el-button>
+        </template>
+        <div class="sleep-panel">
+          <div>
+            <div class="sleep-title">睡眠定时</div>
+            <div class="sleep-subtitle">到时暂停播放，不清空队列</div>
+          </div>
+          <div v-if="playerStore.sleepTimerMode === 'duration'" class="sleep-status" role="status">
+            <el-icon><Clock /></el-icon>
+            <span>约 {{ sleepTimerRemainingLabel }} 后暂停</span>
+          </div>
+          <div v-else-if="playerStore.sleepTimerMode === 'track'" class="sleep-status" role="status">
+            <el-icon><VideoPause /></el-icon>
+            <span>《{{ currentSong?.title || '当前歌曲' }}》结束后停止</span>
+          </div>
+          <div class="sleep-options">
+            <el-button
+              v-for="minutes in SLEEP_TIMER_MINUTES"
+              :key="minutes"
+              size="small"
+              plain
+              @click="startSleepTimer(minutes)"
+            >
+              {{ minutes }} 分钟
+            </el-button>
+          </div>
+          <el-button class="sleep-current" size="small" plain :disabled="!hasSong" @click="stopAfterCurrentSong">
+            播完当前歌曲停止
+          </el-button>
+          <el-button v-if="sleepTimerActive" class="sleep-cancel" text size="small" @click="cancelSleepTimer">
+            取消定时
+          </el-button>
+          <div class="sleep-note">按本机时间计时，暂停时仍倒计时；刷新会清除，系统挂起页面时可能延迟触发。</div>
+          <div class="sleep-note">手动切歌会取消“播完当前歌曲”定时。</div>
+        </div>
+      </el-popover>
       <el-tooltip content="音量" placement="top">
         <div class="pb-volume">
           <el-icon><Mic /></el-icon>
@@ -142,7 +189,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { usePlayerStore } from '@/store/player'
+import { SLEEP_TIMER_MINUTES, usePlayerStore } from '@/store/player'
 import { useUserStore } from '@/store/user'
 import * as favoriteApi from '@/api/favorite'
 import { fmtDuration } from '@/utils/format'
@@ -155,6 +202,9 @@ const userStore = useUserStore()
 const audioRef = ref(null)
 const trackRef = ref(null)
 const queueVisible = ref(false)
+const sleepTimerVisible = ref(false)
+const sleepClockNow = ref(Date.now())
+let sleepClockInterval = null
 const viewportWidth = ref(typeof window === 'undefined' ? 1280 : window.innerWidth)
 const queueDrawerSize = computed(() => viewportWidth.value <= 420 ? '100%' : '380px')
 const volume = ref(Math.round(playerStore.volume * 100))
@@ -163,10 +213,43 @@ const favoriteIds = ref([])
 const currentSong = computed(() => playerStore.currentSong)
 const playing = computed(() => playerStore.playing)
 const hasSong = computed(() => !!currentSong.value)
+const sleepTimerActive = computed(() => playerStore.sleepTimerMode !== null)
+const sleepTimerRemainingSeconds = computed(() => {
+  if (playerStore.sleepTimerMode !== 'duration' || !playerStore.sleepTimerEndAt) return 0
+  return Math.max(0, Math.ceil((playerStore.sleepTimerEndAt - sleepClockNow.value) / 1000))
+})
+const sleepTimerRemainingLabel = computed(() => {
+  const minutes = Math.floor(sleepTimerRemainingSeconds.value / 60)
+  const seconds = sleepTimerRemainingSeconds.value % 60
+  return `${minutes}:${String(seconds).padStart(2, '0')}`
+})
+const sleepTimerSummary = computed(() => playerStore.sleepTimerMode === 'track'
+  ? '播完当前歌曲后停止'
+  : `剩余 ${sleepTimerRemainingLabel.value}`)
 const isFav = computed(() => currentSong.value ? favoriteIds.value.includes(currentSong.value.id) : false)
 const progressPercent = computed(() => {
   if (!playerStore.duration) return 0
   return Math.min(100, (playerStore.currentTime / playerStore.duration) * 100)
+})
+
+function clearSleepClock() {
+  if (sleepClockInterval === null || typeof window === 'undefined') return
+  window.clearInterval(sleepClockInterval)
+  sleepClockInterval = null
+}
+
+watch(() => playerStore.sleepTimerEndAt, (endAt) => {
+  clearSleepClock()
+  if (!endAt || typeof window === 'undefined') return
+  sleepClockNow.value = Date.now()
+  sleepClockInterval = window.setInterval(() => {
+    sleepClockNow.value = Date.now()
+    playerStore.checkSleepTimer()
+  }, 1000)
+}, { immediate: true })
+
+watch(() => playerStore.sleepTimerLastFinishedAt, (finishedAt, previous) => {
+  if (finishedAt && finishedAt !== previous) ElMessage.info('睡眠定时结束，播放已暂停')
 })
 
 /** 加载收藏 id 集合 */
@@ -287,6 +370,22 @@ function onVolume(val) {
   playerStore.setVolume(val / 100)
 }
 
+function startSleepTimer(minutes) {
+  if (!playerStore.setSleepTimerMinutes(minutes)) return
+  sleepTimerVisible.value = false
+  ElMessage.success(`${minutes} 分钟后暂停播放`)
+}
+
+function stopAfterCurrentSong() {
+  if (!playerStore.setStopAfterCurrentSong()) return
+  sleepTimerVisible.value = false
+  ElMessage.success('本曲结束后停止，不会自动播放下一首')
+}
+
+function cancelSleepTimer() {
+  if (playerStore.cancelSleepTimer()) ElMessage.info('睡眠定时已取消')
+}
+
 function toggleLyric() {
   if (!currentSong.value) return
   playerStore.toggleLyric()
@@ -349,6 +448,7 @@ watch(() => playerStore.volume, (v) => {
 
 function onAudioTimeUpdate() {
   if (audioRef.value) playerStore.currentTime = audioRef.value.currentTime
+  playerStore.checkSleepTimer()
 }
 
 function onAudioLoadedMetadata() {
@@ -358,6 +458,8 @@ function onAudioLoadedMetadata() {
 
 function onAudioEnded() {
   const audio = audioRef.value
+  if (playerStore.checkSleepTimer()) return
+  if (playerStore.handleSleepTimerTrackEnd(currentSong.value?.id)) return
   if (playerStore.mode === 'single' && audio) {
     audio.currentTime = 0
     audio.play().catch(() => {})
@@ -379,6 +481,10 @@ function onViewportResize() {
   viewportWidth.value = window.innerWidth
 }
 
+function onVisibilityChange() {
+  if (document.visibilityState === 'visible') playerStore.checkSleepTimer()
+}
+
 onMounted(() => {
   const audio = audioRef.value
   if (audio) {
@@ -395,6 +501,7 @@ onMounted(() => {
   window.addEventListener('mh-seek', onLyricSeek)
   window.addEventListener('keydown', onPlayerShortcut)
   window.addEventListener('resize', onViewportResize)
+  document.addEventListener('visibilitychange', onVisibilityChange)
   loadFavorites()
 })
 
@@ -409,6 +516,8 @@ onUnmounted(() => {
   window.removeEventListener('mh-seek', onLyricSeek)
   window.removeEventListener('keydown', onPlayerShortcut)
   window.removeEventListener('resize', onViewportResize)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
+  clearSleepClock()
 })
 
 watch(() => userStore.isLogin, (loggedIn) => {
@@ -588,6 +697,51 @@ watch(() => userStore.isLogin, (loggedIn) => {
 }
 .pb-right .active {
   color: var(--holo-primary);
+}
+.pb-sleep.active {
+  color: var(--holo-primary);
+  filter: drop-shadow(0 0 7px var(--holo-glow));
+}
+.sleep-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: var(--text-main);
+}
+.sleep-title {
+  font-size: 14px;
+  font-weight: 700;
+}
+.sleep-subtitle,
+.sleep-note {
+  color: var(--text-sub);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.sleep-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--holo-primary) 34%, transparent);
+  border-radius: 9px;
+  color: var(--holo-primary);
+  background: color-mix(in srgb, var(--holo-primary) 9%, transparent);
+  font-size: 12px;
+}
+.sleep-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.sleep-options :deep(.el-button),
+.sleep-current {
+  width: 100%;
+  margin: 0;
+}
+.sleep-cancel {
+  align-self: center;
+  margin: -6px 0 0;
 }
 
 /* 队列抽屉 */

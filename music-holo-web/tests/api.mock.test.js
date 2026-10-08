@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useUserStore } from '@/store/user'
+import { usePlayerStore } from '@/store/player'
 import * as authApi from '@/api/auth'
 import * as commonApi from '@/api/common'
 import * as favoriteApi from '@/api/favorite'
@@ -26,6 +27,72 @@ async function loginAs(username = 'demo') {
 beforeEach(() => {
   localStorage.clear()
   setActivePinia(createPinia())
+})
+
+afterEach(() => {
+  usePlayerStore().cancelSleepTimer()
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+})
+
+describe('播放器睡眠定时', () => {
+  it('倒计时到期暂停播放，并清空活动定时', () => {
+    vi.useFakeTimers()
+    const player = usePlayerStore()
+    player.playing = true
+
+    expect(player.setSleepTimerMinutes(15)).toBe(true)
+    expect(player.sleepTimerMode).toBe('duration')
+    vi.advanceTimersByTime(15 * 60 * 1000 - 1)
+    expect(player.playing).toBe(true)
+    vi.advanceTimersByTime(1)
+
+    expect(player.playing).toBe(false)
+    expect(player.sleepTimerMode).toBe(null)
+    expect(player.sleepTimerEndAt).toBe(null)
+    expect(player.sleepTimerLastFinishedAt).toBe(Date.now())
+  })
+
+  it('播完本曲后停止而不是自动进入下一首', () => {
+    const player = usePlayerStore()
+    player.queue = [{ id: 1, title: '当前曲目' }, { id: 2, title: '下一首' }]
+    player.currentIndex = 0
+    player.playing = true
+
+    expect(player.setStopAfterCurrentSong()).toBe(true)
+    expect(player.handleSleepTimerTrackEnd(2)).toBe(false)
+    expect(player.handleSleepTimerTrackEnd(1)).toBe(true)
+    expect(player.playing).toBe(false)
+    expect(player.sleepTimerMode).toBe(null)
+  })
+
+  it('切歌会取消“播完当前歌曲”定时', async () => {
+    vi.spyOn(lyricApi, 'parse').mockResolvedValue({ lines: [] })
+    vi.spyOn(songApi, 'play').mockResolvedValue(undefined)
+    const player = usePlayerStore()
+    player.queue = [{ id: 1, title: '当前曲目' }, { id: 2, title: '下一首' }]
+    player.currentIndex = 0
+    player.setStopAfterCurrentSong()
+
+    await player.playAt(1)
+    expect(player.sleepTimerMode).toBe(null)
+    expect(player.currentSong.id).toBe(2)
+  })
+
+  it('取消后不再暂停；不支持的时长不会覆盖当前定时', () => {
+    vi.useFakeTimers()
+    const player = usePlayerStore()
+    player.playing = true
+    player.setSleepTimerMinutes(15)
+    const deadline = player.sleepTimerEndAt
+
+    expect(player.setSleepTimerMinutes(20)).toBe(false)
+    expect(player.sleepTimerEndAt).toBe(deadline)
+    expect(player.cancelSleepTimer()).toBe(true)
+    vi.advanceTimersByTime(15 * 60 * 1000)
+    expect(player.playing).toBe(true)
+    expect(player.sleepTimerMode).toBe(null)
+  })
 })
 
 describe('内置 Mock API 集成测试', () => {

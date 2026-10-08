@@ -12,6 +12,28 @@ export const MODES = [
   { key: 'random', label: '随机播放' }
 ]
 
+export const SLEEP_TIMER_MINUTES = [15, 30, 45, 60]
+const sleepTimerHandles = new WeakMap()
+
+function clearSleepTimerTimeout(store) {
+  const handle = sleepTimerHandles.get(store)
+  if (handle !== undefined) clearTimeout(handle)
+  sleepTimerHandles.delete(store)
+}
+
+function scheduleSleepTimerTimeout(store) {
+  clearSleepTimerTimeout(store)
+  if (store.sleepTimerMode !== 'duration' || !store.sleepTimerEndAt) return
+
+  const expectedEndAt = store.sleepTimerEndAt
+  const handle = setTimeout(() => {
+    if (sleepTimerHandles.get(store) === handle) sleepTimerHandles.delete(store)
+    store.checkSleepTimer()
+    if (store.sleepTimerMode === 'duration') scheduleSleepTimerTimeout(store)
+  }, Math.max(0, expectedEndAt - Date.now()))
+  sleepTimerHandles.set(store, handle)
+}
+
 function loadPersisted() {
   try {
     return JSON.parse(localStorage.getItem(PLAYER_KEY) || '{}')
@@ -44,7 +66,12 @@ export const usePlayerStore = defineStore('player', {
       lyricVisible: false,
       /** 播放进度（秒，由播放器组件实时更新） */
       currentTime: 0,
-      duration: 0
+      duration: 0,
+      /** 睡眠定时：倒计时按本机时钟；播完当前曲目模式绑定当前歌曲 */
+      sleepTimerMode: null,
+      sleepTimerEndAt: null,
+      sleepTimerSongId: null,
+      sleepTimerLastFinishedAt: null
     }
   },
   getters: {
@@ -54,9 +81,61 @@ export const usePlayerStore = defineStore('player', {
     modeLabel: (state) => MODES.find((m) => m.key === state.mode)?.label || '顺序播放'
   },
   actions: {
+    /** 设定本机倒计时，选择的时长必须来自产品提供的固定选项 */
+    setSleepTimerMinutes(minutes) {
+      const duration = Number(minutes)
+      if (!SLEEP_TIMER_MINUTES.includes(duration)) return false
+      this.cancelSleepTimer()
+      this.sleepTimerMode = 'duration'
+      this.sleepTimerEndAt = Date.now() + duration * 60_000
+      scheduleSleepTimerTimeout(this)
+      return true
+    },
+    /** 当前曲目播放完毕后停止，不自动进入下一首 */
+    setStopAfterCurrentSong() {
+      if (!this.currentSong) return false
+      this.cancelSleepTimer()
+      this.sleepTimerMode = 'track'
+      this.sleepTimerSongId = this.currentSong.id
+      return true
+    },
+    cancelSleepTimer() {
+      const wasActive = this.sleepTimerMode !== null
+      clearSleepTimerTimeout(this)
+      this.sleepTimerMode = null
+      this.sleepTimerEndAt = null
+      this.sleepTimerSongId = null
+      return wasActive
+    },
+    /** 页面恢复、定时器触发或音频进度变化时检查截止时间 */
+    checkSleepTimer() {
+      if (this.sleepTimerMode !== 'duration' || !this.sleepTimerEndAt) return false
+      if (Date.now() < this.sleepTimerEndAt) return false
+      this.finishSleepTimer()
+      return true
+    },
+    finishSleepTimer() {
+      if (this.sleepTimerMode === null) return false
+      clearSleepTimerTimeout(this)
+      this.sleepTimerMode = null
+      this.sleepTimerEndAt = null
+      this.sleepTimerSongId = null
+      this.playing = false
+      this.sleepTimerLastFinishedAt = Date.now()
+      return true
+    },
+    handleSleepTimerTrackEnd(songId) {
+      if (this.sleepTimerMode !== 'track' || this.sleepTimerSongId !== songId) return false
+      this.finishSleepTimer()
+      return true
+    },
     /** 播放队列中指定下标的歌曲 */
     async playAt(index) {
       if (index < 0 || index >= this.queue.length) return
+      const nextSong = this.queue[index]
+      if (this.sleepTimerMode === 'track' && nextSong?.id !== this.sleepTimerSongId) {
+        this.cancelSleepTimer()
+      }
       this.currentIndex = index
       this.playing = true
       this.currentTime = 0
@@ -100,6 +179,7 @@ export const usePlayerStore = defineStore('player', {
     /** 移除队列中指定下标的歌曲 */
     removeAt(index) {
       if (index < 0 || index >= this.queue.length) return
+      if (index === this.currentIndex && this.sleepTimerMode === 'track') this.cancelSleepTimer()
       const wasPlaying = this.playing
       this.queue.splice(index, 1)
       if (this.queue.length === 0) {
@@ -128,6 +208,7 @@ export const usePlayerStore = defineStore('player', {
     },
     /** 清空播放队列 */
     clearQueue() {
+      this.cancelSleepTimer()
       this.queue = []
       this.currentIndex = -1
       this.playing = false
