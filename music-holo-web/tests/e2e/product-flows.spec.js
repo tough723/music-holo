@@ -14,7 +14,7 @@ async function loginAs(page, username) {
 }
 
 async function openMenu(page, label) {
-  await page.locator('.nav-menu').getByRole('menuitem', { name: label }).click()
+  await page.locator('.sidebar .app-nav-menu').getByRole('menuitem', { name: label }).click()
 }
 
 test('游客可以搜索歌曲并从结果启动播放', async ({ page }) => {
@@ -79,10 +79,29 @@ test('播放器同步曲目到系统媒体会话并响应播放暂停操作', as
   await expect.poll(() => page.evaluate(() => window.__musicHoloMediaSession.playbackState)).toBe('playing')
 })
 
-test('窄屏导航抽屉可切页，游客菜单提供登录注册入口', async ({ page }) => {
+test('导航按功能分组、折叠偏好可保存，窄屏抽屉可切页', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/playlists/1')
+  await expect(page.locator('.sidebar .el-menu-item-group__title').filter({ hasText: '曲库' })).toBeVisible()
+  await expect(page.locator('.sidebar .el-menu-item.is-active')).toContainText('歌单')
+
+  await page.getByRole('button', { name: '收起侧栏' }).click()
+  await expect(page.getByRole('button', { name: '展开侧栏' })).toHaveAttribute('aria-expanded', 'false')
+  await expect(page.locator('.sidebar')).toHaveCSS('width', '64px')
+  await expect(page.locator('.sidebar .el-menu-item-group__title').filter({ hasText: '曲库' })).toBeHidden()
+  await page.reload()
+  await expect(page.getByRole('button', { name: '展开侧栏' })).toBeVisible()
+  await page.getByRole('button', { name: '展开侧栏' }).click()
+  await expect(page.getByRole('button', { name: '收起侧栏' })).toBeVisible()
+
+  await page.setViewportSize({ width: 820, height: 900 })
+  await expect(page.locator('.sidebar')).toHaveCSS('width', '64px')
+  await expect(page.getByRole('button', { name: '收起侧栏' })).toBeHidden()
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await expect(page.locator('.sidebar')).toHaveCSS('width', '220px')
+
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/home')
-
   await expect(page.locator('.sidebar')).toBeHidden()
   await page.locator('.user-chip').click()
   await expect(page.getByRole('menuitem', { name: '登录' })).toBeVisible()
@@ -239,7 +258,7 @@ test('歌曲短评可发布、举报并由管理员隐藏，作者能看到处�
   await expect(page.getByText('举报已提交，管理员会尽快审核', { exact: true })).toBeVisible()
   await page.keyboard.press('Escape')
 
-  await page.locator('.nav-menu').getByRole('menuitem', { name: '管理后台' }).click()
+  await page.locator('.sidebar .app-nav-menu').getByRole('menuitem', { name: '管理后台' }).click()
   await openMenu(page, '短评审核')
   const reportRow = page.locator('.el-table__row').filter({ hasText: comment })
   await expect(reportRow).toBeVisible()
@@ -269,7 +288,7 @@ test('歌曲短评可发布、举报并由管理员隐藏，作者能看到处�
 
 test('管理员可以进入仪表盘并加载运营统计', async ({ page }) => {
   await loginAs(page, 'admin')
-  await page.locator('.nav-menu').getByRole('menuitem', { name: '管理后台' }).click()
+  await page.locator('.sidebar .app-nav-menu').getByRole('menuitem', { name: '管理后台' }).click()
   await openMenu(page, '仪表盘')
 
   await expect(page.locator('.page-title')).toHaveText('仪表盘')

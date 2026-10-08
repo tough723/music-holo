@@ -1,8 +1,8 @@
 <template>
   <div class="layout">
     <!-- 侧边导航 -->
-    <aside class="sidebar glass-panel">
-      <div class="logo" @click="$router.push('/home')">
+    <aside class="sidebar glass-panel" :class="{ 'is-collapsed': sidebarIsCollapsed }">
+      <div class="logo" @click="router.push('/home')">
         <div class="logo-icon">
           <el-icon><ChromeFilled /></el-icon>
         </div>
@@ -10,72 +10,21 @@
           <div class="logo-title holo-text">全息音乐</div>
           <div class="logo-sub">MUSIC HOLO</div>
         </div>
+        <el-tooltip :content="sidebarCollapsed ? '展开侧栏' : '收起侧栏'" placement="right">
+          <el-button
+            class="sidebar-toggle"
+            circle
+            text
+            :aria-label="sidebarCollapsed ? '展开侧栏' : '收起侧栏'"
+            :aria-expanded="!sidebarCollapsed"
+            @click.stop="toggleSidebar"
+          >
+            <el-icon><Expand v-if="sidebarCollapsed" /><Fold v-else /></el-icon>
+          </el-button>
+        </el-tooltip>
       </div>
 
-      <el-menu
-        :default-active="activeMenu"
-        class="nav-menu"
-        :router="true"
-      >
-        <el-menu-item index="/home">
-          <el-icon><HomeFilled /></el-icon><span>首页</span>
-        </el-menu-item>
-        <el-menu-item index="/daily">
-          <el-icon><Calendar /></el-icon><span>每日推荐</span>
-        </el-menu-item>
-        <el-menu-item index="/singers">
-          <el-icon><User /></el-icon><span>歌手</span>
-        </el-menu-item>
-        <el-menu-item index="/playlists">
-          <el-icon><Collection /></el-icon><span>歌单</span>
-        </el-menu-item>
-        <el-menu-item index="/songs">
-          <el-icon><Headset /></el-icon><span>歌曲</span>
-        </el-menu-item>
-        <el-menu-item index="/search">
-          <el-icon><Search /></el-icon><span>全局搜索</span>
-        </el-menu-item>
-        <el-menu-item index="/charts">
-          <el-icon><TrendCharts /></el-icon><span>排行榜</span>
-        </el-menu-item>
-        <el-menu-item v-if="userStore.isLogin" index="/recent">
-          <el-icon><Clock /></el-icon><span>最近播放</span>
-        </el-menu-item>
-        <el-menu-item index="/favorites">
-          <el-icon><Star /></el-icon><span>我的收藏</span>
-        </el-menu-item>
-        <el-menu-item index="/queue">
-          <el-icon><List /></el-icon><span>播放列表</span>
-        </el-menu-item>
-
-        <el-sub-menu v-if="userStore.isAdmin" index="admin">
-          <template #title>
-            <el-icon><Setting /></el-icon><span>管理后台</span>
-          </template>
-          <el-menu-item index="/admin/dashboard">
-            <el-icon><DataAnalysis /></el-icon><span>仪表盘</span>
-          </el-menu-item>
-          <el-menu-item index="/admin/singers">
-            <el-icon><User /></el-icon><span>歌手管理</span>
-          </el-menu-item>
-          <el-menu-item index="/admin/songs">
-            <el-icon><Headset /></el-icon><span>歌曲管理</span>
-          </el-menu-item>
-          <el-menu-item index="/admin/playlists">
-            <el-icon><Collection /></el-icon><span>歌单管理</span>
-          </el-menu-item>
-          <el-menu-item index="/admin/categories">
-            <el-icon><CollectionTag /></el-icon><span>分类管理</span>
-          </el-menu-item>
-          <el-menu-item index="/admin/reviews">
-            <el-icon><ChatDotRound /></el-icon><span>短评审核</span>
-          </el-menu-item>
-        </el-sub-menu>
-
-              <el-menu-item index="/settings">
-                <el-icon><Setting /></el-icon><span>设置</span>
-              </el-menu-item>
-            </el-menu>
+      <AppNavigation :collapsed="sidebarIsCollapsed" />
 
       <div class="sidebar-footer">
         <div class="mini-holo">
@@ -180,33 +129,7 @@
       append-to-body
     >
       <div class="mobile-nav-hint">选择页面，播放器会继续固定在底部</div>
-      <el-menu
-        :default-active="activeMenu"
-        class="mobile-nav-menu"
-        :router="true"
-        @select="closeMobileNav"
-      >
-        <el-menu-item index="/home"><el-icon><HomeFilled /></el-icon><span>首页</span></el-menu-item>
-        <el-menu-item index="/daily"><el-icon><Calendar /></el-icon><span>每日推荐</span></el-menu-item>
-        <el-menu-item index="/search"><el-icon><Search /></el-icon><span>全局搜索</span></el-menu-item>
-        <el-menu-item index="/playlists"><el-icon><Collection /></el-icon><span>歌单</span></el-menu-item>
-        <el-menu-item index="/songs"><el-icon><Headset /></el-icon><span>歌曲</span></el-menu-item>
-        <el-menu-item index="/singers"><el-icon><User /></el-icon><span>歌手</span></el-menu-item>
-        <el-menu-item index="/charts"><el-icon><TrendCharts /></el-icon><span>排行榜</span></el-menu-item>
-        <el-menu-item v-if="userStore.isLogin" index="/recent"><el-icon><Clock /></el-icon><span>最近播放</span></el-menu-item>
-        <el-menu-item index="/favorites"><el-icon><Star /></el-icon><span>我的收藏</span></el-menu-item>
-        <el-menu-item index="/queue"><el-icon><List /></el-icon><span>播放列表</span></el-menu-item>
-        <el-sub-menu v-if="userStore.isAdmin" index="admin">
-          <template #title><el-icon><Setting /></el-icon><span>管理后台</span></template>
-          <el-menu-item index="/admin/dashboard"><el-icon><DataAnalysis /></el-icon><span>仪表盘</span></el-menu-item>
-          <el-menu-item index="/admin/singers"><el-icon><User /></el-icon><span>歌手管理</span></el-menu-item>
-          <el-menu-item index="/admin/songs"><el-icon><Headset /></el-icon><span>歌曲管理</span></el-menu-item>
-          <el-menu-item index="/admin/playlists"><el-icon><Collection /></el-icon><span>歌单管理</span></el-menu-item>
-          <el-menu-item index="/admin/categories"><el-icon><CollectionTag /></el-icon><span>分类管理</span></el-menu-item>
-          <el-menu-item index="/admin/reviews"><el-icon><ChatDotRound /></el-icon><span>短评审核</span></el-menu-item>
-        </el-sub-menu>
-        <el-menu-item index="/settings"><el-icon><Setting /></el-icon><span>设置</span></el-menu-item>
-      </el-menu>
+      <AppNavigation :collapsed="false" @navigate="closeMobileNav" />
     </el-drawer>
 
     <!-- 传送到 body，避免 3D scene / overflow 容器把 fixed 底栏变成随页面滚动的元素。 -->
@@ -226,6 +149,13 @@ import PlayerBar from '@/components/PlayerBar.vue'
 import LyricPanel from '@/components/LyricPanel.vue'
 import HoloProjector from '@/components/HoloProjector.vue'
 import Cover from '@/components/Cover.vue'
+import AppNavigation from '@/components/AppNavigation.vue'
+
+const SIDEBAR_STORAGE_KEY = 'mh_sidebar_collapsed'
+
+function readSidebarPreference() {
+  try { return localStorage.getItem(SIDEBAR_STORAGE_KEY) === 'true' } catch { return false }
+}
 
 const route = useRoute()
 const router = useRouter()
@@ -234,8 +164,10 @@ const playerStore = usePlayerStore()
 const searchTerm = ref('')
 const searchInput = ref(null)
 const mobileNavVisible = ref(false)
+const sidebarCollapsed = ref(readSidebarPreference())
+const viewportWidth = ref(typeof window === 'undefined' ? 1280 : window.innerWidth)
+const sidebarIsCollapsed = computed(() => sidebarCollapsed.value || viewportWidth.value <= 900)
 
-const activeMenu = computed(() => route.path)
 const pageTitle = computed(() => route.meta.title || '首页')
 const headerCaption = computed(() => route.path.startsWith('/admin')
   ? 'HOLO CONTROL · 空间控制台'
@@ -244,6 +176,15 @@ const headerCaption = computed(() => route.path.startsWith('/admin')
 watch(() => route.query.q, (value) => {
   searchTerm.value = String(value || '')
 }, { immediate: true })
+
+watch(sidebarCollapsed, (collapsed) => {
+  try { localStorage.setItem(SIDEBAR_STORAGE_KEY, String(collapsed)) } catch { /* Preference is optional. */ }
+})
+
+const toggleSidebar = () => {
+  if (viewportWidth.value > 900) sidebarCollapsed.value = !sidebarCollapsed.value
+}
+const onViewportResize = () => { viewportWidth.value = window.innerWidth }
 
 const submitSearch = () => {
   const q = searchTerm.value.trim()
@@ -259,8 +200,14 @@ const onGlobalShortcut = (event) => {
   }
 }
 
-onMounted(() => window.addEventListener('keydown', onGlobalShortcut))
-onUnmounted(() => window.removeEventListener('keydown', onGlobalShortcut))
+onMounted(() => {
+  window.addEventListener('keydown', onGlobalShortcut)
+  window.addEventListener('resize', onViewportResize)
+})
+onUnmounted(() => {
+  window.removeEventListener('keydown', onGlobalShortcut)
+  window.removeEventListener('resize', onViewportResize)
+})
 
 const onCommand = async (command) => {
   if (command === 'login') {
@@ -299,13 +246,44 @@ const onCommand = async (command) => {
   height: calc(100vh - var(--player-h) - 24px);
   position: sticky;
   top: 12px;
+  transition: width 0.22s ease;
+}
+.sidebar.is-collapsed {
+  width: 64px;
 }
 .logo {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 18px 16px 12px;
+  padding: 18px 12px 12px 16px;
   cursor: pointer;
+}
+.logo-text {
+  min-width: 0;
+  flex: 1;
+}
+.sidebar-toggle {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  padding: 5px;
+  color: var(--text-sub);
+}
+.sidebar-toggle:hover {
+  color: var(--holo-primary);
+}
+.sidebar.is-collapsed .logo {
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 8px 10px;
+}
+.sidebar.is-collapsed .logo-text,
+.sidebar.is-collapsed .sidebar-footer {
+  display: none;
+}
+.sidebar.is-collapsed .sidebar-toggle {
+  margin: 0;
 }
 .logo-icon {
   position: relative;
@@ -344,33 +322,6 @@ const onCommand = async (command) => {
   letter-spacing: 3px;
 }
 
-.nav-menu {
-  flex: 1;
-  border-right: none;
-  background: transparent;
-  overflow-y: auto;
-  perspective: 900px;
-}
-.nav-menu :deep(.el-menu-item),
-.nav-menu :deep(.el-sub-menu__title) {
-  margin: 3px 8px;
-  border-radius: 10px;
-  transform-style: preserve-3d;
-  transition: transform 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
-}
-.nav-menu :deep(.el-menu-item:hover),
-.nav-menu :deep(.el-sub-menu__title:hover) {
-  transform: perspective(600px) translate3d(3px, -1px, 6px) rotateY(-2deg);
-  background: color-mix(in srgb, var(--holo-primary) 9%, transparent);
-}
-.nav-menu :deep(.el-menu-item.is-active) {
-  background: color-mix(in srgb, var(--holo-primary) 14%, transparent);
-  color: var(--holo-primary);
-  border-right: 2px solid var(--holo-primary);
-  box-shadow: 0 8px 18px -12px var(--holo-glow), inset 0 1px 0 rgba(255, 255, 255, 0.1);
-  transform: translateZ(5px);
-}
-
 .sidebar-footer {
   display: flex;
   justify-content: center;
@@ -400,26 +351,6 @@ const onCommand = async (command) => {
   color: var(--text-sub);
   background: color-mix(in srgb, var(--holo-primary) 6%, transparent);
   font-size: 11px;
-}
-.mobile-nav-menu {
-  border-right: none;
-  background: transparent;
-}
-.mobile-nav-menu :deep(.el-menu-item),
-.mobile-nav-menu :deep(.el-sub-menu__title) {
-  margin: 3px 0;
-  border-radius: 10px;
-  transition: background 0.16s ease, transform 0.16s ease;
-}
-.mobile-nav-menu :deep(.el-menu-item:hover),
-.mobile-nav-menu :deep(.el-sub-menu__title:hover) {
-  transform: translateX(3px);
-  background: color-mix(in srgb, var(--holo-primary) 9%, transparent);
-}
-.mobile-nav-menu :deep(.el-menu-item.is-active) {
-  color: var(--holo-primary);
-  background: color-mix(in srgb, var(--holo-primary) 14%, transparent);
-  box-shadow: inset 2px 0 var(--holo-primary);
 }
 :global(.el-drawer.mobile-nav-drawer) {
   background: color-mix(in srgb, var(--holo-bg, #080d20) 94%, #111a34);
@@ -600,10 +531,7 @@ const onCommand = async (command) => {
   .header-search kbd {
     display: none;
   }
-  .logo-text,
-  .nav-menu :deep(.el-menu-item span),
-  .nav-menu :deep(.el-sub-menu__title span),
-  .sidebar-footer {
+  .sidebar-toggle {
     display: none;
   }
   .pb-left {
