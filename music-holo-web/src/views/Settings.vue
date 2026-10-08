@@ -4,7 +4,7 @@
       <div class="page-heading-copy">
         <div class="settings-eyebrow">MUSIC HOLO · PERSONAL CONSOLE</div>
         <div class="page-title">设置中心</div>
-        <div class="page-subtitle">打造属于你的全息视界，管理外观、账号资料与安全选项。</div>
+        <div class="page-subtitle">打造属于你的全息视界，管理外观、账号安全与自定义音源。</div>
       </div>
       <div class="settings-overview" aria-label="当前设置概览">
         <div class="overview-chip">
@@ -170,6 +170,11 @@
           </el-form>
         </div>
       </el-tab-pane>
+
+      <!-- 自定义音源：脚本本地管理，不在未隔离环境执行 -->
+      <el-tab-pane label="自定义源" name="sources">
+        <CustomSourceManager />
+      </el-tab-pane>
     </el-tabs>
   </div>
 </template>
@@ -184,13 +189,14 @@ import { useThemeStore, THEMES } from '@/store/theme'
 import { usePlayerStore } from '@/store/player'
 import HoloProjector from '@/components/HoloProjector.vue'
 import Cover from '@/components/Cover.vue'
+import CustomSourceManager from '@/components/settings/CustomSourceManager.vue'
 
 const userStore = useUserStore()
 const themeStore = useThemeStore()
 const playerStore = usePlayerStore()
 
 const SETTINGS_TAB_KEY = 'mh_settings_tab'
-const SETTINGS_TABS = ['theme', 'profile', 'password']
+const SETTINGS_TABS = ['theme', 'profile', 'password', 'sources']
 const savedTab = localStorage.getItem(SETTINGS_TAB_KEY)
 const activeTab = ref(SETTINGS_TABS.includes(savedTab) ? savedTab : 'theme')
 const persistActiveTab = (tab) => {

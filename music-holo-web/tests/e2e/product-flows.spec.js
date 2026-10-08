@@ -168,6 +168,73 @@ test('设置页支持主题同步、个人资料保存与修改密码校验', as
   await expect(page.getByText('两次输入的新密码不一致', { exact: true })).toBeVisible()
 })
 
+test('本机自定义源支持导入、排序和导出，并安全地不执行脚本', async ({ page }) => {
+  await loginAs(page, 'demo')
+  await openMenu(page, '设置')
+  await page.getByRole('tab', { name: '自定义源' }).click()
+  await expect(page.getByText('脚本执行尚未开放')).toBeVisible()
+
+  const pageErrors = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  const scriptA = `/**
+ * @name 源 A
+ * @version 1.0
+ */
+throw new Error("must not execute")`
+  const scriptB = `/**
+ * @name 源 B
+ * @version 2.0
+ */
+export default {}`
+  const importInput = page.getByTestId('custom-source-file')
+  await importInput.setInputFiles({ name: 'source-a.js', mimeType: 'text/javascript', buffer: Buffer.from(scriptA) })
+  await expect(page.locator('.source-card h3')).toHaveText(['源 A'])
+  await importInput.setInputFiles({ name: 'source-b.js', mimeType: 'text/javascript', buffer: Buffer.from(scriptB) })
+  await expect(page.locator('.source-card h3')).toHaveText(['源 B', '源 A'])
+  await page.getByRole('button', { name: '上移 源 A' }).click()
+  await expect(page.locator('.source-card h3')).toHaveText(['源 A', '源 B'])
+
+  await page.getByRole('button', { name: '查看代码' }).first().click()
+  await expect(page.getByRole('textbox', { name: '源 A 源码，只读' })).toHaveValue(/must not execute/)
+  const downloadPromise = page.waitForEvent('download')
+  await page.getByRole('button', { name: '导出', exact: true }).first().click()
+  const download = await downloadPromise
+  expect(download.suggestedFilename()).toBe('source-a.js')
+
+  const remoteUrl = 'https://raw.githubusercontent.com/music-holo/test/main/remote-source.js'
+  await page.route(remoteUrl, (route) => route.fulfill({
+    status: 200,
+    contentType: 'text/javascript',
+    headers: { 'access-control-allow-origin': '*' },
+    body: `/**
+ * @name 远程测试源
+ * @version 3.0
+ */
+export default {}`
+  }))
+  await page.getByLabel('音源脚本地址').fill(remoteUrl)
+  await page.getByRole('button', { name: '从 URL 导入' }).click()
+  await expect(page.locator('.source-card h3').first()).toHaveText('远程测试源')
+
+  const backupScript = `/**
+ * @name 备份恢复源
+ * @version 4.0
+ */
+export default {}`
+  const backup = {
+    format: 'music-holo-local-source-backup',
+    version: 1,
+    sources: [{ fileName: 'backup-source.js', name: '备份恢复源', script: backupScript }]
+  }
+  await page.getByTestId('custom-source-backup-file').setInputFiles({
+    name: 'music-holo-source-backup.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify(backup))
+  })
+  await expect(page.locator('.source-card h3').first()).toHaveText('备份恢复源')
+  expect(pageErrors).toEqual([])
+})
+
 test('专辑库按歌曲曲库聚合，可从专辑详情播放整张专辑', async ({ page }) => {
   await page.goto('/albums')
   const albumCard = page.locator('.album-card').filter({ hasText: '霓虹海' }).first()
