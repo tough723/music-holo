@@ -3,24 +3,32 @@ export const MAX_CUSTOM_SOURCE_BYTES = 128 * 1024
 export const MAX_CUSTOM_SOURCES = 24
 
 const ALLOWED_EXTENSIONS = new Set(['.js', '.mjs'])
-const BLOCKED_HOST_SUFFIXES = ['.localhost', '.local', '.internal', '.lan']
+const BLOCKED_HOST_SUFFIXES = ['.localhost', '.local', '.internal', '.lan', '.test', '.home.arpa']
 
 function byteLength(value) {
   return new TextEncoder().encode(value).byteLength
 }
 
-export function parseCustomSourceUrl(rawUrl) {
+function normalizePublicHttpsUrl(value) {
   let url
   try {
-    url = new URL(String(rawUrl || '').trim())
+    url = new URL(String(value || '').trim())
   } catch {
-    throw new Error('请输入有效的 HTTPS 音源地址')
+    return null
   }
   const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '')
   const isIpv4Literal = /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)
   const isIpv6Literal = host.includes(':')
-  if (url.protocol !== 'https:' || url.username || url.password || isIpv4Literal || isIpv6Literal ||
-      host === 'localhost' || BLOCKED_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix))) {
+  const isLocalHost = host === 'localhost' || BLOCKED_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix))
+  if (url.protocol !== 'https:' || url.username || url.password || !host || isIpv4Literal || isIpv6Literal || isLocalHost) {
+    return null
+  }
+  return url
+}
+
+export function parseCustomSourceUrl(rawUrl) {
+  const url = normalizePublicHttpsUrl(rawUrl)
+  if (!url) {
     throw new Error('仅允许无账号信息的公网 HTTPS 地址；本地与内网地址会被拦截')
   }
   return url
@@ -50,6 +58,10 @@ function fingerprint(script) {
   return `${(hash >>> 0).toString(16).padStart(8, '0')}-${script.length}`
 }
 
+function safeHomepage(value) {
+  return normalizePublicHttpsUrl(value)?.href.slice(0, 512) || ''
+}
+
 export function parseCustomSourceFile(fileName, script, importedAt = new Date().toISOString()) {
   const cleanFileName = String(fileName || '').trim().split(/[\\/]/).pop()
   const extension = cleanFileName.match(/\.[^.]+$/)?.[0]?.toLowerCase() || ''
@@ -69,6 +81,8 @@ export function parseCustomSourceFile(fileName, script, importedAt = new Date().
   const name = extractTag(header, 'name') || fallbackName
   const version = extractTag(header, 'version') || '未标注'
   const description = extractTag(header, 'description')
+  const author = extractTag(header, 'author')
+  const homepage = safeHomepage(extractTag(header, 'homepage'))
   const hash = fingerprint(script)
 
   return {
@@ -78,6 +92,8 @@ export function parseCustomSourceFile(fileName, script, importedAt = new Date().
     name: name.slice(0, 80),
     version: version.slice(0, 40),
     description: description.slice(0, 180),
+    author: author.slice(0, 80),
+    homepage,
     sizeBytes,
     importedAt,
     script
@@ -91,25 +107,46 @@ function isStoredSource(source) {
     byteLength(source.script) <= MAX_CUSTOM_SOURCE_BYTES
 }
 
+function normalizeStoredSource(source) {
+  if (!isStoredSource(source)) return null
+  const script = source.script
+  const hash = typeof source.hash === 'string' ? source.hash.slice(0, 64) : fingerprint(script)
+  const fileName = String(source.fileName).trim().split(/[\\/]/).pop().slice(0, 120)
+  return {
+    ...source,
+    id: String(source.id).slice(0, 128),
+    hash,
+    fileName,
+    name: String(source.name).trim().slice(0, 80) || fileName.replace(/\.[^.]+$/, '') || '未命名音源',
+    version: String(source.version || '未标注').slice(0, 40),
+    description: String(source.description || '').slice(0, 180),
+    author: String(source.author || '').slice(0, 80),
+    homepage: safeHomepage(source.homepage),
+    sizeBytes: byteLength(script),
+    importedAt: typeof source.importedAt === 'string' ? source.importedAt.slice(0, 40) : '',
+    script
+  }
+}
+
 export function readCustomSources(storage = globalThis.localStorage, key = CUSTOM_SOURCE_STORAGE_KEY) {
   try {
     const raw = storage?.getItem(key)
     if (!raw) return []
     const sources = JSON.parse(raw)
     if (!Array.isArray(sources)) return []
-    return sources.filter(isStoredSource).slice(0, MAX_CUSTOM_SOURCES)
+    return sources.map(normalizeStoredSource).filter(Boolean).slice(0, MAX_CUSTOM_SOURCES)
   } catch {
     return []
   }
 }
 
 export function writeCustomSources(sources, storage = globalThis.localStorage, key = CUSTOM_SOURCE_STORAGE_KEY) {
-  if (!Array.isArray(sources) || sources.length > MAX_CUSTOM_SOURCES || !sources.every(isStoredSource)) {
-    return false
-  }
+  if (!Array.isArray(sources) || sources.length > MAX_CUSTOM_SOURCES) return false
+  const normalized = sources.map(normalizeStoredSource)
+  if (normalized.some((source) => !source) || typeof storage?.setItem !== 'function') return false
   try {
-    storage?.setItem(key, JSON.stringify(sources))
-    return !!storage
+    storage.setItem(key, JSON.stringify(normalized))
+    return true
   } catch {
     return false
   }

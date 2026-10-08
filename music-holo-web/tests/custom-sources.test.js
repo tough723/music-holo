@@ -22,6 +22,8 @@ const sampleScript = `/**
  * @name 野花测试源
  * @version 1.2.0
  * @description 本地导入测试
+ * @author Music Holo QA
+ * @homepage https://example.org/flower
  */
 throw new Error('导入脚本不应执行')
 `
@@ -33,10 +35,17 @@ describe('自定义音源安全导入与本地管理', () => {
       name: '野花测试源',
       version: '1.2.0',
       description: '本地导入测试',
+      author: 'Music Holo QA',
+      homepage: 'https://example.org/flower',
       fileName: 'flower.js',
       importedAt: '2026-10-09T00:00:00.000Z'
     })
     expect(source.script).toContain("throw new Error('导入脚本不应执行')")
+  })
+
+  it('只把公网 HTTPS 源主页作为链接元数据保存', () => {
+    const source = parseCustomSourceFile('unsafe.js', `/**\n * @name 未验证源\n * @homepage javascript:alert(1)\n */\nexport default {}`)
+    expect(source.homepage).toBe('')
   })
 
   it('允许缺少头部标签并以文件名作为展示名', () => {
@@ -75,6 +84,16 @@ describe('自定义音源安全导入与本地管理', () => {
       { id: 'good', name: 'good', fileName: 'good.js', script: '// ok' }
     ]))
     expect(readCustomSources(storage).map((item) => item.id)).toEqual(['good'])
+  })
+
+  it('读取本地存储时规范化元数据并移除不安全的源主页', () => {
+    const storage = new MemoryStorage()
+    const source = parseCustomSourceFile('saved.js', '// local')
+    storage.setItem(CUSTOM_SOURCE_STORAGE_KEY, JSON.stringify([{ ...source, name: 'N'.repeat(120), homepage: 'https://127.0.0.1/admin' }]))
+    const [restored] = readCustomSources(storage)
+    expect(restored.name).toHaveLength(80)
+    expect(restored.homepage).toBe('')
+    expect(restored.sizeBytes).toBe(new TextEncoder().encode(source.script).byteLength)
   })
 
   it('远程导入只接受公网 HTTPS 地址并从路径生成脚本文件名', () => {

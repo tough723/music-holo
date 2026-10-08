@@ -179,6 +179,8 @@ test('本机自定义源支持导入、排序和导出，并安全地不执行�
   const scriptA = `/**
  * @name 源 A
  * @version 1.0
+ * @author 音源维护者
+ * @homepage https://example.org/source-a
  */
 throw new Error("must not execute")`
   const scriptB = `/**
@@ -190,6 +192,13 @@ export default {}`
   await importInput.setInputFiles({ name: 'source-a.js', mimeType: 'text/javascript', buffer: Buffer.from(scriptA) })
   await expect(page.locator('.source-card h3')).toHaveText(['源 A'])
   await importInput.setInputFiles({ name: 'source-b.js', mimeType: 'text/javascript', buffer: Buffer.from(scriptB) })
+  await expect(page.locator('.source-card h3')).toHaveText(['源 B', '源 A'])
+  await expect(page.getByText('作者：音源维护者')).toBeVisible()
+  await expect(page.getByRole('link', { name: '源主页 ↗' })).toHaveAttribute('href', 'https://example.org/source-a')
+  const sourceSearch = page.getByLabel('筛选本机音源')
+  await sourceSearch.fill('音源维护者')
+  await expect(page.locator('.source-card h3')).toHaveText(['源 A'])
+  await sourceSearch.fill('')
   await expect(page.locator('.source-card h3')).toHaveText(['源 B', '源 A'])
   await page.getByRole('button', { name: '上移 源 A' }).click()
   await expect(page.locator('.source-card h3')).toHaveText(['源 A', '源 B'])

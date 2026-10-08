@@ -50,15 +50,25 @@
         <strong>本机音源库</strong>
         <span>{{ sources.length }} / {{ MAX_CUSTOM_SOURCES }} 个脚本</span>
       </div>
-      <div class="source-backup-actions">
-        <el-button text @click="openBackupPicker">
-          <el-icon><Upload /></el-icon>
-          导入备份
-        </el-button>
-        <el-button text :disabled="sources.length === 0" @click="exportAllSources">
-          <el-icon><Download /></el-icon>
-          导出备份
-        </el-button>
+      <div class="source-toolbar-actions">
+        <el-input
+          v-if="sources.length > 0"
+          v-model="sourceFilter"
+          class="source-search"
+          clearable
+          aria-label="筛选本机音源"
+          placeholder="按名称、作者或文件名筛选"
+        />
+        <div class="source-backup-actions">
+          <el-button text @click="openBackupPicker">
+            <el-icon><Upload /></el-icon>
+            导入备份
+          </el-button>
+          <el-button text :disabled="sources.length === 0" @click="exportAllSources">
+            <el-icon><Download /></el-icon>
+            导出备份
+          </el-button>
+        </div>
       </div>
     </div>
 
@@ -69,8 +79,15 @@
       <el-button type="primary" plain @click="openFilePicker">选择音源文件</el-button>
     </div>
 
+    <div v-else-if="visibleSources.length === 0" class="source-empty glass-panel">
+      <div class="source-empty-icon"><el-icon><FolderAdd /></el-icon></div>
+      <strong>没有匹配的音源</strong>
+      <span>可以尝试搜索名称、作者、说明或文件名。</span>
+      <el-button text @click="sourceFilter = ''">清除筛选</el-button>
+    </div>
+
     <div v-else class="source-list" aria-label="自定义音源列表">
-      <article v-for="(source, index) in sources" :key="source.id" class="source-card glass-panel" :data-source-id="source.id">
+      <article v-for="{ source, index } in visibleSources" :key="source.id" class="source-card glass-panel" :data-source-id="source.id">
         <div class="source-card-top">
           <div class="source-rank" aria-hidden="true">{{ String(index + 1).padStart(2, '0') }}</div>
           <div class="source-info">
@@ -81,6 +98,10 @@
             </div>
             <p v-if="source.description" class="source-description">{{ source.description }}</p>
             <p v-else class="source-description source-filename">{{ source.fileName }}</p>
+            <div v-if="source.author || source.homepage" class="source-credits">
+              <span v-if="source.author">作者：{{ source.author }}</span>
+              <a v-if="source.homepage" :href="source.homepage" target="_blank" rel="noopener noreferrer">源主页 ↗</a>
+            </div>
             <div class="source-meta">
               <span>{{ formatSourceSize(source.sizeBytes) }}</span>
               <span>指纹 {{ source.hash }}</span>
@@ -148,15 +169,24 @@ const userStore = useUserStore()
 const fileInput = ref(null)
 const backupInput = ref(null)
 const sourceUrl = ref('')
+const sourceFilter = ref('')
 const importing = ref(false)
 const importingUrl = ref(false)
 const expandedSourceId = ref('')
 const sourceOwner = computed(() => userStore.userInfo?.id ?? userStore.userInfo?.username ?? 'local')
 const storageKey = computed(() => `${CUSTOM_SOURCE_STORAGE_KEY}:${String(sourceOwner.value).replace(/[^a-zA-Z0-9._-]/g, '_')}`)
 const sources = ref(readCustomSources(localStorage, storageKey.value))
+const visibleSources = computed(() => {
+  const query = sourceFilter.value.trim().toLowerCase()
+  return sources.value
+    .map((source, index) => ({ source, index }))
+    .filter(({ source }) => !query || [source.name, source.description, source.author, source.fileName]
+      .some((value) => String(value || '').toLowerCase().includes(query)))
+})
 
 watch(storageKey, (key) => {
   sources.value = readCustomSources(localStorage, key)
+  sourceFilter.value = ''
   expandedSourceId.value = ''
 })
 
@@ -409,6 +439,8 @@ function formatDate(value) {
 .source-library-toolbar > div { display: flex; align-items: baseline; gap: 10px; }
 .source-library-toolbar strong { color: var(--text-main); font-size: 14px; }
 .source-library-toolbar span { color: var(--text-sub); font-size: 11px; }
+.source-toolbar-actions { align-items: center !important; }
+.source-search { width: 230px; }
 .source-backup-actions { display: flex; align-items: center; gap: 4px; }
 .source-list { display: flex; flex-direction: column; gap: 10px; }
 .source-card { padding: 16px; border: 1px solid color-mix(in srgb, var(--holo-primary) 17%, var(--border-color)); }
@@ -419,6 +451,9 @@ function formatDate(value) {
 .source-title-row h3 { max-width: 100%; margin: 0 2px 0 0; overflow: hidden; color: var(--text-main); font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .source-description { margin: 6px 0; color: var(--text-sub); font-size: 11px; line-height: 1.5; }
 .source-filename { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.source-credits { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 4px 0 6px; color: var(--text-sub); font-size: 10px; }
+.source-credits a { color: var(--holo-primary); text-decoration: none; }
+.source-credits a:hover { text-decoration: underline; }
 .source-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--text-sub); font-size: 10px; }
 .source-meta span:nth-child(2) { overflow-wrap: anywhere; }
 .source-card-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-color); }
@@ -438,6 +473,9 @@ function formatDate(value) {
   .source-url-import { grid-template-columns: 1fr; }
   .source-url-import small { grid-column: auto; }
   .source-library-toolbar { align-items: flex-start; flex-direction: column; }
+  .source-toolbar-actions { width: 100%; align-items: stretch !important; flex-direction: column; gap: 2px; }
+  .source-search { width: 100%; }
+  .source-backup-actions { justify-content: flex-start; }
   .source-card { padding: 12px; }
   .source-card-footer { align-items: flex-start; flex-direction: column; }
   .source-file-actions { width: 100%; justify-content: flex-start; }
