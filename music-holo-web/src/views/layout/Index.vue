@@ -16,7 +16,7 @@
             circle
             text
             :aria-label="sidebarCollapsed ? '展开侧栏' : '收起侧栏'"
-            :aria-expanded="!sidebarCollapsed"
+            :aria-expanded="String(!sidebarCollapsed)"
             @click.stop="toggleSidebar"
           >
             <el-icon><Expand v-if="sidebarCollapsed" /><Fold v-else /></el-icon>
@@ -46,7 +46,7 @@
           circle
           text
           aria-label="打开导航"
-          :aria-expanded="mobileNavVisible"
+          :aria-expanded="String(mobileNavVisible)"
           @click="mobileNavVisible = true"
         >
           <el-icon><Menu /></el-icon>
