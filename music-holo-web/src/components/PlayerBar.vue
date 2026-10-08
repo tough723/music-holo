@@ -147,7 +147,7 @@
       </el-tooltip>
       <el-tooltip content="播放队列 · Q" placement="top">
         <el-badge :value="playerStore.queue.length" :hidden="playerStore.queue.length === 0" type="primary">
-          <el-button circle text @click="queueVisible = true">
+          <el-button circle text aria-label="播放队列" @click="queueVisible = true">
             <el-icon><List /></el-icon>
           </el-button>
         </el-badge>

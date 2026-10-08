@@ -62,7 +62,7 @@
     <el-table-column label="操作" :width="showHistory ? 184 : 150" align="center" fixed="right">
       <template #default="{ row, $index }">
         <el-tooltip content="播放" placement="top">
-          <el-button circle size="small" @click.stop="emit('play', row, $index)">
+          <el-button circle size="small" :aria-label="`播放《${row.title}》`" @click.stop="emit('play', row, $index)">
             <el-icon><VideoPlay /></el-icon>
           </el-button>
         </el-tooltip>
@@ -72,13 +72,14 @@
             size="small"
             :type="isFavorite(row) ? 'danger' : 'default'"
             :plain="!isFavorite(row)"
+            :aria-label="isFavorite(row) ? `取消收藏《${row.title}》` : `收藏《${row.title}》`"
             @click.stop="emit('toggle-favorite', row)"
           >
             <el-icon><StarFilled v-if="isFavorite(row)" /><Star v-else /></el-icon>
           </el-button>
         </el-tooltip>
         <el-tooltip content="加入播放队列" placement="top">
-          <el-button circle size="small" @click.stop="emit('add-queue', row)">
+          <el-button circle size="small" :aria-label="`加入播放队列《${row.title}》`" @click.stop="emit('add-queue', row)">
             <el-icon><Plus /></el-icon>
           </el-button>
         </el-tooltip>

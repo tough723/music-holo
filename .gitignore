@@ -3,6 +3,11 @@ target/
 dist/
 node_modules/
 
+# Browser E2E build output, reports, and traces
+music-holo-web/dist-e2e/
+music-holo-web/playwright-report/
+music-holo-web/test-results/
+
 # 本地环境
 .env
 .env.local

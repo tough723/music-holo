@@ -35,6 +35,7 @@
 | Axios | 1.20.0 | HTTP 客户端 |
 | ECharts | 6.1.0 | 图表库（管理后台仪表盘，安全修复版） |
 | Vitest | 5.0.3 | Mock API 集成测试 |
+| Playwright | 1.64.0 | Chromium 生产构建浏览器 E2E |
 
 > 版本说明：安全审计后将 Vue、Vite、ECharts 与 Vitest 升级到已修复公开漏洞的版本；Pinia 2.1.7 与 Vue Router 4.2.5 仍按需求固定。Vite 8 / Vitest 5 需要 Node.js ≥ 22.12。前端锁文件固定了完整依赖树。
 
@@ -169,6 +170,14 @@ npm run dev
 # 开发环境下 /api 与 /profile 会被 Vite 代理到 http://localhost:8080
 ```
 
+浏览器主流程回归（可选，使用 Mock API 的生产构建）首次运行先安装 Chromium：
+
+```bash
+cd music-holo-web
+npx playwright install chromium
+npm run test:e2e
+```
+
 ### 4. 演示账号
 
 | 角色 | 用户名 | 密码 |
@@ -189,7 +198,7 @@ VITE_API_MOCK=true npm run dev
 
 ### 自动化检查
 
-`.github/workflows/ci.yml` 在推送 `main` / `arena/**` 分支或向 `main` 提交 PR 时自动执行：前端依赖安全审计、12 项 Mock API 集成测试、生产构建、后端 Java 17 Maven `verify`，以及本机生产式 Docker Compose 全栈 smoke test（登录、收藏、播放历史、音频与上传文件重启持久化）。
+`.github/workflows/ci.yml` 在推送 `main` / `arena/**` 分支或向 `main` 提交 PR 时自动执行：前端依赖安全审计、Mock API 集成测试、生产构建、Playwright Chromium 五条关键浏览器旅程（游客搜索/播放、demo 收藏/历史、公开歌单分享、本地音频导入与窄屏播放器悬浮、管理员仪表盘）、后端 Java 17 Maven `verify`，以及本机生产式 Docker Compose 全栈 smoke test（登录、收藏、播放历史、音频与上传文件重启持久化）。浏览器测试失败时会保留截图、trace 与 HTML 报告。
 
 ---
 
