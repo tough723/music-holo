@@ -49,6 +49,47 @@
       </div>
     </section>
 
+    <div v-if="loadError" class="home-load-warning glass-panel" role="alert">
+      <span>{{ loadError }}</span>
+      <el-button text type="primary" :disabled="loading" @click="loadData">
+        {{ loading ? '正在重试…' : '重试' }}
+      </el-button>
+    </div>
+
+    <!-- 延续收听：为已登录用户提供首页一键续播入口 -->
+    <section v-if="userStore.isLogin && recentSongs.length" class="section continue-section" aria-label="继续收听">
+      <div class="section-head">
+        <div>
+          <div class="section-title">继续收听</div>
+          <div class="section-sub">从最近听过的旋律接着播放</div>
+        </div>
+        <el-link type="primary" @click="$router.push('/recent')">全部播放历史</el-link>
+      </div>
+      <div class="continue-list">
+        <div
+          v-for="song in recentSongs"
+          :key="song.id"
+          role="button"
+          tabindex="0"
+          class="continue-card glass-panel"
+          :aria-label="`继续播放《${song.title}》`"
+          @click="playRecent(song)"
+          @keydown.enter.prevent="playRecent(song)"
+          @keydown.space.prevent="playRecent(song)"
+        >
+          <div class="continue-cover">
+            <Cover :src="song.cover" :text="song.title" :size="64" />
+            <span class="continue-play" aria-hidden="true"><el-icon><VideoPlay /></el-icon></span>
+          </div>
+          <div class="continue-details">
+            <strong>{{ song.title }}</strong>
+            <span>{{ song.singerName || '未知歌手' }}</span>
+            <small v-if="song.lastPlayedAt">最近听过 · {{ fmtDateTime(song.lastPlayedAt) }}</small>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- 分类快捷入口 -->
     <section v-if="categories.length" class="section">
       <div class="category-chips">
@@ -178,7 +219,9 @@ import * as singerApi from '@/api/singer'
 import * as playlistApi from '@/api/playlist'
 import * as categoryApi from '@/api/category'
 import * as favoriteApi from '@/api/favorite'
+import * as historyApi from '@/api/history'
 import * as recommendApi from '@/api/recommend'
+import { fmtDateTime } from '@/utils/format'
 import { usePlayerStore } from '@/store/player'
 import { useUserStore } from '@/store/user'
 import SongList from '@/components/SongList.vue'
@@ -190,8 +233,10 @@ const playerStore = usePlayerStore()
 const userStore = useUserStore()
 
 const loading = ref(false)
+const loadError = ref('')
 const hotSongs = ref([])
 const recommendedSongs = ref([])
+const recentSongs = ref([])
 const singers = ref([])
 const playlists = ref([])
 const categories = ref([])
@@ -201,34 +246,46 @@ const genderText = (g) => ({ 0: '保密', 1: '男', 2: '女' })[g] || '保密'
 
 const loadData = async () => {
   loading.value = true
+  loadError.value = ''
+  const failedSections = []
   try {
-    const [songPage, singerPage, playlistPage, categoryList, recommendations] = await Promise.all([
+    const responses = await Promise.allSettled([
       songApi.page({ pageNum: 1, pageSize: 8 }),
       singerApi.page({ pageNum: 1, pageSize: 6 }),
       playlistApi.page({ pageNum: 1, pageSize: 6 }),
       categoryApi.list(),
-      recommendApi.songs(8).catch(() => [])
+      recommendApi.songs(8),
+      userStore.isLogin ? historyApi.page({ pageNum: 1, pageSize: 6 }) : Promise.resolve({ records: [] }),
+      userStore.isLogin ? favoriteApi.ids() : Promise.resolve([])
     ])
-    hotSongs.value = songPage.records || []
+    const valueOrPrevious = (index, section, previousValue) => {
+      const response = responses[index]
+      if (response.status === 'fulfilled') return response.value
+      failedSections.push(section)
+      return previousValue
+    }
+
+    const songPage = valueOrPrevious(0, '热门歌曲', { records: hotSongs.value })
+    const singerPage = valueOrPrevious(1, '歌手', { records: singers.value })
+    const playlistPage = valueOrPrevious(2, '推荐歌单', { records: playlists.value })
+    const categoryList = valueOrPrevious(3, '分类', categories.value)
+    const recommendations = valueOrPrevious(4, '猜你喜欢', recommendedSongs.value)
+    const historyPage = valueOrPrevious(5, '最近播放', { records: recentSongs.value })
+    const favoriteList = valueOrPrevious(6, '收藏状态', favoriteIds.value)
+
+    hotSongs.value = songPage?.records || []
     recommendedSongs.value = recommendations || []
-    singers.value = singerPage.records || []
-    playlists.value = playlistPage.records || []
+    recentSongs.value = historyPage?.records || []
+    singers.value = singerPage?.records || []
+    playlists.value = playlistPage?.records || []
     categories.value = categoryList || []
+    favoriteIds.value = favoriteList || []
+    loadError.value = failedSections.length
+      ? `暂时无法加载：${failedSections.join('、')}。其他已加载内容仍可使用。`
+      : ''
   } finally {
     loading.value = false
   }
-  if (userStore.isLogin) {
-    try {
-      favoriteIds.value = await favoriteApi.ids()
-    } catch (e) { /* 未登录忽略 */ }
-  }
-}
-
-const loadFavorites = async () => {
-  if (!userStore.isLogin) return
-  try {
-    favoriteIds.value = await favoriteApi.ids()
-  } catch (e) { /* ignore */ }
 }
 
 const playHot = () => {
@@ -246,6 +303,10 @@ const onPlay = (song, index) => {
 
 const onRecommendPlay = (song, index) => {
   playerStore.playAll(recommendedSongs.value, song.id ?? recommendedSongs.value[index]?.id)
+}
+
+const playRecent = (song) => {
+  playerStore.playAll(recentSongs.value, song.id)
 }
 
 const onToggleFavorite = async (song) => {
@@ -272,10 +333,7 @@ const onAddQueue = (song) => {
   ElMessage.success(`已加入播放队列：《${song.title}》`)
 }
 
-onMounted(() => {
-  loadData()
-  loadFavorites()
-})
+onMounted(loadData)
 </script>
 
 <style scoped>
@@ -283,6 +341,88 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 20px;
+}
+.home-load-warning {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 1px solid rgba(245, 181, 90, 0.28);
+  border-radius: 12px;
+  color: var(--text-sub);
+  font-size: 13px;
+}
+.continue-list {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding: 3px 2px 12px;
+  scrollbar-width: thin;
+}
+.continue-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 260px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(180, 207, 255, 0.13);
+  border-radius: 14px;
+  color: var(--text-main);
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.continue-card:hover,
+.continue-card:focus-visible {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--holo-primary) 55%, transparent);
+  box-shadow: 0 8px 22px var(--holo-glow);
+  outline: none;
+}
+.continue-cover {
+  position: relative;
+  flex: 0 0 64px;
+  width: 64px;
+  height: 64px;
+  overflow: hidden;
+  border-radius: 10px;
+}
+.continue-play {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  background: rgba(5, 8, 22, 0.5);
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+.continue-card:hover .continue-play,
+.continue-card:focus-visible .continue-play {
+  opacity: 1;
+}
+.continue-details {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 4px;
+}
+.continue-details strong,
+.continue-details > span,
+.continue-details small {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.continue-details strong {
+  font-size: 13px;
+}
+.continue-details > span,
+.continue-details small {
+  color: var(--text-sub);
+  font-size: 11px;
 }
 
 /* Hero */

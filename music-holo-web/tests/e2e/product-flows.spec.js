@@ -48,6 +48,13 @@ test('demo 用户可以收藏歌曲并查看个人播放历史', async ({ page }
   await expect(page.locator('.el-table__row').filter({ hasText: '云端信使' }).first()).toBeVisible()
   await openMenu(page, '最近播放')
   await expect(page.locator('.el-table__row').filter({ hasText: '云端信使' }).first()).toBeVisible()
+
+  await openMenu(page, '首页')
+  const continueSection = page.getByRole('region', { name: '继续收听' })
+  const recentSong = continueSection.locator('.continue-card').filter({ hasText: '云端信使' })
+  await expect(recentSong).toBeVisible()
+  await recentSong.click()
+  await expect(page.locator('.player-bar .pb-title')).toHaveText('云端信使')
 })
 
 test('公开歌单的分享回退会复制同源链接', async ({ page }) => {
