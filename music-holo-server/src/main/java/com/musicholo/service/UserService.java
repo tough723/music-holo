@@ -119,8 +119,8 @@ public class UserService {
         sysUserMapper.update(null, new LambdaUpdateWrapper<SysUser>()
                 .eq(SysUser::getId, userId)
                 .set(SysUser::getPassword, BCrypt.hashpw(dto.getNewPassword(), BCrypt.gensalt())));
-        // 修改密码后踢出其他会话，强制重新登录
-        StpUtil.logoutDevice(userId, "password-change");
+        // 修改密码后撤销该用户的全部登录会话，强制重新登录
+        StpUtil.logout(userId);
     }
 
     public SysUser getById(Long userId) {

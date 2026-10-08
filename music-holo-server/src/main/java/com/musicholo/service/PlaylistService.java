@@ -187,12 +187,12 @@ public class PlaylistService {
         Set<Long> existIds = playlistSongMapper.selectList(
                         new LambdaQueryWrapper<PlaylistSong>().eq(PlaylistSong::getPlaylistId, playlistId))
                 .stream().map(PlaylistSong::getSongId).collect(Collectors.toCollection(HashSet::new));
-        Long maxSort = playlistSongMapper.selectList(
+        int maxSort = playlistSongMapper.selectList(
                         new LambdaQueryWrapper<PlaylistSong>().eq(PlaylistSong::getPlaylistId, playlistId))
                 .stream().map(PlaylistSong::getSort).filter(s -> s != null)
                 .max(Integer::compareTo).orElse(0);
         int added = 0;
-        int sort = maxSort == null ? 0 : maxSort;
+        int sort = maxSort;
         for (Long songId : songIds) {
             if (existIds.contains(songId)) {
                 continue;
