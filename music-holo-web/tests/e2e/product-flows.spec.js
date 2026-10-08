@@ -158,7 +158,7 @@ test('歌曲短评可发布、举报并由管理员隐藏，作者能看到处�
   await reportRow.getByRole('button', { name: '隐藏并解决' }).click()
   await page.locator('.el-message-box__btns button.el-button--primary').click()
   await expect(page.getByRole('dialog', { name: '隐藏短评' })).toHaveCount(0)
-  await page.getByRole('combobox', { name: '举报处理状态' }).click()
+  await page.locator('.toolbar .el-select__wrapper').first().click()
   await page.getByRole('option', { name: '已隐藏并处理' }).click()
   const resolvedReportRow = page.locator('.el-table__row').filter({ hasText: comment })
   await expect(resolvedReportRow).toContainText('已隐藏并处理')
