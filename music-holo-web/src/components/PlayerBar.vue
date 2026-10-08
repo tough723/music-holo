@@ -152,7 +152,7 @@
             text
             aria-label="播放队列"
             :aria-expanded="queueVisible"
-            @click.stop="openQueue"
+            @click="openQueue"
           >
             <el-icon><List /></el-icon>
           </el-button>
