@@ -182,7 +182,7 @@ test('设置中心提供低闪烁动效、播放偏好与本机配置备份', as
   await expect(page.locator('html')).toHaveAttribute('data-holo-motion', 'cinematic')
   await page.getByRole('radio', { name: /柔和全息/ }).check({ force: true })
   await page.getByRole('tab', { name: '播放偏好' }).click()
-  await page.getByRole('radio', { name: '随机播放' }).click()
+  await page.getByText('随机播放', { exact: true }).click()
   expect(JSON.parse(await page.evaluate(() => localStorage.getItem('mh_player'))).mode).toBe('random')
 
   await page.getByRole('tab', { name: '本机数据' }).click()
