@@ -10,6 +10,7 @@ import * as playlistApi from '@/api/playlist'
 import * as queueApi from '@/api/queue'
 import * as searchApi from '@/api/search'
 import * as recommendationApi from '@/api/recommend'
+import * as reviewApi from '@/api/review'
 import * as historyApi from '@/api/history'
 import * as songApi from '@/api/song'
 import * as systemApi from '@/api/system'
@@ -27,6 +28,7 @@ async function loginAs(username = 'demo') {
 
 beforeEach(() => {
   localStorage.clear()
+  vi.stubGlobal('scrollTo', vi.fn())
   setActivePinia(createPinia())
 })
 
@@ -350,6 +352,146 @@ describe('内置 Mock API 集成测试', () => {
     await useUserStore().logoutLocal()
     await loginAs('demo')
     await playlistApi.remove(created.id)
+  })
+
+  it('短评支持游客阅读、登录发布、幂等点赞与作者删除', async () => {
+    await loginAs('demo')
+    const content = `短评权限测试 ${Date.now()}`
+    const created = await reviewApi.create({ targetType: 'song', targetId: 7, content })
+    expect(created).toMatchObject({ targetType: 'song', targetId: 7, content, status: 1, mine: true, likeCount: 0 })
+
+    const liked = await reviewApi.setLiked(created.id, true)
+    expect(liked).toMatchObject({ liked: true, likeCount: 1 })
+    await expect(reviewApi.setLiked(created.id, true)).resolves.toMatchObject({ likeCount: 1 })
+    await expect(reviewApi.setLiked(created.id, false)).resolves.toMatchObject({ liked: false, likeCount: 0 })
+
+    await useUserStore().logoutLocal()
+    const publicPage = await reviewApi.page({ targetType: 'song', targetId: 7 })
+    expect(publicPage.records.some((review) => review.id === created.id && review.content === content)).toBe(true)
+    await expect(reviewApi.create({ targetType: 'song', targetId: 7, content: '游客不能发言' }))
+      .rejects.toMatchObject({ code: 401 })
+
+    await loginAs('admin')
+    await expect(reviewApi.remove(created.id)).rejects.toMatchObject({ code: 403 })
+    await loginAs('demo')
+    await reviewApi.remove(created.id)
+    const afterDelete = await reviewApi.page({ targetType: 'song', targetId: 7 })
+    expect(afterDelete.records.some((review) => review.id === created.id)).toBe(false)
+  })
+
+  it('短评支持 500 字限制、每分钟 3 条限频与分页', async () => {
+    await loginAs('demo')
+    await expect(reviewApi.create({ targetType: 'song', targetId: 7, content: '超长内容'.repeat(126) }))
+      .rejects.toMatchObject({ code: 400 })
+
+    const created = []
+    for (let index = 1; index <= 3; index++) {
+      created.push(await reviewApi.create({ targetType: 'song', targetId: 7, content: `限频分页 ${index} ${Date.now()}` }))
+    }
+    await expect(reviewApi.create({ targetType: 'song', targetId: 7, content: '第四条应被限频' }))
+      .rejects.toMatchObject({ code: 429 })
+
+    const firstPage = await reviewApi.page({ targetType: 'song', targetId: 7, pageNum: 1, pageSize: 2 })
+    expect(firstPage).toMatchObject({ total: 3, current: 1, size: 2, pages: 2 })
+    expect(firstPage.records).toHaveLength(2)
+    for (const review of created) await reviewApi.remove(review.id)
+  })
+
+  it('私密歌单短评不会向无权用户泄露', async () => {
+    await loginAs('demo')
+    const playlist = await playlistApi.save({ name: `短评权限歌单 ${Date.now()}`, isPublic: 0 })
+    const review = await reviewApi.create({ targetType: 'playlist', targetId: playlist.id, content: '只对拥有者可见' })
+
+    await useUserStore().logoutLocal()
+    await expect(reviewApi.page({ targetType: 'playlist', targetId: playlist.id })).rejects.toMatchObject({ code: 404 })
+    await loginAs('admin')
+    await expect(reviewApi.page({ targetType: 'playlist', targetId: playlist.id })).resolves.toMatchObject({
+      records: [expect.objectContaining({ id: review.id, content: '只对拥有者可见' })]
+    })
+    await useUserStore().logoutLocal()
+    await loginAs('demo')
+    await reviewApi.remove(review.id)
+    await playlistApi.remove(playlist.id)
+  })
+
+  it('举报进入管理员队列；隐藏会结束待处理举报并只向作者展示说明', async () => {
+    await loginAs('demo')
+    const created = await reviewApi.create({ targetType: 'playlist', targetId: 1, content: `举报审核测试 ${Date.now()}` })
+
+    await useUserStore().logoutLocal()
+    await loginAs('admin')
+    await reviewApi.report(created.id, { reason: 'spam', details: '用于验证举报流程' })
+    await expect(reviewApi.report(created.id, { reason: 'spam' })).rejects.toMatchObject({ code: 409 })
+    const queue = await reviewApi.adminReportsPage({ status: 0 })
+    expect(queue.records).toEqual(expect.arrayContaining([expect.objectContaining({ reviewId: created.id, status: 0 })]))
+
+    await reviewApi.handleReport(queue.records.find((item) => item.reviewId === created.id).id, {
+      action: 'hide', note: '经审核，短评已隐藏'
+    })
+    await expect(reviewApi.adminReportsPage({ status: 1 })).resolves.toMatchObject({
+      records: expect.arrayContaining([expect.objectContaining({ reviewId: created.id, action: 'hide' })])
+    })
+    await expect(reviewApi.adminPage({ status: 0 })).resolves.toMatchObject({
+      records: expect.arrayContaining([expect.objectContaining({ id: created.id, status: 0 })])
+    })
+
+    await loginAs('demo')
+    const authorPage = await reviewApi.page({ targetType: 'playlist', targetId: 1 })
+    expect(authorPage.records).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: created.id, status: 0, moderationNote: '经审核，短评已隐藏' })
+    ]))
+    await reviewApi.remove(created.id)
+  })
+
+  it('管理员直接隐藏短评时也会结案其待处理举报', async () => {
+    await loginAs('demo')
+    const created = await reviewApi.create({ targetType: 'song', targetId: 7, content: `直接审核测试 ${Date.now()}` })
+
+    await useUserStore().logoutLocal()
+    await loginAs('admin')
+    await reviewApi.report(created.id, { reason: 'other', details: '审核闭环验证' })
+    const openReports = await reviewApi.adminReportsPage({ status: 0 })
+    const targetReport = openReports.records.find((item) => item.reviewId === created.id)
+    expect(targetReport).toBeDefined()
+
+    await reviewApi.setVisibility(created.id, true, '管理员直接隐藏')
+    const afterHideOpen = await reviewApi.adminReportsPage({ status: 0 })
+    expect(afterHideOpen.records.some((item) => item.id === targetReport.id)).toBe(false)
+    const afterHideResolved = await reviewApi.adminReportsPage({ status: 1 })
+    expect(afterHideResolved.records).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: targetReport.id, action: 'hide', adminNote: '管理员直接隐藏' })
+    ]))
+    await reviewApi.setVisibility(created.id, false)
+    await expect(reviewApi.adminPage({ status: 1 })).resolves.toMatchObject({
+      records: expect.arrayContaining([expect.objectContaining({ id: created.id, status: 1 })])
+    })
+
+    await loginAs('demo')
+    await reviewApi.remove(created.id)
+  })
+
+  it('管理员驳回举报后短评保持公开', async () => {
+    await loginAs('demo')
+    const created = await reviewApi.create({ targetType: 'song', targetId: 7, content: `驳回举报测试 ${Date.now()}` })
+
+    await useUserStore().logoutLocal()
+    await loginAs('admin')
+    await reviewApi.report(created.id, { reason: 'other' })
+    const openReports = await reviewApi.adminReportsPage({ status: 0 })
+    const targetReport = openReports.records.find((item) => item.reviewId === created.id)
+    expect(targetReport).toBeDefined()
+
+    await reviewApi.handleReport(targetReport.id, { action: 'dismiss', note: '经审核，未发现违规' })
+    const dismissed = await reviewApi.adminReportsPage({ status: 2 })
+    expect(dismissed.records).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: targetReport.id, status: 2, action: 'dismiss' })
+    ]))
+    await expect(reviewApi.adminPage({ status: 1 })).resolves.toMatchObject({
+      records: expect.arrayContaining([expect.objectContaining({ id: created.id, status: 1 })])
+    })
+
+    await loginAs('demo')
+    await reviewApi.remove(created.id)
   })
 
   it('绯红 3D 主题可从接口获取并同步至用户设置', async () => {

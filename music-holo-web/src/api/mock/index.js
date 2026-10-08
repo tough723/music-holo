@@ -105,6 +105,39 @@ function playlistVO(playlist) {
   return { ...clone(playlist), songCount, creatorName: creator?.nickname || creator?.username || '' }
 }
 
+const reviewTargetTitle = (type, id) => type === 'song'
+  ? state.songs.find((song) => song.id === id)?.title || '歌曲'
+  : state.playlists.find((playlist) => playlist.id === id)?.name || '歌单'
+
+function assertReviewTargetVisible(type, id, user) {
+  if (!['song', 'playlist'].includes(type) || !Number.isFinite(id) || id <= 0) {
+    throw mockError(400, '请指定有效的短评对象')
+  }
+  if (type === 'song') {
+    const song = state.songs.find((item) => item.id === id && item.status === 1)
+    if (!song && user?.role !== 0) throw mockError(404, '歌曲不存在')
+    if (!song && user?.role === 0 && !state.songs.some((item) => item.id === id)) throw mockError(404, '歌曲不存在')
+    return
+  }
+  const playlist = state.playlists.find((item) => item.id === id)
+  if (!playlist || (playlist.isPublic !== 1 && !(user && (user.role === 0 || playlist.creatorId === user.id)))) {
+    throw mockError(404, '歌单不存在')
+  }
+}
+
+function musicReviewVO(review, user) {
+  const author = state.users.find((item) => item.id === review.userId)
+  return {
+    ...clone(review),
+    targetTitle: reviewTargetTitle(review.targetType, review.targetId),
+    authorId: review.userId,
+    authorName: author?.nickname || '音乐听众',
+    authorAvatar: author?.avatar || '',
+    mine: !!user && user.id === review.userId,
+    liked: !!user && state.reviewLikes.some((like) => like.reviewId === review.id && like.userId === user.id)
+  }
+}
+
 function parseLrc(lrc) {
   const lines = []
   if (!lrc) return lines
@@ -662,6 +695,182 @@ route('delete', '/playlist/:id/songs/:songId', async (ctx) => {
   if (!playlist) throw mockError(500, '歌单不存在')
   if (playlist.creatorId !== user.id && user.role !== 0) throw mockError(403, '只能操作自己创建的歌单')
   state.playlistSongs = state.playlistSongs.filter((ps) => !(ps.playlistId === id && ps.songId === num(ctx.params.songId)))
+  return null
+})
+
+// ---------- 歌曲 / 歌单短评 ----------
+route('get', '/review/page', async (ctx) => {
+  const targetType = String(ctx.params.targetType || '')
+  const targetId = num(ctx.params.targetId, NaN)
+  assertReviewTargetVisible(targetType, targetId, ctx.user)
+  const list = state.reviews
+    .filter((review) => review.targetType === targetType && review.targetId === targetId && (
+      review.status === 1 || (ctx.user && review.userId === ctx.user.id && review.status === 0)
+    ))
+    .sort((a, b) => String(b.createTime).localeCompare(String(a.createTime)) || b.id - a.id)
+    .map((review) => musicReviewVO(review, ctx.user))
+  return pageOf(list, Math.max(1, num(ctx.params.pageNum, 1)), Math.min(50, Math.max(1, num(ctx.params.pageSize, 10))))
+})
+
+route('post', '/review', async (ctx) => {
+  const user = requireUser(ctx)
+  const { targetType, targetId: rawTargetId, content } = ctx.body
+  const targetId = num(rawTargetId, NaN)
+  assertReviewTargetVisible(targetType, targetId, user)
+  const text = String(content || '').trim()
+  if (!text) throw mockError(400, '短评内容不能为空')
+  if (text.length > 500) throw mockError(400, '短评最多 500 个字符')
+  const since = Date.now() - 60_000
+  const recentCount = state.reviews.filter((review) => review.userId === user.id && review.status !== 2 &&
+    Date.parse(`${String(review.createTime).replace(' ', 'T')}Z`) >= since).length
+  if (recentCount >= 3) throw mockError(429, '发布太频繁，请稍后再试（每分钟最多 3 条）')
+  const review = {
+    id: state.genId(), targetType, targetId, userId: user.id, content: text,
+    likeCount: 0, status: 1, moderationNote: null,
+    createTime: new Date().toISOString().slice(0, 19).replace('T', ' ')
+  }
+  state.reviews.push(review)
+  return musicReviewVO(review, user)
+})
+
+route('delete', '/review/:id', async (ctx) => {
+  const user = requireUser(ctx)
+  const review = state.reviews.find((item) => item.id === num(ctx.params.id))
+  if (!review) throw mockError(404, '短评不存在')
+  if (review.userId !== user.id) throw mockError(403, '只能删除自己发布的短评')
+  review.status = 2
+  review.moderationNote = null
+  return null
+})
+
+route('put', '/review/:id/like', async (ctx) => {
+  const user = requireUser(ctx)
+  const review = state.reviews.find((item) => item.id === num(ctx.params.id) && item.status === 1)
+  if (!review) throw mockError(404, '短评不存在或已隐藏')
+  assertReviewTargetVisible(review.targetType, review.targetId, user)
+  const liked = ctx.body?.liked === true
+  const index = state.reviewLikes.findIndex((like) => like.reviewId === review.id && like.userId === user.id)
+  if (liked && index < 0) {
+    state.reviewLikes.push({ id: state.genId(), reviewId: review.id, userId: user.id })
+    review.likeCount++
+  } else if (!liked && index >= 0) {
+    state.reviewLikes.splice(index, 1)
+    review.likeCount = Math.max(0, review.likeCount - 1)
+  }
+  return { liked, likeCount: review.likeCount }
+})
+
+route('post', '/review/:id/report', async (ctx) => {
+  const user = requireUser(ctx)
+  const review = state.reviews.find((item) => item.id === num(ctx.params.id) && item.status === 1)
+  if (!review) throw mockError(404, '短评不存在或已隐藏')
+  if (review.userId === user.id) throw mockError(400, '不能举报自己发布的短评')
+  assertReviewTargetVisible(review.targetType, review.targetId, user)
+  if (state.reviewReports.some((item) => item.reviewId === review.id && item.reporterId === user.id)) {
+    throw mockError(409, '你已举报过这条短评，管理员会尽快处理')
+  }
+  const { reason, details } = ctx.body
+  if (!['spam', 'abuse', 'copyright', 'other'].includes(reason)) throw mockError(400, '举报原因无效')
+  if (String(details || '').length > 300) throw mockError(400, '补充说明最多 300 个字符')
+  state.reviewReports.push({
+    id: state.genId(), reviewId: review.id, reporterId: user.id, reason,
+    details: String(details || '').trim() || null, status: 0, action: null,
+    handledBy: null, adminNote: null, handledAt: null,
+    createTime: new Date().toISOString().slice(0, 19).replace('T', ' ')
+  })
+  return null
+})
+
+route('get', '/review/admin/page', async (ctx) => {
+  requireAdmin(ctx)
+  const { pageNum = 1, pageSize = 10, targetType, targetId, status } = ctx.params
+  const filtered = state.reviews.filter((review) => {
+    if (targetType && review.targetType !== targetType) return false
+    if (targetId && review.targetId !== num(targetId)) return false
+    if (status !== undefined && status !== '' && review.status !== num(status)) return false
+    if ((status === undefined || status === '') && review.status === 2) return false
+    return true
+  }).sort((a, b) => String(b.createTime).localeCompare(String(a.createTime)) || b.id - a.id)
+    .map((review) => musicReviewVO(review, ctx.user))
+  return pageOf(filtered, Math.max(1, num(pageNum, 1)), Math.min(50, Math.max(1, num(pageSize, 10))))
+})
+
+route('get', '/review/admin/reports/page', async (ctx) => {
+  requireAdmin(ctx)
+  const status = ctx.params.status === undefined || ctx.params.status === '' ? 0 : num(ctx.params.status)
+  const reports = state.reviewReports.filter((report) => report.status === status)
+    .sort((a, b) => String(b.createTime).localeCompare(String(a.createTime)) || b.id - a.id)
+  const records = reports.map((report) => {
+    const review = state.reviews.find((item) => item.id === report.reviewId)
+    const author = state.users.find((item) => item.id === review?.userId)
+    const reporter = state.users.find((item) => item.id === report.reporterId)
+    const handler = state.users.find((item) => item.id === report.handledBy)
+    return {
+      ...clone(report),
+      targetType: review?.targetType || null,
+      targetId: review?.targetId || null,
+      targetTitle: review ? reviewTargetTitle(review.targetType, review.targetId) : '短评已删除',
+      reviewContent: review?.content || '短评记录不可用',
+      reviewStatus: review?.status ?? null,
+      authorName: author?.nickname || '音乐听众',
+      reporterName: reporter?.nickname || '音乐听众',
+      handlerName: handler?.nickname || ''
+    }
+  })
+  return pageOf(records, Math.max(1, num(ctx.params.pageNum, 1)), Math.min(50, Math.max(1, num(ctx.params.pageSize, 10))))
+})
+
+route('put', '/review/admin/:id/visibility', async (ctx) => {
+  const admin = requireAdmin(ctx)
+  const review = state.reviews.find((item) => item.id === num(ctx.params.id))
+  if (!review) throw mockError(404, '短评不存在')
+  if (review.status === 2) throw mockError(409, '作者已删除该短评，不能恢复')
+  const hidden = ctx.body?.hidden === true
+  const note = String(ctx.body?.note || '').trim() || null
+  review.status = hidden ? 0 : 1
+  review.moderationNote = hidden ? note || '经管理员审核，暂时隐藏' : null
+  if (hidden) {
+    const handledAt = new Date().toISOString().slice(0, 19).replace('T', ' ')
+    state.reviewReports.forEach((report) => {
+      if (report.reviewId === review.id && report.status === 0) {
+        Object.assign(report, {
+          status: 1,
+          action: 'hide',
+          handledBy: admin.id,
+          handledAt,
+          adminNote: note
+        })
+      }
+    })
+  }
+  return null
+})
+
+route('put', '/review/admin/reports/:id', async (ctx) => {
+  const admin = requireAdmin(ctx)
+  const report = state.reviewReports.find((item) => item.id === num(ctx.params.id))
+  if (!report) throw mockError(404, '举报记录不存在')
+  if (report.status !== 0) throw mockError(409, '该举报已处理')
+  const note = String(ctx.body?.note || '').trim() || null
+  if (ctx.body?.action === 'hide') {
+    const review = state.reviews.find((item) => item.id === report.reviewId)
+    if (review && review.status !== 2) {
+      review.status = 0
+      review.moderationNote = note || '经举报审核，短评已隐藏'
+    }
+    const handledAt = new Date().toISOString().slice(0, 19).replace('T', ' ')
+    state.reviewReports.forEach((item) => {
+      if (item.reviewId === report.reviewId && item.status === 0) {
+        Object.assign(item, { status: 1, action: 'hide', handledBy: admin.id, handledAt, adminNote: note })
+      }
+    })
+    return null
+  }
+  if (ctx.body?.action !== 'dismiss') throw mockError(400, '处理方式无效')
+  Object.assign(report, {
+    status: 2, action: 'dismiss', handledBy: admin.id,
+    handledAt: new Date().toISOString().slice(0, 19).replace('T', ' '), adminNote: note
+  })
   return null
 })
 

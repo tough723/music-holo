@@ -67,6 +67,9 @@
           <el-menu-item index="/admin/categories">
             <el-icon><CollectionTag /></el-icon><span>分类管理</span>
           </el-menu-item>
+          <el-menu-item index="/admin/reviews">
+            <el-icon><ChatDotRound /></el-icon><span>短评审核</span>
+          </el-menu-item>
         </el-sub-menu>
 
         <el-menu-item index="/settings">

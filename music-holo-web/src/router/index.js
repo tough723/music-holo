@@ -37,7 +37,8 @@ const routes = [
       { path: 'admin/singers', name: 'AdminSingers', component: () => import('@/views/admin/SingerManage.vue'), meta: { title: '歌手管理', requiresAuth: true, requiresAdmin: true } },
       { path: 'admin/songs', name: 'AdminSongs', component: () => import('@/views/admin/SongManage.vue'), meta: { title: '歌曲管理', requiresAuth: true, requiresAdmin: true } },
       { path: 'admin/playlists', name: 'AdminPlaylists', component: () => import('@/views/admin/PlaylistManage.vue'), meta: { title: '歌单管理', requiresAuth: true, requiresAdmin: true } },
-      { path: 'admin/categories', name: 'AdminCategories', component: () => import('@/views/admin/CategoryManage.vue'), meta: { title: '分类管理', requiresAuth: true, requiresAdmin: true } }
+      { path: 'admin/categories', name: 'AdminCategories', component: () => import('@/views/admin/CategoryManage.vue'), meta: { title: '分类管理', requiresAuth: true, requiresAdmin: true } },
+      { path: 'admin/reviews', name: 'AdminReviews', component: () => import('@/views/admin/ReviewModeration.vue'), meta: { title: '短评审核', requiresAuth: true, requiresAdmin: true } }
     ]
   },
   { path: '/:pathMatch(.*)*', redirect: '/home' }

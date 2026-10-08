@@ -1,12 +1,16 @@
 import { readFile } from 'node:fs/promises'
 import { test, expect } from '@playwright/test'
 
-async function loginAs(page, username) {
-  await page.goto('/login')
+async function loginFromCurrentPage(page, username) {
   await page.getByPlaceholder('用户名').fill(username)
   await page.getByPlaceholder('密码').fill('123456')
   await page.getByRole('button', { name: /登\s*录/ }).click()
   await expect(page).toHaveURL(/\/home$/)
+}
+
+async function loginAs(page, username) {
+  await page.goto('/login')
+  await loginFromCurrentPage(page, username)
 }
 
 async function openMenu(page, label) {
@@ -108,6 +112,70 @@ test('本地音频可导入，窄屏滚动后播放器仍固定在视口底部',
   })
   expect(after.top).toBeCloseTo(before.top, 0)
   expect(after.bottom).toBeCloseTo(844, 0)
+})
+
+test('歌曲短评可发布、举报并由管理员隐藏，作者能看到处理说明', async ({ page }) => {
+  await loginAs(page, 'demo')
+  await openMenu(page, '全局搜索')
+  await page.getByPlaceholder('试试歌名、歌手名，或记得的一句歌词…').fill('霓虹海')
+  await page.keyboard.press('Enter')
+  const songRow = page.locator('.el-table__row').filter({ hasText: '霓虹海' }).first()
+  await expect(songRow).toBeVisible()
+  await songRow.getByRole('button', { name: '短评《霓虹海》' }).click()
+
+  const reviewDialog = page.getByRole('dialog', { name: '《霓虹海》的短评' })
+  const comment = `管理员审核旅程 ${Date.now()}`
+  await reviewDialog.getByRole('textbox', { name: '为霓虹海写短评' }).fill(comment)
+  await reviewDialog.getByRole('button', { name: '发布短评' }).click()
+  const ownReview = reviewDialog.locator('.review-card').filter({ hasText: comment })
+  await expect(ownReview).toBeVisible()
+  await expect(ownReview.getByText('我', { exact: true })).toBeVisible()
+  await page.keyboard.press('Escape')
+
+  await page.locator('.user-chip').click()
+  await page.getByRole('menuitem', { name: '退出登录' }).click()
+  await expect(page).toHaveURL(/\/login$/)
+  await loginFromCurrentPage(page, 'admin')
+  await openMenu(page, '全局搜索')
+  await page.getByPlaceholder('试试歌名、歌手名，或记得的一句歌词…').fill('霓虹海')
+  await page.keyboard.press('Enter')
+  const adminSongRow = page.locator('.el-table__row').filter({ hasText: '霓虹海' }).first()
+  await expect(adminSongRow).toBeVisible()
+  await adminSongRow.getByRole('button', { name: '短评《霓虹海》' }).click()
+  const adminReviewDialog = page.getByRole('dialog', { name: '《霓虹海》的短评' })
+  const reportedReview = adminReviewDialog.locator('.review-card').filter({ hasText: comment })
+  await expect(reportedReview).toBeVisible()
+  await reportedReview.getByRole('button', { name: '举报' }).click()
+  const reportDialog = page.getByRole('dialog', { name: '举报短评' })
+  await reportDialog.getByRole('button', { name: '提交举报' }).click()
+  await expect(page.getByText('举报已提交，管理员会尽快审核', { exact: true })).toBeVisible()
+  await page.keyboard.press('Escape')
+
+  await page.locator('.nav-menu').getByRole('menuitem', { name: '管理后台' }).click()
+  await openMenu(page, '短评审核')
+  const reportRow = page.locator('.el-table__row').filter({ hasText: comment })
+  await expect(reportRow).toBeVisible()
+  await reportRow.getByRole('button', { name: '隐藏并解决' }).click()
+  await page.locator('.el-message-box__btns button.el-button--primary').click()
+  await page.getByRole('combobox', { name: '举报处理状态' }).click()
+  await page.getByRole('option', { name: '已隐藏并处理' }).click()
+  const resolvedReportRow = page.locator('.el-table__row').filter({ hasText: comment })
+  await expect(resolvedReportRow).toContainText('已隐藏并处理')
+
+  await page.locator('.user-chip').click()
+  await page.getByRole('menuitem', { name: '退出登录' }).click()
+  await expect(page).toHaveURL(/\/login$/)
+  await loginFromCurrentPage(page, 'demo')
+  await openMenu(page, '全局搜索')
+  await page.getByPlaceholder('试试歌名、歌手名，或记得的一句歌词…').fill('霓虹海')
+  await page.keyboard.press('Enter')
+  const authorSongRow = page.locator('.el-table__row').filter({ hasText: '霓虹海' }).first()
+  await expect(authorSongRow).toBeVisible()
+  await authorSongRow.getByRole('button', { name: '短评《霓虹海》' }).click()
+  const authorDialog = page.getByRole('dialog', { name: '《霓虹海》的短评' })
+  const hiddenReview = authorDialog.locator('.review-card').filter({ hasText: comment })
+  await expect(hiddenReview.getByText('审核隐藏')).toBeVisible()
+  await expect(hiddenReview).toContainText('经管理员审核，短评已隐藏')
 })
 
 test('管理员可以进入仪表盘并加载运营统计', async ({ page }) => {

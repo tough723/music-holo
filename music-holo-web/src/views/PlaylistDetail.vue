@@ -73,6 +73,13 @@
       </template>
     </SongList>
 
+    <ReviewPanel
+      v-if="playlist"
+      target-type="playlist"
+      :target-id="playlist.id"
+      :target-title="playlist.name"
+    />
+
     <!-- 编辑歌单对话框 -->
     <el-dialog v-model="editVisible" :title="editForm.id ? '编辑歌单' : '新建歌单'" width="480px">
       <el-form :model="editForm" label-width="80px">
@@ -157,6 +164,7 @@ import { useUserStore } from '@/store/user'
 import { fmtCount } from '@/utils/format'
 import { buildPublicPlaylistShareUrl, shareOrCopy } from '@/utils/share'
 import SongList from '@/components/SongList.vue'
+import ReviewPanel from '@/components/ReviewPanel.vue'
 import HoloProjector from '@/components/HoloProjector.vue'
 import Cover from '@/components/Cover.vue'
 

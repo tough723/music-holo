@@ -1,4 +1,5 @@
 <template>
+  <div class="song-list-root">
   <el-table
     v-loading="loading"
     :data="songs"
@@ -59,7 +60,7 @@
       </template>
     </el-table-column>
 
-    <el-table-column label="操作" :width="showHistory ? 184 : 150" align="center" fixed="right">
+    <el-table-column label="操作" :width="showHistory ? 224 : 190" align="center" fixed="right">
       <template #default="{ row, $index }">
         <el-tooltip content="播放" placement="top">
           <el-button circle size="small" :aria-label="`播放《${row.title}》`" @click.stop="emit('play', row, $index)">
@@ -78,6 +79,11 @@
             <el-icon><StarFilled v-if="isFavorite(row)" /><Star v-else /></el-icon>
           </el-button>
         </el-tooltip>
+        <el-tooltip content="查看短评" placement="top">
+          <el-button circle size="small" :aria-label="`短评《${row.title}》`" @click.stop="openReview(row)">
+            <el-icon><ChatDotRound /></el-icon>
+          </el-button>
+        </el-tooltip>
         <el-tooltip content="加入播放队列" placement="top">
           <el-button circle size="small" :aria-label="`加入播放队列《${row.title}》`" @click.stop="emit('add-queue', row)">
             <el-icon><Plus /></el-icon>
@@ -87,11 +93,27 @@
       </template>
     </el-table-column>
   </el-table>
+  <el-dialog
+    v-model="reviewVisible"
+    :title="activeReviewSong ? `《${activeReviewSong.title}》的短评` : '歌曲短评'"
+    width="min(760px, calc(100vw - 32px))"
+    append-to-body
+    destroy-on-close
+  >
+    <ReviewPanel
+      v-if="activeReviewSong"
+      target-type="song"
+      :target-id="activeReviewSong.id"
+      :target-title="activeReviewSong.title"
+    />
+  </el-dialog>
+  </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { usePlayerStore } from '@/store/player'
+import ReviewPanel from './ReviewPanel.vue'
 import { fmtDuration, fmtCount, fmtDateTime } from '@/utils/format'
 import Cover from './Cover.vue'
 
@@ -112,6 +134,13 @@ const emit = defineEmits(['play', 'toggle-favorite', 'add-queue'])
 
 const playerStore = usePlayerStore()
 const playing = computed(() => playerStore.playing)
+const reviewVisible = ref(false)
+const activeReviewSong = ref(null)
+
+function openReview(song) {
+  activeReviewSong.value = song
+  reviewVisible.value = true
+}
 
 const favSet = computed(() => new Set(props.favoriteIds))
 const isFavorite = (row) => !props.hideFavorite && favSet.value.has(row.id)
