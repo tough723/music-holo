@@ -1,0 +1,19 @@
+# Local production-like profile: avoid SQL debug output and public API docs.
+knife4j:
+  enable: false
+  production: true
+
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
+music-holo:
+  upload-path: ${MUSIC_HOLO_UPLOADPATH:/app/upload/}
+
+logging:
+  level:
+    root: INFO
+    com.musicholo: INFO
+    cn.dev33.satoken: WARN

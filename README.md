@@ -59,7 +59,7 @@
 13. **全局搜索** `/search`：跨歌曲标题/专辑/歌词、歌手与可见歌单搜索
 14. **个性化推荐** `/recommend`：基于用户近期收听与收藏的歌手/分类做可解释推荐，匿名冷启动回落热门歌曲
 
-能力差距、市场观察与后续路线图见 [`docs/product-parity-audit.md`](docs/product-parity-audit.md)。
+主流音乐平台能力对照、按 ROI 排序的下一步建议及 V1 收口条件见 [`docs/product-parity-audit.md`](docs/product-parity-audit.md)。
 
 ### 权限模型
 
@@ -73,7 +73,7 @@
 
 ```
 music-holo/
-├── docker-compose.yml          # 一键启动 MySQL 8 + Redis 7（自动执行初始化 SQL）
+├── docker-compose.yml          # 一键启动本机生产式全栈（MySQL + Redis + Spring Boot + Nginx）
 ├── sql/
 │   ├── music_holo.sql          # 全新安装：建库建表 + 种子数据（内置 admin/123456、demo/123456）
 │   └── migration_20261008_play_history.sql # 已部署数据库增量升级：最近播放表
@@ -90,8 +90,12 @@ music-holo/
 │       │   └── util/           # LRC 歌词解析 / 文件存储
 │       └── resources/
 │           ├── application.yml
-│           └── application-dev.yml
+│           ├── application-dev.yml
+│           └── application-prod.yml
+│   └── Dockerfile              # Java 17 多阶段生产镜像
 └── music-holo-web/             # 前端（Vue 3 + Vite）
+    ├── Dockerfile              # Vite 构建 + Nginx 静态服务
+    ├── deploy/nginx.conf       # SPA 回退、/api 与 /profile 同源反代
     ├── scripts/gen-audio.mjs   # 演示音频生成脚本（8 首 10 秒 WAV 电子旋律）
     ├── public/audio/           # 生成的演示音频 song1~8.wav
     └── src/
@@ -105,17 +109,41 @@ music-holo/
 
 ## 快速开始
 
-### 1. 启动基础设施（MySQL + Redis）
+### 推荐：本机生产式全栈运行
+
+需要 Docker Engine / Docker Desktop 与 Docker Compose v2；无需在宿主机安装 Java、Maven、MySQL 或 Redis。先复制本地配置（默认端口与密码只用于 loopback 本机演示）：
 
 ```bash
-docker compose up -d
-# 全新安装会自动执行初始化 SQL；也可以手动导入：
-# mysql -uroot -proot < sql/music_holo.sql
-# 已有数据库请在备份后增量执行最近播放表迁移：
-# mysql -uroot -proot music_holo < sql/migration_20261008_play_history.sql
+cp .env.example .env
+# Windows PowerShell：Copy-Item .env.example .env
+docker compose up --build -d
+docker compose ps
 ```
 
-### 2. 启动后端
+浏览器打开 **http://localhost:8088**，使用下方 `demo / 123456` 或 `admin / 123456` 登录。可用下面两条检查 Nginx 与 API：
+
+```bash
+curl -fsS http://localhost:8088/healthz
+curl -fsS http://localhost:8088/api/system/theme
+```
+
+Nginx 提供生产构建的 SPA 静态文件，并将 `/api` 与 `/profile` 同源反代到 Spring Boot；MySQL、Redis、上传文件分别使用持久化卷。容器运行 `prod` profile（关闭 SQL 调试输出和 API 文档）。日志：`docker compose logs -f web server`。停止服务但保留数据：`docker compose down`；**清除数据库、队列和上传文件**：`docker compose down -v`（不可恢复）。初始化 SQL 只在 MySQL 数据卷第一次创建时执行。
+
+> 这是单机验收 / 演示配置，不是公网生产安全基线：默认账号与密码是公开演示凭证；部署到公网前必须改密、配置 TLS、备份和密钥管理。
+
+### 分离开发模式（前端热更新）
+
+```bash
+docker compose up -d mysql redis
+```
+
+全新数据库会自动执行初始化 SQL；已有部署数据库请先备份，再执行增量迁移：
+
+```bash
+mysql -uroot -proot music_holo < sql/migration_20261008_play_history.sql
+```
+
+### 启动后端
 
 ```bash
 cd music-holo-server
@@ -157,7 +185,7 @@ VITE_API_MOCK=true npm run dev
 
 ### 自动化检查
 
-`.github/workflows/ci.yml` 在推送 `main` / `arena/**` 分支或向 `main` 提交 PR 时自动执行：前端依赖安全审计、10 项 Mock API 集成测试、生产构建，以及后端 Java 17 下的 Maven `verify` 编译校验。
+`.github/workflows/ci.yml` 在推送 `main` / `arena/**` 分支或向 `main` 提交 PR 时自动执行：前端依赖安全审计、12 项 Mock API 集成测试、生产构建、后端 Java 17 Maven `verify`，以及本机生产式 Docker Compose 全栈 smoke test（登录、收藏、播放历史、音频与上传文件重启持久化）。
 
 ---
 
@@ -169,7 +197,7 @@ VITE_API_MOCK=true npm run dev
   `clip-path` 投影光锥闪烁、虚线轨道环呼吸、粒子上浮、扫描线叠加、底座呼吸灯与地面投影。
 - 播放时碟片加速旋转（`animation-play-state` 随播放状态切换），暂停即冻结，所见即所得。
 - 主题系统通过 CSS 变量（`--holo-primary / --holo-secondary / --holo-glow`）驱动全站全息色，
-  内置 4 套主题：青蓝全息 / 品红幻境 / 琥珀暖光 / 翠绿矩阵，登录后自动同步到账号。
+  内置 5 套主题：深空棱镜 / 紫雾回响 / 琥珀舞台 / 矩阵声场 / 绯红现场，登录后自动同步到账号；玻璃面板不透明度可单独调整。
 - 底部播放器、侧边栏迷你投影、首页 Hero、设置页实时预览均实时响应当前播放的歌曲。
 
 ## 演示音频
