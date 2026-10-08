@@ -329,7 +329,17 @@ watch(() => userStore.isLogin, (loggedIn) => {
   border-left: none;
   border-right: none;
   border-bottom: none;
-  background: rgba(9, 13, 32, 0.85);
+  background: linear-gradient(180deg, rgba(20, 30, 62, 0.96), rgba(7, 11, 28, 0.94));
+  backdrop-filter: blur(24px) saturate(1.4);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  box-shadow: 0 -18px 50px -34px var(--holo-glow), 0 -1px 0 rgba(255, 255, 255, 0.1) inset;
+  transform-style: preserve-3d;
+}
+.pb-left,
+.pb-center,
+.pb-right {
+  transform: translateZ(12px);
+  transform-style: preserve-3d;
 }
 
 /* 左侧 */
@@ -343,6 +353,8 @@ watch(() => userStore.isLogin, (loggedIn) => {
 .pb-holo {
   cursor: pointer;
   line-height: 0;
+  transform: translateZ(16px) rotateY(-9deg);
+  filter: drop-shadow(0 10px 14px rgba(0, 0, 0, 0.4));
 }
 .pb-holo :deep(.holo) {
   height: calc(var(--sz) * 1.05);
@@ -390,6 +402,8 @@ watch(() => userStore.isLogin, (loggedIn) => {
   color: var(--holo-primary);
   border-color: var(--holo-primary);
   background: color-mix(in srgb, var(--holo-primary) 12%, transparent);
+  box-shadow: 0 8px 20px -10px var(--holo-glow), 0 1px 0 rgba(255, 255, 255, 0.2) inset;
+  transform: perspective(500px) translateZ(10px) rotateX(6deg);
 }
 .pb-play:hover {
   background: color-mix(in srgb, var(--holo-primary) 25%, transparent);
@@ -415,6 +429,8 @@ watch(() => userStore.isLogin, (loggedIn) => {
   background: rgba(148, 163, 184, 0.22);
   cursor: pointer;
   position: relative;
+  transform: translateZ(7px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35) inset, 0 0 10px -7px var(--holo-glow);
 }
 .progress-inner {
   height: 100%;

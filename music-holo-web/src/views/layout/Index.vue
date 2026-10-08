@@ -86,7 +86,17 @@
     <!-- 主区域 -->
     <div class="main">
       <header class="header glass-panel">
-        <div class="header-title">{{ pageTitle }}</div>
+        <div class="header-title-wrap">
+          <div class="header-mark" :class="{ 'is-playing': playerStore.playing }" aria-hidden="true">
+            <div class="header-mark__beam"></div>
+            <div class="header-mark__disc"><i></i></div>
+            <div class="header-mark__orbit"></div>
+          </div>
+          <div class="header-title-block">
+            <div class="header-title">{{ pageTitle }}</div>
+            <div class="header-kicker">{{ headerCaption }}</div>
+          </div>
+        </div>
         <div class="header-search">
           <el-input
             ref="searchInput"
@@ -164,6 +174,9 @@ const searchInput = ref(null)
 
 const activeMenu = computed(() => route.path)
 const pageTitle = computed(() => route.meta.title || '首页')
+const headerCaption = computed(() => route.path.startsWith('/admin')
+  ? 'HOLO CONTROL · 空间控制台'
+  : 'MUSIC HOLO · 全息声场')
 
 watch(() => route.query.q, (value) => {
   searchTerm.value = String(value || '')
@@ -226,6 +239,7 @@ const onCommand = async (command) => {
   cursor: pointer;
 }
 .logo-icon {
+  position: relative;
   width: 40px;
   height: 40px;
   border-radius: 12px;
@@ -234,8 +248,21 @@ const onCommand = async (command) => {
   justify-content: center;
   font-size: 22px;
   color: var(--holo-primary);
-  background: color-mix(in srgb, var(--holo-primary) 14%, transparent);
-  box-shadow: 0 0 18px var(--holo-glow);
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.13), color-mix(in srgb, var(--holo-primary) 14%, transparent));
+  border: 1px solid color-mix(in srgb, var(--holo-primary) 35%, transparent);
+  box-shadow: 0 0 18px var(--holo-glow), inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 8px 16px rgba(0, 0, 0, 0.28);
+  transform: perspective(500px) rotateY(-10deg) rotateX(8deg) translateZ(8px);
+  transform-style: preserve-3d;
+}
+.logo-icon::after {
+  content: '';
+  position: absolute;
+  inset: 6px;
+  border: 1px solid color-mix(in srgb, var(--holo-secondary) 54%, transparent);
+  border-radius: 8px;
+  transform: translateZ(-8px) rotateZ(45deg);
+  opacity: 0.7;
+  pointer-events: none;
 }
 .logo-title {
   font-size: 17px;
@@ -253,11 +280,26 @@ const onCommand = async (command) => {
   border-right: none;
   background: transparent;
   overflow-y: auto;
+  perspective: 900px;
+}
+.nav-menu :deep(.el-menu-item),
+.nav-menu :deep(.el-sub-menu__title) {
+  margin: 3px 8px;
+  border-radius: 10px;
+  transform-style: preserve-3d;
+  transition: transform 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+.nav-menu :deep(.el-menu-item:hover),
+.nav-menu :deep(.el-sub-menu__title:hover) {
+  transform: perspective(600px) translate3d(3px, -1px, 6px) rotateY(-2deg);
+  background: color-mix(in srgb, var(--holo-primary) 9%, transparent);
 }
 .nav-menu :deep(.el-menu-item.is-active) {
   background: color-mix(in srgb, var(--holo-primary) 14%, transparent);
   color: var(--holo-primary);
   border-right: 2px solid var(--holo-primary);
+  box-shadow: 0 8px 18px -12px var(--holo-glow), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  transform: translateZ(5px);
 }
 
 .sidebar-footer {
@@ -284,10 +326,80 @@ const onCommand = async (command) => {
   padding: 0 20px;
   border-radius: 14px;
 }
+.header-title-wrap {
+  flex: 0 0 206px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  transform-style: preserve-3d;
+}
+.header-mark {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  perspective: 360px;
+  transform-style: preserve-3d;
+  filter: drop-shadow(0 0 12px var(--holo-glow));
+}
+.header-mark__beam {
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  width: 27px;
+  height: 30px;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+  transform: translateX(-50%) translateZ(-6px);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--holo-primary) 44%, transparent), transparent 84%);
+}
+.header-mark__disc {
+  position: absolute;
+  left: 50%;
+  top: 8px;
+  width: 27px;
+  height: 27px;
+  border: 1px solid color-mix(in srgb, var(--holo-primary) 85%, white);
+  border-radius: 50%;
+  transform: translateX(-50%) rotateX(66deg) translateZ(8px);
+  background: repeating-radial-gradient(circle, rgba(255, 255, 255, 0.18) 0 1px, transparent 2px 4px), radial-gradient(circle, var(--holo-secondary), color-mix(in srgb, var(--holo-primary) 75%, transparent) 56%, transparent 72%);
+  box-shadow: 0 0 18px var(--holo-glow), inset 0 0 8px rgba(255, 255, 255, 0.34);
+  animation: header-disc-spin 12s linear infinite paused;
+}
+.header-mark.is-playing .header-mark__disc {
+  animation-play-state: running;
+}
+.header-mark__disc i {
+  position: absolute;
+  inset: 42%;
+  border-radius: 50%;
+  background: #f8fafc;
+  box-shadow: 0 0 7px #fff;
+}
+.header-mark__orbit {
+  position: absolute;
+  inset: -4px 0 3px;
+  border: 1px solid color-mix(in srgb, var(--holo-secondary) 65%, transparent);
+  border-radius: 50%;
+  transform: rotateX(72deg) rotateZ(-24deg);
+  opacity: 0.72;
+}
+@keyframes header-disc-spin {
+  to { rotate: 0 1 0 360deg; }
+}
+.header-title-block {
+  min-width: 0;
+}
 .header-title {
   font-size: 17px;
-  font-weight: 600;
+  font-weight: 650;
   letter-spacing: 1px;
+  white-space: nowrap;
+}
+.header-kicker {
+  margin-top: 3px;
+  color: var(--text-sub);
+  font-size: 9px;
+  letter-spacing: 1.5px;
   white-space: nowrap;
 }
 .header-search {
@@ -360,6 +472,13 @@ const onCommand = async (command) => {
   .sidebar {
     width: 64px;
   }
+  .header-title-wrap {
+    flex-basis: 174px;
+    gap: 9px;
+  }
+  .header-mark {
+    transform: scale(0.9);
+  }
   .header-search {
     margin: 0 14px;
     max-width: none;
@@ -381,7 +500,11 @@ const onCommand = async (command) => {
   .header {
     padding: 0 12px;
   }
-  .header-title {
+  .header-title-wrap {
+    flex: 0 0 38px;
+    gap: 0;
+  }
+  .header-title-block {
     display: none;
   }
   .header-search {

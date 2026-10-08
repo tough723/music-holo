@@ -161,6 +161,8 @@ VITE_API_MOCK=true npm run dev
 
 ## 3D 全息特效说明
 
+- 全站 `HoloEnvironment`：CSS 生成的空间背景、透视网格地面、轨道光环、体积光锥与漂浮粒子；登录、曲库、歌单、播放器和管理后台均共享同一视觉舞台。
+- 全局玻璃面板、导航、数据卡片、歌曲行和按钮加入轻量景深、悬浮层与折射高光，主题切换同步驱动光环和环境色；`prefers-reduced-motion` 开启时自动收敛动画。
 - `HoloProjector` 组件：纯 CSS 3D 实现 —— `perspective` + `rotateX(72deg)` 倾斜碟片绕 Y 轴旋转、
   `clip-path` 投影光锥闪烁、虚线轨道环呼吸、粒子上浮、扫描线叠加、底座呼吸灯与地面投影。
 - 播放时碟片加速旋转（`animation-play-state` 随播放状态切换），暂停即冻结，所见即所得。

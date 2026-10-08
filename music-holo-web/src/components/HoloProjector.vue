@@ -57,6 +57,8 @@ const particleStyle = (n) => {
   flex-direction: column;
   align-items: center;
   justify-content: flex-end;
+  perspective: 1000px;
+  transform-style: preserve-3d;
   user-select: none;
 }
 
@@ -80,7 +82,8 @@ const particleStyle = (n) => {
   position: absolute;
   bottom: 30%;
   left: 50%;
-  transform: translateX(-50%);
+  transform: translateX(-50%) translateZ(24px);
+  transform-style: preserve-3d;
   width: 64%;
   aspect-ratio: 1;
   perspective: 700px;
@@ -165,11 +168,14 @@ const particleStyle = (n) => {
 .holo-base {
   width: 46%;
   height: 11%;
+  border: 1px solid color-mix(in srgb, var(--holo-primary) 30%, transparent);
   border-radius: 50%;
-  background: linear-gradient(180deg, #1e293b, #0b1120);
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  background: radial-gradient(ellipse at 50% 22%, #475569, #18243c 46%, #080d1d 76%);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.64), 0 0 20px -12px var(--holo-glow), inset 0 2px 2px rgba(255, 255, 255, 0.14), inset 0 -5px 8px rgba(0, 0, 0, 0.5);
   position: relative;
   z-index: 3;
+  transform: perspective(450px) rotateX(11deg) translateZ(8px);
+  transform-style: preserve-3d;
 }
 .holo-base::after {
   content: '';
@@ -196,6 +202,8 @@ const particleStyle = (n) => {
 .holo-caption {
   margin-top: 10px;
   text-align: center;
+  transform: translateZ(28px);
+  transform-style: preserve-3d;
 }
 .cap-title {
   font-size: 15px;

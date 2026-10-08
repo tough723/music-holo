@@ -124,6 +124,28 @@ const onRowClick = (row) => emit('play', row, props.songs.indexOf(row))
 <style scoped>
 .song-table {
   width: 100%;
+  overflow: hidden;
+  border-radius: 14px;
+  transform-style: preserve-3d;
+  filter: drop-shadow(0 16px 24px rgba(0, 0, 0, 0.14));
+}
+.song-table :deep(.el-table__inner-wrapper) {
+  border-radius: inherit;
+}
+.song-table :deep(th.el-table__cell) {
+  background: linear-gradient(180deg, rgba(148, 163, 184, 0.1), rgba(148, 163, 184, 0.035));
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.045) inset;
+}
+.song-table :deep(.el-table__row) {
+  transform-style: preserve-3d;
+  transition: transform 0.18s ease, filter 0.18s ease;
+}
+.song-table :deep(.el-table__row:hover) {
+  transform: translateZ(5px);
+  filter: drop-shadow(0 8px 9px rgba(0, 0, 0, 0.2));
+}
+.song-table :deep(.el-table__row:hover td) {
+  background: color-mix(in srgb, var(--holo-primary) 7%, transparent);
 }
 .song-table :deep(.current-row) {
   --el-table-tr-bg-color: color-mix(in srgb, var(--holo-primary) 10%, transparent);
