@@ -29,6 +29,15 @@
         <el-menu-item index="/songs">
           <el-icon><Headset /></el-icon><span>歌曲</span>
         </el-menu-item>
+        <el-menu-item index="/search">
+          <el-icon><Search /></el-icon><span>全局搜索</span>
+        </el-menu-item>
+        <el-menu-item index="/charts">
+          <el-icon><TrendCharts /></el-icon><span>排行榜</span>
+        </el-menu-item>
+        <el-menu-item v-if="userStore.isLogin" index="/recent">
+          <el-icon><Clock /></el-icon><span>最近播放</span>
+        </el-menu-item>
         <el-menu-item index="/favorites">
           <el-icon><Star /></el-icon><span>我的收藏</span>
         </el-menu-item>
@@ -78,6 +87,20 @@
     <div class="main">
       <header class="header glass-panel">
         <div class="header-title">{{ pageTitle }}</div>
+        <div class="header-search">
+          <el-input
+            ref="searchInput"
+            v-model="searchTerm"
+            size="default"
+            clearable
+            placeholder="搜索歌曲、歌手、歌词或歌单"
+            aria-label="全局搜索"
+            @keyup.enter="submitSearch"
+          >
+            <template #prefix><el-icon><Search /></el-icon></template>
+          </el-input>
+          <kbd>⌘ K</kbd>
+        </div>
         <div class="header-user">
           <el-dropdown @command="onCommand">
             <div class="user-chip">
@@ -94,6 +117,9 @@
                 </el-dropdown-item>
                 <el-dropdown-item command="favorites">
                   <el-icon><Star /></el-icon> 我的收藏
+                </el-dropdown-item>
+                <el-dropdown-item v-if="userStore.isLogin" command="recent">
+                  <el-icon><Clock /></el-icon> 最近播放
                 </el-dropdown-item>
                 <el-dropdown-item divided command="logout">
                   <el-icon><SwitchButton /></el-icon> 退出登录
@@ -120,7 +146,7 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/store/user'
 import { usePlayerStore } from '@/store/player'
@@ -133,9 +159,30 @@ const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
 const playerStore = usePlayerStore()
+const searchTerm = ref('')
+const searchInput = ref(null)
 
 const activeMenu = computed(() => route.path)
 const pageTitle = computed(() => route.meta.title || '首页')
+
+watch(() => route.query.q, (value) => {
+  searchTerm.value = String(value || '')
+}, { immediate: true })
+
+const submitSearch = () => {
+  const q = searchTerm.value.trim()
+  router.push({ path: '/search', query: q ? { q } : {} })
+}
+
+const onGlobalShortcut = (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+    event.preventDefault()
+    searchInput.value?.focus?.()
+  }
+}
+
+onMounted(() => window.addEventListener('keydown', onGlobalShortcut))
+onUnmounted(() => window.removeEventListener('keydown', onGlobalShortcut))
 
 const onCommand = async (command) => {
   if (command === 'logout') {
@@ -145,6 +192,8 @@ const onCommand = async (command) => {
     router.push('/settings')
   } else if (command === 'favorites') {
     router.push('/favorites')
+  } else if (command === 'recent') {
+    router.push('/recent')
   }
 }
 </script>
@@ -239,6 +288,33 @@ const onCommand = async (command) => {
   font-size: 17px;
   font-weight: 600;
   letter-spacing: 1px;
+  white-space: nowrap;
+}
+.header-search {
+  position: relative;
+  flex: 1;
+  max-width: 520px;
+  margin: 0 28px;
+}
+.header-search :deep(.el-input__wrapper) {
+  padding-right: 58px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.32);
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.12) inset;
+}
+.header-search kbd {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  transform: translateY(-50%);
+  padding: 2px 6px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 5px;
+  color: var(--text-sub);
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 1.5;
+  pointer-events: none;
 }
 .user-chip {
   display: flex;
@@ -284,6 +360,13 @@ const onCommand = async (command) => {
   .sidebar {
     width: 64px;
   }
+  .header-search {
+    margin: 0 14px;
+    max-width: none;
+  }
+  .header-search kbd {
+    display: none;
+  }
   .logo-text,
   .nav-menu :deep(.el-menu-item span),
   .nav-menu :deep(.el-sub-menu__title span),
@@ -292,6 +375,20 @@ const onCommand = async (command) => {
   }
   .pb-left {
     width: auto !important;
+  }
+}
+@media (max-width: 600px) {
+  .header {
+    padding: 0 12px;
+  }
+  .header-title {
+    display: none;
+  }
+  .header-search {
+    margin: 0 10px 0 0;
+  }
+  .user-name {
+    display: none;
   }
 }
 </style>

@@ -50,14 +50,23 @@
       <template #default="{ row }">{{ fmtCount(row.playCount) }}</template>
     </el-table-column>
 
-    <el-table-column label="操作" width="150" align="center" fixed="right">
+    <el-table-column v-if="showHistory" label="最近播放" width="180" align="center">
+      <template #default="{ row }">
+        <div class="history-cell">
+          <span>{{ fmtDateTime(row.lastPlayedAt) || '—' }}</span>
+          <small>个人收听 {{ row.personalPlayCount || 0 }} 次</small>
+        </div>
+      </template>
+    </el-table-column>
+
+    <el-table-column label="操作" :width="showHistory ? 184 : 150" align="center" fixed="right">
       <template #default="{ row, $index }">
         <el-tooltip content="播放" placement="top">
           <el-button circle size="small" @click.stop="emit('play', row, $index)">
             <el-icon><VideoPlay /></el-icon>
           </el-button>
         </el-tooltip>
-        <el-tooltip :content="isFavorite(row) ? '取消收藏' : '收藏'" placement="top">
+        <el-tooltip v-if="!hideFavorite" :content="isFavorite(row) ? '取消收藏' : '收藏'" placement="top">
           <el-button
             circle
             size="small"
@@ -82,7 +91,7 @@
 <script setup>
 import { computed } from 'vue'
 import { usePlayerStore } from '@/store/player'
-import { fmtDuration, fmtCount } from '@/utils/format'
+import { fmtDuration, fmtCount, fmtDateTime } from '@/utils/format'
 import Cover from './Cover.vue'
 
 const props = defineProps({
@@ -91,6 +100,7 @@ const props = defineProps({
   showCategory: { type: Boolean, default: true },
   showAlbum: { type: Boolean, default: false },
   showPlayCount: { type: Boolean, default: true },
+  showHistory: { type: Boolean, default: false },
   /** 收藏的歌曲 id 集合 */
   favoriteIds: { type: Array, default: () => [] },
   /** 隐藏收藏按钮（如管理后台） */
@@ -172,6 +182,15 @@ const onRowClick = (row) => emit('play', row, props.songs.indexOf(row))
   font-size: 12px;
   color: var(--text-sub);
   margin-top: 2px;
+}
+.history-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+}
+.history-cell small {
+  color: var(--text-sub);
 }
 @keyframes blink {
   0%, 100% { opacity: 1; }

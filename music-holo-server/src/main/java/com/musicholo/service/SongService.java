@@ -16,6 +16,7 @@ import com.musicholo.mapper.UserFavoriteMapper;
 import com.musicholo.vo.SongVO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 歌曲服务：增删改查、播放（播放量统计）
@@ -29,6 +30,7 @@ public class SongService {
     private final SongCategoryMapper categoryMapper;
     private final UserFavoriteMapper userFavoriteMapper;
     private final SongAssembler songAssembler;
+    private final PlayHistoryService playHistoryService;
 
     /**
      * 歌曲分页查询（可按关键字 / 分类 / 歌手过滤）
@@ -112,11 +114,18 @@ public class SongService {
     /**
      * 歌曲播放：播放量 +1，返回最新播放量
      */
-    public Long play(Long id) {
+    @Transactional(rollbackFor = Exception.class)
+    public Long play(Long id, Long currentUserId) {
         Song song = getById(id);
+        if (!Integer.valueOf(1).equals(song.getStatus())) {
+            throw new BusinessException("歌曲已下架");
+        }
         songMapper.update(null, new LambdaUpdateWrapper<Song>()
                 .eq(Song::getId, id)
                 .setSql("play_count = play_count + 1"));
+        if (currentUserId != null) {
+            playHistoryService.record(currentUserId, id);
+        }
         Song latest = songMapper.selectById(id);
         return latest.getPlayCount() == null ? 0L : latest.getPlayCount();
     }

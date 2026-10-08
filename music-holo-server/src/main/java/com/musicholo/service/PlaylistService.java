@@ -49,8 +49,13 @@ public class PlaylistService {
     public Page<PlaylistVO> page(PlaylistQuery query, Long currentUserId) {
         LambdaQueryWrapper<Playlist> qw = new LambdaQueryWrapper<>();
         qw.like(StrUtil.isNotBlank(query.getKeyword()), Playlist::getName, query.getKeyword());
-        if (Boolean.TRUE.equals(query.getOnlyMine()) && currentUserId != null) {
-            qw.eq(Playlist::getCreatorId, currentUserId);
+        if (Boolean.TRUE.equals(query.getOnlyMine())) {
+            if (currentUserId == null) {
+                // 匿名用户“只看我的”必须为空，不能退化成公开列表
+                qw.eq(Playlist::getId, -1L);
+            } else {
+                qw.eq(Playlist::getCreatorId, currentUserId);
+            }
         } else {
             // 默认展示公开歌单 + 自己的歌单
             qw.and(w -> w.eq(Playlist::getIsPublic, 1)
@@ -96,8 +101,9 @@ public class PlaylistService {
     /**
      * 歌单详情（含歌曲数量）
      */
-    public PlaylistVO detail(Long id) {
+    public PlaylistVO detail(Long id, Long currentUserId) {
         Playlist playlist = getById(id);
+        assertVisible(playlist, currentUserId);
         PlaylistVO vo = BeanUtil.copyProperties(playlist, PlaylistVO.class);
         Long count = playlistSongMapper.selectCount(
                 new LambdaQueryWrapper<PlaylistSong>().eq(PlaylistSong::getPlaylistId, id));
@@ -112,8 +118,9 @@ public class PlaylistService {
     /**
      * 歌单内的歌曲列表（按歌单内排序）
      */
-    public List<SongVO> songsOfPlaylist(Long id) {
-        getById(id);
+    public List<SongVO> songsOfPlaylist(Long id, Long currentUserId) {
+        Playlist playlist = getById(id);
+        assertVisible(playlist, currentUserId);
         List<PlaylistSong> relations = playlistSongMapper.selectList(
                 new LambdaQueryWrapper<PlaylistSong>()
                         .eq(PlaylistSong::getPlaylistId, id)
@@ -160,7 +167,7 @@ public class PlaylistService {
         } else {
             playlistMapper.updateById(playlist);
         }
-        return detail(playlist.getId());
+        return detail(playlist.getId(), userId);
     }
 
     /**
@@ -228,6 +235,17 @@ public class PlaylistService {
             throw new BusinessException("歌单不存在");
         }
         return playlist;
+    }
+
+    /** 私密歌单仅创建者或管理员可查看，避免通过猜测 ID 读取私有曲目 */
+    private void assertVisible(Playlist playlist, Long currentUserId) {
+        if (!Integer.valueOf(1).equals(playlist.getIsPublic())) {
+            boolean owner = currentUserId != null && currentUserId.equals(playlist.getCreatorId());
+            boolean admin = currentUserId != null && userService.isAdmin(currentUserId);
+            if (!owner && !admin) {
+                throw new BusinessException(404, "歌单不存在");
+            }
+        }
     }
 
     /**

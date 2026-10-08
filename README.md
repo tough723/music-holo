@@ -40,7 +40,7 @@
 
 ## 功能模块（接口一览）
 
-后端共 11 组 RESTful 接口，统一返回 `Result{code, msg, data}`，Knife4j 文档分组与之对应：
+后端共 14 组 RESTful 接口，统一返回 `Result{code, msg, data}`，Knife4j 文档分组与之对应：
 
 1. **认证相关** `/auth`：注册、登录、退出、当前用户信息
 2. **用户相关** `/user`：资料查询、信息完善修改、修改密码
@@ -53,12 +53,17 @@
 9. **歌词处理** `/lyric`：LRC 歌词解析（结构化歌词行）、歌词导出（.lrc 下载）、歌词保存、歌词文件上传
 10. **歌曲收藏** `/favorite`：添加收藏、取消收藏、收藏列表分页、收藏 id 集合、收藏状态检查
 11. **其他公共** `/common`：代码表（字典）查询、文件上传下载、平台统计（仪表盘图表数据）
+12. **最近播放** `/history`：当前用户的最近收听分页、移除单曲与清空历史；游客播放不会写个人历史
+13. **全局搜索** `/search`：跨歌曲标题/专辑/歌词、歌手与可见歌单搜索
+14. **个性化推荐** `/recommend`：基于用户近期收听与收藏的歌手/分类做可解释推荐，匿名冷启动回落热门歌曲
+
+能力差距、市场观察与后续路线图见 [`docs/product-parity-audit.md`](docs/product-parity-audit.md)。
 
 ### 权限模型
 
-- **匿名可访问**：登录 / 注册、歌曲 / 歌手 / 歌单 / 分类的浏览接口、歌词解析与导出、代码表查询、文件下载、静态资源
-- **登录用户**：收藏、播放队列、歌单创建与管理（仅创建者 / 管理员可修改）、资料修改、文件上传、歌词保存
-- **管理员**（`@SaCheckRole("admin")`）：歌手 / 歌曲 / 分类的增删改、歌手导入导出、全局主题设置、平台统计
+- **匿名可访问**：登录 / 注册、歌曲 / 歌手 / 公开歌单 / 分类浏览、全局搜索、热榜/推荐冷启动、播放量上报、歌词解析与导出、代码表查询、文件下载、静态资源
+- **登录用户**：私人最近播放记录、收藏、播放队列、歌单创建与管理（私密歌单仅创建者 / 管理员可读写）、资料修改、文件上传、歌词保存；收听历史可移除或清空
+- **管理员**（`@SaCheckRole("admin")`）：歌手 / 歌曲 / 分类的增删改、歌手导入导出、全局主题设置、平台统计；可查看管理私密歌单
 
 ---
 
@@ -68,16 +73,17 @@
 music-holo/
 ├── docker-compose.yml          # 一键启动 MySQL 8 + Redis 7（自动执行初始化 SQL）
 ├── sql/
-│   └── music_holo.sql          # 建库建表 + 种子数据（内置 admin/123456、demo/123456）
+│   ├── music_holo.sql          # 全新安装：建库建表 + 种子数据（内置 admin/123456、demo/123456）
+│   └── migration_20261008_play_history.sql # 已部署数据库增量升级：最近播放表
 ├── music-holo-server/          # 后端（Spring Boot 3.2）
 │   ├── pom.xml
 │   └── src/main/
 │       ├── java/com/musicholo/
 │       │   ├── config/         # MyBatis-Plus / Sa-Token / Knife4j / Redis / Web(CORS+静态资源)
 │       │   ├── common/         # 统一响应 Result / 全局异常处理
-│       │   ├── controller/     # 11 组接口
+│       │   ├── controller/     # 14 组接口
 │       │   ├── dto/  vo/       # 请求参数 / 视图对象
-│       │   ├── entity/ mapper/ # 10 张表的实体与 Mapper
+│       │   ├── entity/ mapper/ # 11 张表的实体与 Mapper
 │       │   ├── service/        # 业务层（含 SongAssembler / PlayQueueService(Redis) 等）
 │       │   └── util/           # LRC 歌词解析 / 文件存储
 │       └── resources/
@@ -101,8 +107,10 @@ music-holo/
 
 ```bash
 docker compose up -d
-# 初始化 SQL 会自动挂载执行；也可以手动导入：
+# 全新安装会自动执行初始化 SQL；也可以手动导入：
 # mysql -uroot -proot < sql/music_holo.sql
+# 已有数据库请在备份后增量执行最近播放表迁移：
+# mysql -uroot -proot music_holo < sql/migration_20261008_play_history.sql
 ```
 
 ### 2. 启动后端
@@ -147,7 +155,7 @@ VITE_API_MOCK=true npm run dev
 
 ### 自动化检查
 
-`.github/workflows/ci.yml` 在推送 `main` / `arena/**` 分支或向 `main` 提交 PR 时自动执行：前端依赖安全审计、6 项 Mock API 集成测试、生产构建，以及后端 Java 17 下的 Maven `verify` 编译校验。
+`.github/workflows/ci.yml` 在推送 `main` / `arena/**` 分支或向 `main` 提交 PR 时自动执行：前端依赖安全审计、10 项 Mock API 集成测试、生产构建，以及后端 Java 17 下的 Maven `verify` 编译校验。
 
 ---
 

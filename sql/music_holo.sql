@@ -140,7 +140,24 @@ CREATE TABLE `user_favorite` (
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '用户歌曲收藏表';
 
 -- ------------------------------------------------------------
--- 8. 系统参数配置表
+-- 8. 用户最近播放表（按用户/歌曲聚合，保留最后播放时间与次数）
+-- ------------------------------------------------------------
+DROP TABLE IF EXISTS `user_play_history`;
+CREATE TABLE `user_play_history` (
+  `id`              BIGINT   NOT NULL,
+  `user_id`         BIGINT   NOT NULL,
+  `song_id`         BIGINT   NOT NULL,
+  `play_count`      INT      NOT NULL DEFAULT 1,
+  `last_played_at`  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `create_time`     DATETIME DEFAULT NULL,
+  `update_time`     DATETIME DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_user_song_history` (`user_id`, `song_id`),
+  KEY `idx_user_last_played` (`user_id`, `last_played_at`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '用户最近播放历史';
+
+-- ------------------------------------------------------------
+-- 9. 系统参数配置表
 -- ------------------------------------------------------------
 DROP TABLE IF EXISTS `sys_config`;
 CREATE TABLE `sys_config` (
@@ -156,7 +173,7 @@ CREATE TABLE `sys_config` (
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '系统参数配置表';
 
 -- ------------------------------------------------------------
--- 9. 字典类型表（代码表）
+-- 10. 字典类型表（代码表）
 -- ------------------------------------------------------------
 DROP TABLE IF EXISTS `sys_dict`;
 CREATE TABLE `sys_dict` (
@@ -172,7 +189,7 @@ CREATE TABLE `sys_dict` (
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '字典类型表';
 
 -- ------------------------------------------------------------
--- 10. 字典数据表（代码表内容）
+-- 11. 字典数据表（代码表内容）
 -- ------------------------------------------------------------
 DROP TABLE IF EXISTS `sys_dict_data`;
 CREATE TABLE `sys_dict_data` (
@@ -301,6 +318,12 @@ INSERT INTO `user_favorite` (`id`, `user_id`, `song_id`, `create_time`) VALUES
 (1, 2, 1, NOW()),
 (2, 2, 4, NOW()),
 (3, 2, 6, NOW());
+
+-- 最近播放（演示用户最近听过 6 / 4 / 1，登录后可继续收听）
+INSERT INTO `user_play_history` (`id`, `user_id`, `song_id`, `play_count`, `last_played_at`, `create_time`, `update_time`) VALUES
+(1, 2, 6, 9, DATE_SUB(NOW(), INTERVAL 10 MINUTE), NOW(), NOW()),
+(2, 2, 4, 4, DATE_SUB(NOW(), INTERVAL 35 MINUTE), NOW(), NOW()),
+(3, 2, 1, 12, DATE_SUB(NOW(), INTERVAL 1 HOUR), NOW(), NOW());
 
 -- 系统参数
 INSERT INTO `sys_config` (`id`, `config_key`, `config_value`, `config_name`, `remark`, `create_time`, `update_time`) VALUES

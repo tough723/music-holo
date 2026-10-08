@@ -368,6 +368,70 @@ route('get', '/song/page', async (ctx) => {
   return paged
 })
 
+route('get', '/search', async (ctx) => {
+  const keyword = String(ctx.params.keyword || '').trim()
+  const limit = Math.min(20, Math.max(1, num(ctx.params.limit, 8)))
+  if (!keyword) return { keyword: '', songs: [], singers: [], playlists: [] }
+  const q = keyword.toLocaleLowerCase()
+  const singers = state.singers
+    .filter((s) => s.status === 1 && s.name.toLocaleLowerCase().includes(q))
+    .sort((a, b) => a.sort - b.sort || b.id - a.id)
+    .slice(0, limit)
+  const singerIds = new Set(singers.map((s) => s.id))
+  const songs = state.songs
+    .filter((s) => s.status === 1 && (
+      s.title.toLocaleLowerCase().includes(q) ||
+      (s.album || '').toLocaleLowerCase().includes(q) ||
+      (s.lyric || '').toLocaleLowerCase().includes(q) ||
+      singerIds.has(s.singerId)
+    ))
+    .sort((a, b) => b.playCount - a.playCount || b.id - a.id)
+    .slice(0, limit)
+    .map((song) => {
+      const vo = songVO(song)
+      delete vo.lyric
+      if (ctx.user) vo.favorite = state.favorites.some((f) => f.userId === ctx.user.id && f.songId === song.id)
+      return vo
+    })
+  const playlists = state.playlists
+    .filter((p) => (p.isPublic === 1 || (ctx.user && (ctx.user.role === 0 || p.creatorId === ctx.user.id))) && (
+      p.name.toLocaleLowerCase().includes(q) || (p.description || '').toLocaleLowerCase().includes(q)
+    ))
+    .sort((a, b) => b.playCount - a.playCount || b.id - a.id)
+    .slice(0, limit)
+    .map(playlistVO)
+  return { keyword, songs, singers: singers.map(singerVO), playlists }
+})
+
+route('get', '/recommend/songs', async (ctx) => {
+  const limit = Math.min(24, Math.max(1, num(ctx.params.limit, 8)))
+  const history = ctx.user
+    ? state.playHistory.filter((h) => h.userId === ctx.user.id).sort((a, b) => String(b.lastPlayedAt).localeCompare(String(a.lastPlayedAt)))
+    : []
+  const favorites = ctx.user ? state.favorites.filter((f) => f.userId === ctx.user.id) : []
+  const seedIds = [...history.map((h) => h.songId), ...favorites.map((f) => f.songId)]
+  const seedSongs = state.songs.filter((s) => seedIds.includes(s.id))
+  const singerWeights = new Map()
+  const categoryWeights = new Map()
+  seedSongs.forEach((song) => {
+    singerWeights.set(song.singerId, (singerWeights.get(song.singerId) || 0) + 1)
+    categoryWeights.set(song.categoryId, (categoryWeights.get(song.categoryId) || 0) + 1)
+  })
+  const excluded = new Set([
+    ...history.slice(0, 5).map((h) => h.songId),
+    ...favorites.map((f) => f.songId)
+  ])
+  const list = state.songs.filter((s) => s.status === 1 && !excluded.has(s.id))
+  const score = (song) => (singerWeights.get(song.singerId) || 0) * 5 +
+    (categoryWeights.get(song.categoryId) || 0) * 3 + Math.log1p(song.playCount || 0) / 20
+  list.sort((a, b) => score(b) - score(a) || b.playCount - a.playCount || b.id - a.id)
+  return list.slice(0, limit).map((song) => {
+    const vo = songVO(song)
+    delete vo.lyric
+    return vo
+  })
+})
+
 route('get', '/song/:id', async (ctx) => {
   const song = state.songs.find((s) => s.id === num(ctx.params.id))
   if (!song) throw mockError(500, '歌曲不存在')
@@ -430,7 +494,19 @@ route('delete', '/song/:id', async (ctx) => {
 route('put', '/song/:id/play', async (ctx) => {
   const song = state.songs.find((s) => s.id === num(ctx.params.id))
   if (!song) throw mockError(500, '歌曲不存在')
+  if (song.status !== 1) throw mockError(500, '歌曲已下架')
   song.playCount = (song.playCount || 0) + 1
+  if (ctx.user) {
+    const now = new Date().toISOString()
+    let row = state.playHistory.find((item) => item.userId === ctx.user.id && item.songId === song.id)
+    if (row) {
+      row.playCount += 1
+      row.lastPlayedAt = now
+    } else {
+      row = { id: state.genId(), userId: ctx.user.id, songId: song.id, playCount: 1, lastPlayedAt: now }
+      state.playHistory.push(row)
+    }
+  }
   return song.playCount
 })
 
@@ -493,12 +569,19 @@ route('get', '/playlist/page', async (ctx) => {
 route('get', '/playlist/:id', async (ctx) => {
   const playlist = state.playlists.find((p) => p.id === num(ctx.params.id))
   if (!playlist) throw mockError(500, '歌单不存在')
+  if (playlist.isPublic !== 1 && !(ctx.user && (ctx.user.role === 0 || playlist.creatorId === ctx.user.id))) {
+    throw mockError(404, '歌单不存在')
+  }
   return playlistVO(playlist)
 })
 
 route('get', '/playlist/:id/songs', async (ctx) => {
   const id = num(ctx.params.id)
-  if (!state.playlists.some((p) => p.id === id)) throw mockError(500, '歌单不存在')
+  const playlist = state.playlists.find((p) => p.id === id)
+  if (!playlist) throw mockError(500, '歌单不存在')
+  if (playlist.isPublic !== 1 && !(ctx.user && (ctx.user.role === 0 || playlist.creatorId === ctx.user.id))) {
+    throw mockError(404, '歌单不存在')
+  }
   const relations = state.playlistSongs
     .filter((ps) => ps.playlistId === id)
     .sort((a, b) => a.sort - b.sort)
@@ -634,6 +717,40 @@ route('delete', '/play/queue/:songId', async (ctx) => {
   const queue = queueOf(user.id)
   const idx = queue.indexOf(num(ctx.params.songId))
   if (idx >= 0) queue.splice(idx, 1)
+  return null
+})
+
+// ---------- 最近播放 ----------
+route('get', '/history/page', async (ctx) => {
+  const user = requireUser(ctx)
+  const { pageNum = 1, pageSize = 20 } = ctx.params
+  const list = state.playHistory
+    .filter((row) => row.userId === user.id)
+    .sort((a, b) => String(b.lastPlayedAt).localeCompare(String(a.lastPlayedAt)))
+    .map((row) => {
+      const song = state.songs.find((item) => item.id === row.songId)
+      if (!song || song.status !== 1) return null
+      const vo = songVO(song)
+      delete vo.lyric
+      vo.personalPlayCount = row.playCount
+      vo.lastPlayedAt = row.lastPlayedAt
+      vo.favorite = state.favorites.some((f) => f.userId === user.id && f.songId === song.id)
+      return vo
+    })
+    .filter(Boolean)
+  return pageOf(list, num(pageNum, 1), Math.min(50, num(pageSize, 20)))
+})
+
+route('delete', '/history', async (ctx) => {
+  const user = requireUser(ctx)
+  state.playHistory = state.playHistory.filter((row) => row.userId !== user.id)
+  return null
+})
+
+route('delete', '/history/:songId', async (ctx) => {
+  const user = requireUser(ctx)
+  const songId = num(ctx.params.songId)
+  state.playHistory = state.playHistory.filter((row) => !(row.userId === user.id && row.songId === songId))
   return null
 })
 

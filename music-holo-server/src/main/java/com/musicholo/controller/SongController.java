@@ -71,6 +71,7 @@ public class SongController {
     @Operation(summary = "歌曲播放（播放量 +1，返回最新播放量）")
     @PutMapping("/{id}/play")
     public Result<Long> play(@PathVariable Long id) {
-        return Result.success(songService.play(id));
+        Long userId = StpUtil.isLogin() ? StpUtil.getLoginIdAsLong() : null;
+        return Result.success(songService.play(id, userId));
     }
 }

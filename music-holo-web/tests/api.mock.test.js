@@ -7,6 +7,10 @@ import * as favoriteApi from '@/api/favorite'
 import * as lyricApi from '@/api/lyric'
 import * as playlistApi from '@/api/playlist'
 import * as queueApi from '@/api/queue'
+import * as searchApi from '@/api/search'
+import * as recommendationApi from '@/api/recommend'
+import * as historyApi from '@/api/history'
+import * as songApi from '@/api/song'
 
 // API 错误仍由 Mock 层抛出；只屏蔽 UI 通知，避免测试输出污染。
 vi.mock('element-plus', () => ({
@@ -98,5 +102,61 @@ describe('内置 Mock API 集成测试', () => {
     expect((await playlistApi.songsOfPlaylist(created.id)).map((song) => song.id)).toEqual([2])
     await playlistApi.remove(created.id)
     await expect(playlistApi.detail(created.id)).rejects.toMatchObject({ code: 500 })
+  })
+
+  it('全局搜索支持歌曲/歌词/歌手和公开歌单，并隐藏完整歌词正文', async () => {
+    const result = await searchApi.search('霓虹', 12)
+    expect(result.keyword).toBe('霓虹')
+    expect(result.songs.some((song) => song.id === 1)).toBe(true)
+    expect(result.playlists.some((playlist) => playlist.name === '深夜霓虹')).toBe(true)
+    expect(result.songs[0]).not.toHaveProperty('lyric')
+  })
+
+  it('个性化推荐排除最近已听/已收藏歌曲，并限制结果数量', async () => {
+    await loginAs('demo')
+    const picks = await recommendationApi.songs(4)
+    const ids = picks.map((song) => song.id)
+    expect(picks.length).toBeGreaterThan(0)
+    expect(picks.length).toBeLessThanOrEqual(4)
+    expect(new Set(ids).size).toBe(ids.length)
+    expect(ids).not.toEqual(expect.arrayContaining([1, 4, 6]))
+    expect(picks[0]).not.toHaveProperty('lyric')
+  })
+
+  it('播放会记录登录用户历史；支持按歌曲移除、清空，匿名播放不写入个人历史', async () => {
+    await useUserStore().logoutLocal()
+    await songApi.play(8)
+    await loginAs('demo')
+    expect((await historyApi.page()).records.some((song) => song.id === 8)).toBe(false)
+
+    await songApi.play(3)
+    await songApi.play(3)
+    let page = await historyApi.page()
+    expect(page.records[0]).toMatchObject({ id: 3, personalPlayCount: 2 })
+    expect(page.records[0].lastPlayedAt).toBeTruthy()
+
+    await historyApi.remove(3)
+    expect((await historyApi.page()).records.some((song) => song.id === 3)).toBe(false)
+    await historyApi.clear()
+    page = await historyApi.page()
+    expect(page.total).toBe(0)
+  })
+
+  it('私密歌单只有所有者和管理员能读取详情及曲目', async () => {
+    await loginAs('demo')
+    const created = await playlistApi.save({ name: '仅自己可见', isPublic: 0 })
+    await playlistApi.addSongs(created.id, [2])
+    await expect(playlistApi.detail(created.id)).resolves.toMatchObject({ id: created.id })
+
+    await useUserStore().logoutLocal()
+    await expect(playlistApi.detail(created.id)).rejects.toMatchObject({ code: 404 })
+    await expect(playlistApi.songsOfPlaylist(created.id)).rejects.toMatchObject({ code: 404 })
+    expect((await playlistApi.page({ onlyMine: true })).records).toEqual([])
+
+    await loginAs('admin')
+    await expect(playlistApi.songsOfPlaylist(created.id)).resolves.toHaveLength(1)
+    await useUserStore().logoutLocal()
+    await loginAs('demo')
+    await playlistApi.remove(created.id)
   })
 })

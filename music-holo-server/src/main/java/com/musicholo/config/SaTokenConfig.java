@@ -31,7 +31,7 @@ public class SaTokenConfig implements WebMvcConfigurer {
 
     /** 全部放行的 GET 接口前缀（资源浏览类，无需登录即可访问） */
     private static final List<String> PUBLIC_GET_PREFIX = List.of(
-            "/singer", "/song", "/category", "/playlist",
+            "/search", "/recommend", "/singer", "/song", "/category", "/playlist",
             "/common/dict", "/common/download",
             "/lyric/parse", "/lyric/export",
             "/system/theme", "/system/config",
@@ -68,6 +68,10 @@ public class SaTokenConfig implements WebMvcConfigurer {
     public static boolean isPublic(String path, String method) {
         // 跨域预检请求直接放行
         if ("OPTIONS".equalsIgnoreCase(method)) {
+            return true;
+        }
+        // 播放上报允许游客调用；已登录用户额外写入个人收听历史
+        if ("PUT".equalsIgnoreCase(method) && path.matches("/song/[0-9]+/play")) {
             return true;
         }
         for (String prefix : PUBLIC_PREFIX) {

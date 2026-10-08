@@ -45,13 +45,15 @@ public class PlaylistController {
     @Operation(summary = "歌单详情")
     @GetMapping("/{id}")
     public Result<PlaylistVO> detail(@PathVariable Long id) {
-        return Result.success(playlistService.detail(id));
+        Long userId = StpUtil.isLogin() ? StpUtil.getLoginIdAsLong() : null;
+        return Result.success(playlistService.detail(id, userId));
     }
 
     @Operation(summary = "查询歌单内的歌曲列表")
     @GetMapping("/{id}/songs")
     public Result<List<SongVO>> songs(@PathVariable Long id) {
-        return Result.success(playlistService.songsOfPlaylist(id));
+        Long userId = StpUtil.isLogin() ? StpUtil.getLoginIdAsLong() : null;
+        return Result.success(playlistService.songsOfPlaylist(id, userId));
     }
 
     @Operation(summary = "新增歌单")

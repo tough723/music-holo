@@ -83,6 +83,28 @@
       />
     </section>
 
+    <!-- 行为驱动的猜你喜欢 -->
+    <section class="section">
+      <div class="section-head">
+        <div>
+          <div class="section-title">猜你喜欢</div>
+          <div class="section-sub">
+            {{ userStore.isLogin ? '根据你的近期收听与收藏，继续发现相似声音' : '从高热歌曲出发，找到下一首喜欢的歌' }}
+          </div>
+        </div>
+        <el-link type="primary" @click="$router.push('/charts')">查看排行榜</el-link>
+      </div>
+      <SongList
+        :songs="recommendedSongs"
+        :loading="loading"
+        :favorite-ids="favoriteIds"
+        show-album
+        @play="onRecommendPlay"
+        @toggle-favorite="onToggleFavorite"
+        @add-queue="onAddQueue"
+      />
+    </section>
+
     <!-- 推荐歌单 -->
     <section class="section">
       <div class="section-head">
@@ -153,6 +175,7 @@ import * as singerApi from '@/api/singer'
 import * as playlistApi from '@/api/playlist'
 import * as categoryApi from '@/api/category'
 import * as favoriteApi from '@/api/favorite'
+import * as recommendApi from '@/api/recommend'
 import { usePlayerStore } from '@/store/player'
 import { useUserStore } from '@/store/user'
 import SongList from '@/components/SongList.vue'
@@ -165,6 +188,7 @@ const userStore = useUserStore()
 
 const loading = ref(false)
 const hotSongs = ref([])
+const recommendedSongs = ref([])
 const singers = ref([])
 const playlists = ref([])
 const categories = ref([])
@@ -175,13 +199,15 @@ const genderText = (g) => ({ 0: '保密', 1: '男', 2: '女' })[g] || '保密'
 const loadData = async () => {
   loading.value = true
   try {
-    const [songPage, singerPage, playlistPage, categoryList] = await Promise.all([
+    const [songPage, singerPage, playlistPage, categoryList, recommendations] = await Promise.all([
       songApi.page({ pageNum: 1, pageSize: 8 }),
       singerApi.page({ pageNum: 1, pageSize: 6 }),
       playlistApi.page({ pageNum: 1, pageSize: 6 }),
-      categoryApi.list()
+      categoryApi.list(),
+      recommendApi.songs(8).catch(() => [])
     ])
     hotSongs.value = songPage.records || []
+    recommendedSongs.value = recommendations || []
     singers.value = singerPage.records || []
     playlists.value = playlistPage.records || []
     categories.value = categoryList || []
@@ -213,6 +239,10 @@ const goSongs = (categoryId) => {
 
 const onPlay = (song, index) => {
   playerStore.playAll(hotSongs.value, song.id ?? hotSongs.value[index]?.id)
+}
+
+const onRecommendPlay = (song, index) => {
+  playerStore.playAll(recommendedSongs.value, song.id ?? recommendedSongs.value[index]?.id)
 }
 
 const onToggleFavorite = async (song) => {

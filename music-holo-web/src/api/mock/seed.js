@@ -87,6 +87,12 @@ export function createSeed() {
     { id: 3, userId: 2, songId: 6, createTime: '2026-01-03 10:02:00' }
   ]
 
+  const playHistory = [
+    { id: 1, userId: 2, songId: 6, playCount: 9, lastPlayedAt: new Date(Date.now() - 10 * 60_000).toISOString() },
+    { id: 2, userId: 2, songId: 4, playCount: 4, lastPlayedAt: new Date(Date.now() - 35 * 60_000).toISOString() },
+    { id: 3, userId: 2, songId: 1, playCount: 12, lastPlayedAt: new Date(Date.now() - 60 * 60_000).toISOString() }
+  ]
+
   const configs = [
     { id: 1, configKey: 'theme', configValue: 'cyan', configName: '全局默认主题', remark: '平台全局默认主题' },
     { id: 2, configKey: 'site_name', configValue: '3D全息音乐', configName: '站点名称', remark: '平台名称' }
@@ -108,5 +114,5 @@ export function createSeed() {
   let nextId = 100
   const genId = () => ++nextId
 
-  return { users, singers, categories, songs, playlists, playlistSongs, favorites, configs, dictData, queues, genId }
+  return { users, singers, categories, songs, playlists, playlistSongs, favorites, playHistory, configs, dictData, queues, genId }
 }
