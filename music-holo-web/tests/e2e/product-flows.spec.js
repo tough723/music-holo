@@ -168,14 +168,23 @@ test('设置页支持主题同步、个人资料保存与修改密码校验', as
   await expect(page.getByText('两次输入的新密码不一致', { exact: true })).toBeVisible()
 })
 
-test('本机自定义源支持导入、排序和导出，并安全地不执行脚本', async ({ page }) => {
+test('本机自定义源支持导入、排序、隔离兼容检测和导出', async ({ page }) => {
   await loginAs(page, 'demo')
   await openMenu(page, '设置')
   await page.getByRole('tab', { name: '自定义源' }).click()
-  await expect(page.getByText('脚本执行尚未开放')).toBeVisible()
+  await expect(page.getByText('脚本默认不会自动运行')).toBeVisible()
 
   const pageErrors = []
+  let bridgedRequestHeaders = null
   page.on('pageerror', (error) => pageErrors.push(error.message))
+  await page.route('https://api.example.org/ping', async (route) => {
+    bridgedRequestHeaders = route.request().headers()
+    await route.fulfill({
+      status: 200,
+      headers: { 'access-control-allow-origin': '*', 'content-type': 'application/json' },
+      body: '{"ready":true}'
+    })
+  })
   const scriptA = `/**
  * @name 源 A
  * @version 1.0
@@ -187,7 +196,20 @@ throw new Error("must not execute")`
  * @name 源 B
  * @version 2.0
  */
-export default {}`
+const lx = globalThis.lx
+  if (typeof fetch !== 'undefined' || typeof document !== 'undefined' || typeof localStorage !== 'undefined') {
+  throw new Error('隔离环境暴露了不应访问的浏览器能力')
+}
+if (lx.utils.crypto.md5('abc') !== '900150983cd24fb0d6963f7d28e17f72') {
+  throw new Error('隔离环境 MD5 工具校验失败')
+}
+lx.request('https://api.example.org/ping', { method: 'GET' }, (error, response) => {
+  if (error) throw error
+  if (response?.statusCode !== 200 || response?.body !== '{"ready":true}') throw new Error('隔离网络桥接失败')
+  lx.send(lx.EVENT_NAMES.inited, { sources: {
+    kw: { name: '酷我测试源', type: 'music', actions: ['musicUrl', 'lyric'], qualitys: ['128k', '320k'] }
+  } })
+})`
   const importInput = page.getByTestId('custom-source-file')
   await importInput.setInputFiles({ name: 'source-a.js', mimeType: 'text/javascript', buffer: Buffer.from(scriptA) })
   await expect(page.locator('.source-card h3')).toHaveText(['源 A'])
@@ -202,6 +224,16 @@ export default {}`
   await expect(page.locator('.source-card h3')).toHaveText(['源 B', '源 A'])
   await page.getByRole('button', { name: '上移 源 A' }).click()
   await expect(page.locator('.source-card h3')).toHaveText(['源 A', '源 B'])
+
+  await page.getByRole('button', { name: '隔离兼容检测 源 B' }).click()
+  await page.getByRole('button', { name: '我信任并检测' }).click()
+  await expect(page.getByText('确认音源网络请求')).toBeVisible()
+  await page.getByRole('button', { name: '仅本次允许' }).click()
+  const compatibilityResult = page.locator('.source-card').filter({ hasText: '源 B' }).locator('.source-runtime-result')
+  await expect(compatibilityResult).toContainText('初始化声明 1 个平台')
+  await expect(compatibilityResult).toContainText('酷我测试源')
+  expect(bridgedRequestHeaders).not.toHaveProperty('cookie')
+  expect(bridgedRequestHeaders).not.toHaveProperty('authorization')
 
   await page.getByRole('button', { name: '查看代码' }).first().click()
   await expect(page.getByRole('textbox', { name: '源 A 源码，只读' })).toHaveValue(/must not execute/)

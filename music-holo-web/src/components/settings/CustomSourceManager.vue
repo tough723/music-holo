@@ -39,9 +39,9 @@
     </div>
 
     <el-alert class="source-safety-alert" type="warning" :closable="false" show-icon>
-      <template #title>脚本执行尚未开放</template>
+      <template #title>脚本默认不会自动运行</template>
       <template #default>
-        当前版本支持导入、识别信息、重命名、排序、查看、导出与删除；不会运行导入脚本，也不会将其接入歌曲搜索或播放。兼容运行时需先完成隔离沙箱与安全审计。
+        可手动对可信脚本执行一次性隔离兼容检测：脚本在受限 Worker 中运行，无法访问页面 DOM、本机存储或直接联网；外部 HTTPS 请求须按域名确认，并由浏览器 CORS 策略控制。检测结束后沙箱销毁。该检测不会将音源接入歌曲搜索或播放。
       </template>
     </el-alert>
 
@@ -94,7 +94,9 @@
             <div class="source-title-row">
               <h3>{{ source.name }}</h3>
               <el-tag size="small" effect="plain">v{{ source.version }}</el-tag>
-              <el-tag size="small" type="info" effect="plain">已导入 · 未执行</el-tag>
+              <el-tag v-if="!compatibilityBySource[source.id]" size="small" type="info" effect="plain">已导入 · 未运行</el-tag>
+              <el-tag v-else-if="!compatibilityBySource[source.id].error" size="small" type="success" effect="plain">隔离检测通过</el-tag>
+              <el-tag v-else size="small" type="danger" effect="plain">检测失败</el-tag>
             </div>
             <p v-if="source.description" class="source-description">{{ source.description }}</p>
             <p v-else class="source-description source-filename">{{ source.fileName }}</p>
@@ -116,6 +118,7 @@
             <el-button text size="small" :disabled="index === sources.length - 1" :aria-label="`下移 ${source.name}`" @click="moveSource(index, 1)">下移</el-button>
           </div>
           <div class="source-file-actions">
+            <el-button text size="small" :loading="checkingSourceId === source.id" :aria-label="`隔离兼容检测 ${source.name}`" @click="checkCompatibility(source)">兼容检测</el-button>
             <el-button text size="small" @click="renameSource(source)">重命名</el-button>
             <el-button text size="small" @click="toggleSourceCode(source.id)">{{ expandedSourceId === source.id ? '收起代码' : '查看代码' }}</el-button>
             <el-button text size="small" @click="exportSource(source)">导出</el-button>
@@ -130,6 +133,19 @@
               </template>
             </el-popconfirm>
           </div>
+        </div>
+
+        <div v-if="compatibilityBySource[source.id]" class="source-runtime-result" :class="{ 'is-error': compatibilityBySource[source.id].error }" role="status">
+          <template v-if="compatibilityBySource[source.id].error">
+            <strong>隔离检测未通过</strong>
+            <span>{{ compatibilityBySource[source.id].error }}</span>
+          </template>
+          <template v-else>
+            <strong>初始化声明 {{ compatibilityBySource[source.id].sources.length }} 个平台</strong>
+            <el-tag v-for="capability in compatibilityBySource[source.id].sources" :key="capability.key" size="small" effect="plain">
+              {{ capability.name }} · {{ capability.actions.length }} 项能力
+            </el-tag>
+          </template>
         </div>
 
         <el-input
@@ -164,6 +180,7 @@ import {
   sourceFileNameFromUrl,
   writeCustomSources
 } from '@/utils/customSources'
+import { performCustomSourceRequest, runCustomSourceCompatibility } from '@/utils/customSourceRuntime'
 
 const userStore = useUserStore()
 const fileInput = ref(null)
@@ -172,6 +189,8 @@ const sourceUrl = ref('')
 const sourceFilter = ref('')
 const importing = ref(false)
 const importingUrl = ref(false)
+const checkingSourceId = ref('')
+const compatibilityBySource = ref({})
 const expandedSourceId = ref('')
 const sourceOwner = computed(() => userStore.userInfo?.id ?? userStore.userInfo?.username ?? 'local')
 const storageKey = computed(() => `${CUSTOM_SOURCE_STORAGE_KEY}:${String(sourceOwner.value).replace(/[^a-zA-Z0-9._-]/g, '_')}`)
@@ -188,6 +207,8 @@ watch(storageKey, (key) => {
   sources.value = readCustomSources(localStorage, key)
   sourceFilter.value = ''
   expandedSourceId.value = ''
+  compatibilityBySource.value = {}
+  checkingSourceId.value = ''
 })
 
 function persist(nextSources) {
@@ -218,7 +239,7 @@ function addSource(fileName, script) {
     return false
   }
   if (persist([source, ...sources.value])) {
-    ElMessage.success(`已导入「${source.name}」，脚本不会被执行`)
+    ElMessage.success(`已导入「${source.name}」，不会自动运行`)
     return true
   }
   return false
@@ -275,7 +296,7 @@ async function onBackupFileSelected(event) {
     if (sources.value.length + imported.length > MAX_CUSTOM_SOURCES) {
       throw new Error(`导入后会超过 ${MAX_CUSTOM_SOURCES} 个音源上限，请先删除部分脚本`)
     }
-    if (persist([...imported, ...sources.value])) ElMessage.success(`已恢复 ${imported.length} 个音源，脚本不会被执行`)
+    if (persist([...imported, ...sources.value])) ElMessage.success(`已恢复 ${imported.length} 个音源，不会自动运行`)
   } catch (error) {
     ElMessage.warning(error?.message || '音源备份读取失败')
   } finally {
@@ -359,6 +380,46 @@ function moveSource(index, offset) {
   persist(reordered)
 }
 
+async function checkCompatibility(source) {
+  if (checkingSourceId.value) return
+  let executionStarted = false
+  try {
+    await ElMessageBox.confirm(
+      '此操作会执行该脚本的初始化代码。脚本仅在一次性隔离 Worker 中运行，没有页面 DOM、本机存储或直接网络能力；仍请只检测你信任的脚本。',
+      '隔离兼容检测',
+      { type: 'warning', confirmButtonText: '我信任并检测', cancelButtonText: '取消', closeOnClickModal: false }
+    )
+    executionStarted = true
+    checkingSourceId.value = source.id
+    const approvedOrigins = new Set()
+    const result = await runCustomSourceCompatibility(source, {
+      onRequest: async (rawUrl, options) => {
+        const target = parseCustomSourceUrl(rawUrl)
+        if (!approvedOrigins.has(target.origin)) {
+          await ElMessageBox.confirm(
+            `「${source.name}」请求访问 ${target.origin}。请求不携带 Cookie 或登录态，不绕过浏览器 CORS；仅本次检测允许。`,
+            '确认音源网络请求',
+            { type: 'warning', confirmButtonText: '仅本次允许', cancelButtonText: '拒绝请求', closeOnClickModal: false }
+          )
+          approvedOrigins.add(target.origin)
+        }
+        return performCustomSourceRequest(target.href, options)
+      }
+    })
+    compatibilityBySource.value = { ...compatibilityBySource.value, [source.id]: result }
+    ElMessage.success(`隔离初始化通过：声明 ${result.sources.length} 个平台；尚未接入搜索或播放`)
+  } catch (error) {
+    const wasCancelled = error === 'cancel' || error === 'close'
+    if (!wasCancelled || executionStarted) {
+      const message = wasCancelled ? '网络请求已拒绝或检测已取消' : (error?.message || '隔离兼容检测失败')
+      compatibilityBySource.value = { ...compatibilityBySource.value, [source.id]: { error: message, sources: [] } }
+      ElMessage.warning(message)
+    }
+  } finally {
+    checkingSourceId.value = ''
+  }
+}
+
 async function renameSource(source) {
   try {
     const { value } = await ElMessageBox.prompt('输入此设备中显示的名称。', '重命名音源', {
@@ -382,7 +443,11 @@ function toggleSourceCode(sourceId) {
 
 function removeSource(sourceId) {
   const next = sources.value.filter((source) => source.id !== sourceId)
-  if (persist(next) && expandedSourceId.value === sourceId) expandedSourceId.value = ''
+  if (!persist(next)) return
+  if (expandedSourceId.value === sourceId) expandedSourceId.value = ''
+  const nextResults = { ...compatibilityBySource.value }
+  delete nextResults[sourceId]
+  compatibilityBySource.value = nextResults
 }
 
 function downloadText(fileName, contents, mimeType) {
@@ -458,6 +523,10 @@ function formatDate(value) {
 .source-meta span:nth-child(2) { overflow-wrap: anywhere; }
 .source-card-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-color); }
 .source-order-actions, .source-file-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 0 3px; }
+.source-runtime-result { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-top: 10px; padding: 9px 11px; border: 1px solid color-mix(in srgb, var(--holo-primary) 28%, transparent); border-radius: 10px; color: var(--text-sub); background: color-mix(in srgb, var(--holo-primary) 6%, transparent); font-size: 10px; }
+.source-runtime-result strong { color: var(--text-main); font-size: 11px; }
+.source-runtime-result.is-error { border-color: color-mix(in srgb, var(--el-color-danger) 34%, transparent); background: color-mix(in srgb, var(--el-color-danger) 6%, transparent); }
+.source-runtime-result.is-error span { overflow-wrap: anywhere; }
 .source-code-view { margin-top: 12px; }
 .source-code-view :deep(textarea) { font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .source-empty { display: flex; min-height: 220px; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 22px; text-align: center; }
