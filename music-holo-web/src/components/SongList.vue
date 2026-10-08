@@ -15,7 +15,7 @@
     <el-table-column label="歌曲" min-width="260">
       <template #default="{ row }">
         <div class="song-cell">
-          <div class="song-cover" @click.stop="emit('play', row, index)">
+          <div class="song-cover" @click.stop="emit('play', row, props.songs.indexOf(row))">
             <Cover :src="row.cover" :text="row.title" :size="44" />
             <div class="cover-mask">
               <el-icon><VideoPlay /></el-icon>

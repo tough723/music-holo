@@ -92,7 +92,10 @@
             {{ userStore.isLogin ? '根据你的近期收听与收藏，继续发现相似声音' : '从高热歌曲出发，找到下一首喜欢的歌' }}
           </div>
         </div>
-        <el-link type="primary" @click="$router.push('/charts')">查看排行榜</el-link>
+        <div class="discovery-links">
+          <el-link type="primary" @click="$router.push('/daily')"><el-icon><Calendar /></el-icon> 每日推荐</el-link>
+          <el-link @click="$router.push('/charts')">查看排行榜</el-link>
+        </div>
       </div>
       <SongList
         :songs="recommendedSongs"
@@ -380,6 +383,11 @@ onMounted(() => {
   justify-content: space-between;
   margin-bottom: 16px;
 }
+.discovery-links {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
 .section-title {
   font-size: 20px;
   font-weight: 600;
@@ -508,6 +516,9 @@ onMounted(() => {
   }
   .hero-title {
     font-size: 34px;
+  }
+  .discovery-links {
+    gap: 10px;
   }
 }
 </style>

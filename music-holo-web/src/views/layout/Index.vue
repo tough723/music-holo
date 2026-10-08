@@ -20,6 +20,9 @@
         <el-menu-item index="/home">
           <el-icon><HomeFilled /></el-icon><span>首页</span>
         </el-menu-item>
+        <el-menu-item index="/daily">
+          <el-icon><Calendar /></el-icon><span>每日推荐</span>
+        </el-menu-item>
         <el-menu-item index="/singers">
           <el-icon><User /></el-icon><span>歌手</span>
         </el-menu-item>

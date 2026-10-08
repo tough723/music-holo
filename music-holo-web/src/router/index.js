@@ -20,6 +20,7 @@ const routes = [
     redirect: '/home',
     children: [
       { path: 'home', name: 'Home', component: () => import('@/views/Home.vue'), meta: { title: '首页' } },
+      { path: 'daily', name: 'DailyRecommendation', component: () => import('@/views/DailyRecommendation.vue'), meta: { title: '每日推荐' } },
       { path: 'singers', name: 'Singers', component: () => import('@/views/Singers.vue'), meta: { title: '歌手' } },
       { path: 'singers/:id', name: 'SingerDetail', component: () => import('@/views/SingerDetail.vue'), meta: { title: '歌手详情' } },
       { path: 'playlists', name: 'Playlists', component: () => import('@/views/Playlists.vue'), meta: { title: '歌单' } },

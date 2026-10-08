@@ -123,6 +123,11 @@ describe('内置 Mock API 集成测试', () => {
     expect(new Set(ids).size).toBe(ids.length)
     expect(ids).not.toEqual(expect.arrayContaining([1, 4, 6]))
     expect(picks[0]).not.toHaveProperty('lyric')
+
+    const dailyPicks = await recommendationApi.songs(24)
+    expect(dailyPicks.length).toBeGreaterThan(0)
+    expect(dailyPicks.length).toBeLessThanOrEqual(24)
+    expect(new Set(dailyPicks.map((song) => song.id)).size).toBe(dailyPicks.length)
   })
 
   it('播放会记录登录用户历史；支持按歌曲移除、清空，匿名播放不写入个人历史', async () => {
