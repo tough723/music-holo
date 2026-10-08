@@ -79,6 +79,24 @@ test('播放器同步曲目到系统媒体会话并响应播放暂停操作', as
   await expect.poll(() => page.evaluate(() => window.__musicHoloMediaSession.playbackState)).toBe('playing')
 })
 
+test('窄屏导航抽屉可切页，游客菜单提供登录注册入口', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/home')
+
+  await expect(page.locator('.sidebar')).toBeHidden()
+  await page.locator('.user-chip').click()
+  await expect(page.getByRole('menuitem', { name: '登录' })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: '注册' })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: '退出登录' })).toHaveCount(0)
+  await page.keyboard.press('Escape')
+
+  await page.getByRole('button', { name: '打开导航' }).click()
+  await expect(page.getByRole('heading', { name: 'MUSIC HOLO 导航' })).toBeVisible()
+  await page.getByRole('menuitem', { name: '每日推荐' }).click()
+  await expect(page).toHaveURL(/\/daily$/)
+  await expect(page.getByRole('heading', { name: 'MUSIC HOLO 导航' })).not.toBeVisible()
+})
+
 test('demo 用户可以收藏歌曲并查看个人播放历史', async ({ page }) => {
   await loginAs(page, 'demo')
   await openMenu(page, '全局搜索')
