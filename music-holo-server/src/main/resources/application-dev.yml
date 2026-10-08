@@ -1,0 +1,9 @@
+mybatis-plus:
+  configuration:
+    # 开发环境打印 SQL
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+
+logging:
+  level:
+    com.musicholo: debug
+    cn.dev33.satoken: info

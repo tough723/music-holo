@@ -1,0 +1,26 @@
+{
+  "name": "music-holo-web",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "3D全息投影音乐播放平台 - 前端（Vue3 + Vite + Element Plus + Pinia + ECharts）",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "gen:audio": "node scripts/gen-audio.mjs"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "^2.3.1",
+    "axios": "^1.6.2",
+    "echarts": "^5.4.3",
+    "element-plus": "^2.5.1",
+    "pinia": "2.1.7",
+    "vue": "~3.4.0",
+    "vue-router": "4.2.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.3",
+    "vite": "^5.0.10"
+  }
+}

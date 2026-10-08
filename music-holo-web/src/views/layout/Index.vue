@@ -1,0 +1,297 @@
+<template>
+  <div class="layout">
+    <!-- 侧边导航 -->
+    <aside class="sidebar glass-panel">
+      <div class="logo" @click="$router.push('/home')">
+        <div class="logo-icon">
+          <el-icon><ChromeFilled /></el-icon>
+        </div>
+        <div class="logo-text">
+          <div class="logo-title holo-text">全息音乐</div>
+          <div class="logo-sub">MUSIC HOLO</div>
+        </div>
+      </div>
+
+      <el-menu
+        :default-active="activeMenu"
+        class="nav-menu"
+        :router="true"
+      >
+        <el-menu-item index="/home">
+          <el-icon><HomeFilled /></el-icon><span>首页</span>
+        </el-menu-item>
+        <el-menu-item index="/singers">
+          <el-icon><User /></el-icon><span>歌手</span>
+        </el-menu-item>
+        <el-menu-item index="/playlists">
+          <el-icon><Collection /></el-icon><span>歌单</span>
+        </el-menu-item>
+        <el-menu-item index="/songs">
+          <el-icon><Headset /></el-icon><span>歌曲</span>
+        </el-menu-item>
+        <el-menu-item index="/favorites">
+          <el-icon><Star /></el-icon><span>我的收藏</span>
+        </el-menu-item>
+        <el-menu-item index="/queue">
+          <el-icon><List /></el-icon><span>播放列表</span>
+        </el-menu-item>
+
+        <el-sub-menu v-if="userStore.isAdmin" index="admin">
+          <template #title>
+            <el-icon><Setting /></el-icon><span>管理后台</span>
+          </template>
+          <el-menu-item index="/admin/dashboard">
+            <el-icon><DataAnalysis /></el-icon><span>仪表盘</span>
+          </el-menu-item>
+          <el-menu-item index="/admin/singers">
+            <el-icon><User /></el-icon><span>歌手管理</span>
+          </el-menu-item>
+          <el-menu-item index="/admin/songs">
+            <el-icon><Headset /></el-icon><span>歌曲管理</span>
+          </el-menu-item>
+          <el-menu-item index="/admin/playlists">
+            <el-icon><Collection /></el-icon><span>歌单管理</span>
+          </el-menu-item>
+          <el-menu-item index="/admin/categories">
+            <el-icon><CollectionTag /></el-icon><span>分类管理</span>
+          </el-menu-item>
+        </el-sub-menu>
+
+        <el-menu-item index="/settings">
+          <el-icon><Setting /></el-icon><span>设置</span>
+        </el-menu-item>
+      </el-menu>
+
+      <div class="sidebar-footer">
+        <div class="mini-holo">
+          <HoloProjector
+            :cover="playerStore.currentSong?.cover"
+            :title="playerStore.currentSong?.title"
+            :playing="playerStore.playing"
+            :size="72"
+          />
+        </div>
+      </div>
+    </aside>
+
+    <!-- 主区域 -->
+    <div class="main">
+      <header class="header glass-panel">
+        <div class="header-title">{{ pageTitle }}</div>
+        <div class="header-user">
+          <el-dropdown @command="onCommand">
+            <div class="user-chip">
+              <div class="user-avatar">
+                <Cover :src="userStore.userInfo?.avatar" :text="userStore.userInfo?.nickname || userStore.userInfo?.username" :size="34" />
+              </div>
+              <span class="user-name">{{ userStore.userInfo?.nickname || userStore.userInfo?.username || '游客' }}</span>
+              <el-icon><ArrowDown /></el-icon>
+            </div>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="settings">
+                  <el-icon><Setting /></el-icon> 设置
+                </el-dropdown-item>
+                <el-dropdown-item command="favorites">
+                  <el-icon><Star /></el-icon> 我的收藏
+                </el-dropdown-item>
+                <el-dropdown-item divided command="logout">
+                  <el-icon><SwitchButton /></el-icon> 退出登录
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
+      </header>
+
+      <main class="content">
+        <router-view v-slot="{ Component }">
+          <transition name="page-fade" mode="out-in">
+            <component :is="Component" />
+          </transition>
+        </router-view>
+      </main>
+    </div>
+
+    <!-- 底部播放器 + 歌词面板 -->
+    <PlayerBar />
+    <LyricPanel />
+  </div>
+</template>
+
+<script setup>
+import { computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { useUserStore } from '@/store/user'
+import { usePlayerStore } from '@/store/player'
+import PlayerBar from '@/components/PlayerBar.vue'
+import LyricPanel from '@/components/LyricPanel.vue'
+import HoloProjector from '@/components/HoloProjector.vue'
+import Cover from '@/components/Cover.vue'
+
+const route = useRoute()
+const router = useRouter()
+const userStore = useUserStore()
+const playerStore = usePlayerStore()
+
+const activeMenu = computed(() => route.path)
+const pageTitle = computed(() => route.meta.title || '首页')
+
+const onCommand = async (command) => {
+  if (command === 'logout') {
+    await userStore.logout()
+    router.push('/login')
+  } else if (command === 'settings') {
+    router.push('/settings')
+  } else if (command === 'favorites') {
+    router.push('/favorites')
+  }
+}
+</script>
+
+<style scoped>
+.layout {
+  display: flex;
+  height: 100%;
+  min-height: 100vh;
+}
+
+/* 侧边栏 */
+.sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  margin: 12px 0 12px 12px;
+  border-radius: 16px;
+  overflow: hidden;
+  height: calc(100vh - var(--player-h) - 24px);
+  position: sticky;
+  top: 12px;
+}
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 16px 12px;
+  cursor: pointer;
+}
+.logo-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  color: var(--holo-primary);
+  background: color-mix(in srgb, var(--holo-primary) 14%, transparent);
+  box-shadow: 0 0 18px var(--holo-glow);
+}
+.logo-title {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 2px;
+}
+.logo-sub {
+  font-size: 10px;
+  color: var(--text-sub);
+  letter-spacing: 3px;
+}
+
+.nav-menu {
+  flex: 1;
+  border-right: none;
+  background: transparent;
+  overflow-y: auto;
+}
+.nav-menu :deep(.el-menu-item.is-active) {
+  background: color-mix(in srgb, var(--holo-primary) 14%, transparent);
+  color: var(--holo-primary);
+  border-right: 2px solid var(--holo-primary);
+}
+
+.sidebar-footer {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0 14px;
+}
+
+/* 主区域 */
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  margin: 12px 12px 0 12px;
+  padding-bottom: calc(var(--player-h) + 12px);
+}
+.header {
+  height: 60px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  border-radius: 14px;
+}
+.header-title {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 1px;
+}
+.user-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 4px 10px 4px 4px;
+  border-radius: 999px;
+  transition: background 0.15s;
+}
+.user-chip:hover {
+  background: rgba(148, 163, 184, 0.12);
+}
+.user-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  overflow: hidden;
+}
+.user-name {
+  font-size: 13px;
+  max-width: 120px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.content {
+  margin-top: 12px;
+  flex: 1;
+  min-height: 0;
+}
+
+.page-fade-enter-active,
+.page-fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+.page-fade-enter-from,
+.page-fade-leave-to {
+  opacity: 0;
+}
+
+@media (max-width: 900px) {
+  .sidebar {
+    width: 64px;
+  }
+  .logo-text,
+  .nav-menu :deep(.el-menu-item span),
+  .nav-menu :deep(.el-sub-menu__title span),
+  .sidebar-footer {
+    display: none;
+  }
+  .pb-left {
+    width: auto !important;
+  }
+}
+</style>

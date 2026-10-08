@@ -1,0 +1,65 @@
+import { createRouter, createWebHistory } from 'vue-router'
+import { useUserStore } from '@/store/user'
+
+const routes = [
+  {
+    path: '/login',
+    name: 'Login',
+    component: () => import('@/views/Login.vue'),
+    meta: { title: '登录', guest: true }
+  },
+  {
+    path: '/register',
+    name: 'Register',
+    component: () => import('@/views/Register.vue'),
+    meta: { title: '注册', guest: true }
+  },
+  {
+    path: '/',
+    component: () => import('@/views/layout/Index.vue'),
+    redirect: '/home',
+    children: [
+      { path: 'home', name: 'Home', component: () => import('@/views/Home.vue'), meta: { title: '首页' } },
+      { path: 'singers', name: 'Singers', component: () => import('@/views/Singers.vue'), meta: { title: '歌手' } },
+      { path: 'singers/:id', name: 'SingerDetail', component: () => import('@/views/SingerDetail.vue'), meta: { title: '歌手详情' } },
+      { path: 'playlists', name: 'Playlists', component: () => import('@/views/Playlists.vue'), meta: { title: '歌单' } },
+      { path: 'playlists/:id', name: 'PlaylistDetail', component: () => import('@/views/PlaylistDetail.vue'), meta: { title: '歌单详情' } },
+      { path: 'songs', name: 'Songs', component: () => import('@/views/Songs.vue'), meta: { title: '歌曲' } },
+      { path: 'favorites', name: 'Favorites', component: () => import('@/views/Favorites.vue'), meta: { title: '我的收藏', requiresAuth: true } },
+      { path: 'queue', name: 'Queue', component: () => import('@/views/Queue.vue'), meta: { title: '播放列表', requiresAuth: true } },
+      { path: 'settings', name: 'Settings', component: () => import('@/views/Settings.vue'), meta: { title: '设置', requiresAuth: true } },
+      // ---------- 管理后台 ----------
+      { path: 'admin/dashboard', name: 'AdminDashboard', component: () => import('@/views/admin/Dashboard.vue'), meta: { title: '仪表盘', requiresAuth: true, requiresAdmin: true } },
+      { path: 'admin/singers', name: 'AdminSingers', component: () => import('@/views/admin/SingerManage.vue'), meta: { title: '歌手管理', requiresAuth: true, requiresAdmin: true } },
+      { path: 'admin/songs', name: 'AdminSongs', component: () => import('@/views/admin/SongManage.vue'), meta: { title: '歌曲管理', requiresAuth: true, requiresAdmin: true } },
+      { path: 'admin/playlists', name: 'AdminPlaylists', component: () => import('@/views/admin/PlaylistManage.vue'), meta: { title: '歌单管理', requiresAuth: true, requiresAdmin: true } },
+      { path: 'admin/categories', name: 'AdminCategories', component: () => import('@/views/admin/CategoryManage.vue'), meta: { title: '分类管理', requiresAuth: true, requiresAdmin: true } }
+    ]
+  },
+  { path: '/:pathMatch(.*)*', redirect: '/home' }
+]
+
+const router = createRouter({
+  history: createWebHistory(),
+  routes,
+  scrollBehavior: () => ({ top: 0 })
+})
+
+router.beforeEach((to) => {
+  const userStore = useUserStore()
+  const title = to.meta.title ? `${to.meta.title} · 3D全息音乐` : '3D全息音乐'
+  document.title = title
+
+  if (to.meta.guest && userStore.isLogin) {
+    return { path: '/home' }
+  }
+  if (to.meta.requiresAuth && !userStore.isLogin) {
+    return { path: '/login', query: { redirect: to.fullPath } }
+  }
+  if (to.meta.requiresAdmin && !userStore.isAdmin) {
+    return { path: '/home' }
+  }
+  return true
+})
+
+export default router

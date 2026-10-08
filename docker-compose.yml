@@ -1,0 +1,32 @@
+version: "3.8"
+
+# 一键启动 MySQL 8 + Redis 7（用于本地开发联调）
+# 启动后执行 sql/music_holo.sql 初始化数据库（compose 已自动挂载到初始化目录）
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: music-holo-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: music_holo
+      TZ: Asia/Shanghai
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./sql/music_holo.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_general_ci
+
+  redis:
+    image: redis:7
+    container_name: music-holo-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+volumes:
+  mysql-data:
+  redis-data:
