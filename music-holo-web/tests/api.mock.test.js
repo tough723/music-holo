@@ -34,6 +34,7 @@ afterEach(() => {
   usePlayerStore().cancelSleepTimer()
   vi.useRealTimers()
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 describe('公开歌单分享', () => {
@@ -88,6 +89,67 @@ describe('公开歌单分享', () => {
     await expect(shareOrCopy(data, legacyEnvironment)).resolves.toBe('copied')
     expect(legacyEnvironment.document.execCommand).toHaveBeenCalledWith('copy')
     expect(field.remove).toHaveBeenCalledOnce()
+  })
+})
+
+describe('本地音乐播放', () => {
+  it('音频只用临时 Blob URL 播放，不调用后端或持久化本地文件', async () => {
+    const createObjectURL = vi.fn((file) => `blob:music/${file.name}`)
+    const revokeObjectURL = vi.fn()
+    vi.stubGlobal('URL', { createObjectURL, revokeObjectURL })
+    const playRequest = vi.spyOn(songApi, 'play').mockResolvedValue(undefined)
+    const lyricRequest = vi.spyOn(lyricApi, 'parse').mockResolvedValue({ lines: [] })
+    const player = usePlayerStore()
+    const remoteSong = { id: 7, title: '远程歌曲', audioUrl: '/audio/song7.wav' }
+    player.queue = [remoteSong]
+    player.currentIndex = 0
+
+    const files = [
+      new File(['local audio'], 'night.wav', { type: 'audio/wav' }),
+      new File(['not audio'], 'notes.txt', { type: 'text/plain' })
+    ]
+    const result = player.addLocalFiles(files)
+
+    expect(result).toMatchObject({ count: 1, startIndex: 1, skipped: 1 })
+    expect(player.queue[1]).toMatchObject({ title: 'night', singerName: '本地文件', isLocal: true })
+    expect(createObjectURL).toHaveBeenCalledOnce()
+    expect(JSON.parse(localStorage.getItem('mh_player'))).toMatchObject({
+      queue: [remoteSong],
+      currentIndex: 0
+    })
+
+    await player.playAt(result.startIndex)
+    expect(player.currentSong.isLocal).toBe(true)
+    expect(JSON.parse(localStorage.getItem('mh_player')).currentIndex).toBe(-1)
+    expect(playRequest).not.toHaveBeenCalled()
+    expect(lyricRequest).not.toHaveBeenCalled()
+
+    player.playing = false
+    player.removeAt(result.startIndex)
+    await Promise.resolve()
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:music/night.wav')
+  })
+
+  it('清空或替换队列时释放残留的本地 Blob URL', async () => {
+    const revokeObjectURL = vi.fn()
+    vi.stubGlobal('URL', {
+      createObjectURL: vi.fn((file) => `blob:music/${file.name}`),
+      revokeObjectURL
+    })
+    vi.spyOn(songApi, 'play').mockResolvedValue(undefined)
+    vi.spyOn(lyricApi, 'parse').mockResolvedValue({ lines: [] })
+    const player = usePlayerStore()
+    const makeFile = (name) => new File(['local audio'], name, { type: 'audio/wav' })
+
+    player.addLocalFiles([makeFile('clear.wav')])
+    player.clearQueue()
+    await Promise.resolve()
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:music/clear.wav')
+
+    player.addLocalFiles([makeFile('replace.wav')])
+    await player.playAll([{ id: 8, title: '替换曲目', audioUrl: '/audio/replacement.wav' }])
+    await Promise.resolve()
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:music/replace.wav')
   })
 })
 

@@ -18,7 +18,7 @@
       </div>
       <el-tooltip :content="isFav ? '取消收藏' : '收藏'" placement="top">
         <el-button
-          v-if="currentSong"
+          v-if="currentSong && !currentSong.isLocal"
           circle
           size="small"
           :type="isFav ? 'danger' : 'default'"
@@ -162,11 +162,27 @@
   <el-drawer v-model="queueVisible" title="播放队列" :size="queueDrawerSize" append-to-body>
     <div class="queue-toolbar">
       <span class="queue-count">共 {{ playerStore.queue.length }} 首</span>
-      <el-button size="small" type="danger" plain :disabled="playerStore.queue.length === 0" @click="clearQueue">
-        清空队列
-      </el-button>
+      <div class="queue-tools">
+        <input
+          ref="localFileInput"
+          class="local-file-input"
+          type="file"
+          accept="audio/*,.aac,.aif,.aiff,.flac,.m4a,.mp3,.oga,.ogg,.opus,.wav,.weba,.webm"
+          multiple
+          aria-label="选择本地音乐文件"
+          @change="onLocalFilesSelected"
+        />
+        <el-tooltip content="选择音频文件后仅在本机浏览器播放，不会上传到服务器" placement="top">
+          <el-button size="small" plain @click="openLocalFilePicker">
+            <el-icon><Upload /></el-icon> 导入本地音乐
+          </el-button>
+        </el-tooltip>
+        <el-button size="small" type="danger" plain :disabled="playerStore.queue.length === 0" @click="clearQueue">
+          清空队列
+        </el-button>
+      </div>
     </div>
-    <div v-if="playerStore.queue.length === 0" class="queue-empty">队列空空如也，去挑几首歌吧～</div>
+    <div v-if="playerStore.queue.length === 0" class="queue-empty">队列空空如也，点上方“导入本地音乐”选择文件，或去曲库挑几首歌吧～</div>
     <div
       v-for="(song, index) in playerStore.queue"
       :key="song.id"
@@ -177,7 +193,10 @@
       <div class="queue-cover"><Cover :src="song.cover" :text="song.title" :size="36" /></div>
       <div class="queue-meta">
         <div class="queue-title">{{ song.title }}</div>
-        <div class="queue-artist">{{ song.singerName }}</div>
+        <div class="queue-artist">
+          {{ song.singerName }}
+          <el-tag v-if="song.isLocal" size="small" effect="plain" class="queue-local-tag">本地</el-tag>
+        </div>
       </div>
       <el-button circle size="small" text @click.stop="playerStore.removeAt(index)">
         <el-icon><Close /></el-icon>
@@ -201,6 +220,7 @@ const userStore = useUserStore()
 
 const audioRef = ref(null)
 const trackRef = ref(null)
+const localFileInput = ref(null)
 const queueVisible = ref(false)
 const sleepTimerVisible = ref(false)
 const sleepClockNow = ref(Date.now())
@@ -271,7 +291,7 @@ async function toggleFavorite() {
     return
   }
   const song = currentSong.value
-  if (!song) return
+  if (!song || song.isLocal) return
   try {
     if (isFav.value) {
       await favoriteApi.cancel(song.id)
@@ -389,6 +409,30 @@ function cancelSleepTimer() {
 function toggleLyric() {
   if (!currentSong.value) return
   playerStore.toggleLyric()
+}
+
+function openLocalFilePicker() {
+  localFileInput.value?.click()
+}
+
+async function onLocalFilesSelected(event) {
+  const input = event.target
+  const files = Array.from(input?.files || [])
+  if (input) input.value = ''
+  if (files.length === 0) return
+
+  try {
+    const result = playerStore.addLocalFiles(files)
+    if (result.count === 0) {
+      ElMessage.warning('没有识别到可播放的音频文件')
+      return
+    }
+    await playerStore.playAt(result.startIndex)
+    ElMessage.success(`已导入 ${result.count} 首本地音乐，仅在本机浏览器播放`)
+    if (result.skipped > 0) ElMessage.warning(`另有 ${result.skipped} 个文件未能导入`)
+  } catch {
+    ElMessage.error('本地音乐导入失败，请检查文件格式后重试')
+  }
 }
 
 function clearQueue() {
@@ -749,7 +793,18 @@ watch(() => userStore.isLogin, (loggedIn) => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-bottom: 12px;
+}
+.queue-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.local-file-input {
+  display: none;
 }
 .queue-count {
   color: var(--text-sub);
@@ -796,8 +851,14 @@ watch(() => userStore.isLogin, (loggedIn) => {
   color: var(--holo-primary);
 }
 .queue-artist {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
   color: var(--text-sub);
+}
+.queue-local-tag {
+  flex: 0 0 auto;
 }
 
 @media (max-width: 900px) {

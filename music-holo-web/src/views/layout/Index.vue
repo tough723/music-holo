@@ -152,9 +152,11 @@
       </main>
     </div>
 
-    <!-- 底部播放器 + 歌词面板 -->
-    <PlayerBar />
-    <LyricPanel />
+    <!-- 传送到 body，避免 3D scene / overflow 容器把 fixed 底栏变成随页面滚动的元素。 -->
+    <Teleport to="body">
+      <PlayerBar />
+      <LyricPanel />
+    </Teleport>
   </div>
 </template>
 

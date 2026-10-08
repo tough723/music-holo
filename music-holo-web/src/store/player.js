@@ -13,6 +13,7 @@ export const MODES = [
 ]
 
 export const SLEEP_TIMER_MINUTES = [15, 30, 45, 60]
+const AUDIO_FILE_EXTENSION = /\.(aac|aif|aiff|flac|m4a|mp3|oga|ogg|opus|wav|weba|webm)$/i
 const sleepTimerHandles = new WeakMap()
 
 function clearSleepTimerTimeout(store) {
@@ -34,6 +35,29 @@ function scheduleSleepTimerTimeout(store) {
   sleepTimerHandles.set(store, handle)
 }
 
+function isAudioFile(file) {
+  return file && (file.type?.toLowerCase().startsWith('audio/') || AUDIO_FILE_EXTENSION.test(file.name || ''))
+}
+
+function createLocalTrackId() {
+  const id = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  return `local-${id}`
+}
+
+function revokeLocalAudio(song) {
+  if (!song?.isLocal || typeof URL === 'undefined' || typeof URL.revokeObjectURL !== 'function') return
+  const url = song.audioUrl
+  if (typeof url !== 'string' || !url.startsWith('blob:')) return
+  // Let Vue update the <audio> source before releasing its previous object URL.
+  Promise.resolve().then(() => URL.revokeObjectURL(url))
+}
+
+function releaseLocalSongs(songs, retainedUrls = new Set()) {
+  for (const song of songs || []) {
+    if (song?.isLocal && !retainedUrls.has(song.audioUrl)) revokeLocalAudio(song)
+  }
+}
+
 function loadPersisted() {
   try {
     return JSON.parse(localStorage.getItem(PLAYER_KEY) || '{}')
@@ -43,9 +67,16 @@ function loadPersisted() {
 }
 
 function persist(state) {
+  // Blob URLs are session-only; never persist local file entries or stale object URLs.
+  const persistentQueue = state.queue.filter((song) => !song?.isLocal)
+  const currentSong = state.currentIndex >= 0 ? state.queue[state.currentIndex] : null
+  const currentIndex = currentSong && !currentSong.isLocal
+    ? persistentQueue.findIndex((song) => song.id === currentSong.id)
+    : -1
+
   localStorage.setItem(PLAYER_KEY, JSON.stringify({
-    queue: state.queue,
-    currentIndex: state.currentIndex,
+    queue: persistentQueue,
+    currentIndex,
     mode: state.mode,
     volume: state.volume
   }))
@@ -81,6 +112,39 @@ export const usePlayerStore = defineStore('player', {
     modeLabel: (state) => MODES.find((m) => m.key === state.mode)?.label || '顺序播放'
   },
   actions: {
+    /** 将用户选择的音频文件加入本地队列；文件只留在浏览器内，不上传服务器。 */
+    addLocalFiles(files) {
+      const selected = Array.from(files || [])
+      const audioFiles = selected.filter(isAudioFile)
+      const startIndex = this.queue.length
+      const tracks = []
+
+      for (const file of audioFiles) {
+        try {
+          const audioUrl = URL.createObjectURL(file)
+          const fileName = file.name || '本地音乐'
+          tracks.push({
+            id: createLocalTrackId(),
+            title: fileName.replace(/\.[^.]+$/, '') || fileName,
+            singerName: '本地文件',
+            album: '本地导入',
+            cover: '',
+            duration: 0,
+            audioUrl,
+            localFileName: fileName,
+            isLocal: true
+          })
+        } catch {
+          // 某个文件创建临时地址失败时跳过它，不丢弃其余已选歌曲。
+        }
+      }
+
+      if (tracks.length > 0) {
+        this.queue.push(...tracks)
+        persist(this)
+      }
+      return { count: tracks.length, startIndex, skipped: selected.length - tracks.length }
+    },
     /** 设定本机倒计时，选择的时长必须来自产品提供的固定选项 */
     setSleepTimerMinutes(minutes) {
       const duration = Number(minutes)
@@ -141,8 +205,8 @@ export const usePlayerStore = defineStore('player', {
       this.currentTime = 0
       persist(this)
       await this.loadLyrics(this.currentSong)
-      // 上报播放（播放量 +1），失败不影响播放
-      if (this.currentSong?.id) {
+      // 本地文件不请求后端、不写入服务端播放历史；远程歌曲才上报播放量。
+      if (this.currentSong?.id && !this.currentSong.isLocal) {
         songApi.play(this.currentSong.id).catch(() => {})
       }
     },
@@ -159,7 +223,10 @@ export const usePlayerStore = defineStore('player', {
     /** 用一组歌曲替换播放队列，并从指定歌曲开始播放 */
     playAll(songs, startSongId) {
       if (!songs || songs.length === 0) return
+      const previousQueue = this.queue
       this.queue = [...songs]
+      const retainedUrls = new Set(this.queue.filter((song) => song?.isLocal).map((song) => song.audioUrl))
+      releaseLocalSongs(previousQueue, retainedUrls)
       let index = 0
       if (startSongId) {
         const found = this.queue.findIndex((s) => s.id === startSongId)
@@ -181,7 +248,9 @@ export const usePlayerStore = defineStore('player', {
       if (index < 0 || index >= this.queue.length) return
       if (index === this.currentIndex && this.sleepTimerMode === 'track') this.cancelSleepTimer()
       const wasPlaying = this.playing
+      const removedSong = this.queue[index]
       this.queue.splice(index, 1)
+      revokeLocalAudio(removedSong)
       if (this.queue.length === 0) {
         this.currentIndex = -1
         this.playing = false
@@ -209,11 +278,13 @@ export const usePlayerStore = defineStore('player', {
     /** 清空播放队列 */
     clearQueue() {
       this.cancelSleepTimer()
+      const previousQueue = this.queue
       this.queue = []
       this.currentIndex = -1
       this.playing = false
       this.lyrics = []
       persist(this)
+      releaseLocalSongs(previousQueue)
     },
     /** 下一首 */
     next() {
@@ -267,7 +338,7 @@ export const usePlayerStore = defineStore('player', {
     },
     /** 加载当前歌曲歌词 */
     async loadLyrics(song) {
-      if (!song?.id) {
+      if (!song?.id || song.isLocal) {
         this.lyrics = []
         return
       }
