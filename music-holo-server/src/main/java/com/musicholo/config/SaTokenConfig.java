@@ -31,7 +31,7 @@ public class SaTokenConfig implements WebMvcConfigurer {
 
     /** 全部放行的 GET 接口前缀（资源浏览类，无需登录即可访问） */
     private static final List<String> PUBLIC_GET_PREFIX = List.of(
-            "/search", "/recommend", "/singer", "/song", "/category", "/playlist", "/review/page",
+            "/search", "/recommend", "/album", "/singer", "/song", "/category", "/playlist", "/review/page",
             "/common/dict", "/common/download",
             "/lyric/parse", "/lyric/export",
             "/system/theme", "/system/config",
