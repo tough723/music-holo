@@ -190,7 +190,7 @@ public class SingerService {
         CsvReader reader = CsvUtil.getReader(new InputStreamReader(file.getInputStream(), StandardCharsets.UTF_8), config);
         CsvData data = reader.read();
         List<String> header = data.getHeader();
-        List<List<String>> rows = data.getRows();
+        List<CsvRow> rows = data.getRows();
         if (header == null || header.isEmpty()) {
             throw new BusinessException("CSV 文件缺少表头");
         }
@@ -199,7 +199,7 @@ public class SingerService {
             index.put(header.get(i).trim(), i);
         }
         int count = 0;
-        for (List<String> row : rows) {
+        for (CsvRow row : rows) {
             String name = cell(row, index, "歌手名称", "name");
             if (StrUtil.isBlank(name)) {
                 continue;
