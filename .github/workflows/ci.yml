@@ -58,10 +58,21 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
       - name: Run production-build browser journeys
-        run: npm run test:e2e
+        shell: bash
+        run: |
+          set +e
+          npm run test:e2e > /tmp/playwright-e2e.log 2>&1
+          status=$?
+          cat /tmp/playwright-e2e.log
+          if [ "$status" -ne 0 ]; then
+            tail -n 60 /tmp/playwright-e2e.log >> "$GITHUB_STEP_SUMMARY"
+            summary=$(tail -n 60 /tmp/playwright-e2e.log | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            echo "::error title=Playwright browser journeys failed::$summary"
+          fi
+          exit "$status"
       - name: Upload browser diagnostics on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: music-holo-playwright-debug
           path: |
