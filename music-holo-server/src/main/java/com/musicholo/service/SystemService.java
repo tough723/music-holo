@@ -25,7 +25,7 @@ import java.util.Map;
 public class SystemService {
 
     /** 平台支持的全部主题 */
-    public static final List<String> THEMES = List.of("cyan", "magenta", "amber", "lime");
+    public static final List<String> THEMES = List.of("cyan", "magenta", "amber", "lime", "ruby");
 
     public static final String CONFIG_KEY_THEME = "theme";
     public static final String CONFIG_KEY_SITE_NAME = "site_name";

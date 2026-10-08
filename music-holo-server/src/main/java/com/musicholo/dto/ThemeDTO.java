@@ -11,7 +11,7 @@ import java.io.Serializable;
 @Data
 public class ThemeDTO implements Serializable {
 
-    /** 主题标识：cyan / magenta / amber / lime */
+    /** 主题标识：cyan / magenta / amber / lime / ruby */
     @NotBlank(message = "主题不能为空")
     private String theme;
 

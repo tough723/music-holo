@@ -5,8 +5,9 @@
 
 :root {
   --bg-deep: #050816;
-  --bg-panel: rgba(13, 20, 48, 0.72);
+  --bg-panel: rgba(8, 14, 34, 0.68);
   --bg-panel-solid: #0d1430;
+  --glass-alpha: 0.68;
   --holo-primary: #22d3ee;
   --holo-secondary: #818cf8;
   --holo-glow: rgba(34, 211, 238, 0.45);

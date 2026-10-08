@@ -2,15 +2,22 @@ import { defineStore } from 'pinia'
 import * as systemApi from '@/api/system'
 import { useUserStore } from './user'
 
-/** 平台支持的全部全息主题 */
+/** 平台支持的 3D 全息主题 */
 export const THEMES = [
-  { key: 'cyan', label: '青蓝全息', desc: '深空海洋般的冷冽光芒', primary: '#22d3ee', secondary: '#818cf8' },
-  { key: 'magenta', label: '品红幻境', desc: '赛博朋克的迷幻色调', primary: '#f472b6', secondary: '#c084fc' },
-  { key: 'amber', label: '琥珀暖光', desc: '旧胶片般的温暖余晖', primary: '#fbbf24', secondary: '#fb7185' },
-  { key: 'lime', label: '翠绿矩阵', desc: '黑客帝国的数据绿光', primary: '#a3e635', secondary: '#34d399' }
+  { key: 'cyan', label: '深空棱镜', desc: '冷色星雾与清透玻璃', primary: '#22d3ee', secondary: '#818cf8', mood: 'DEEP SPACE' },
+  { key: 'magenta', label: '紫雾回响', desc: '柔和霓虹与流动声场', primary: '#f472b6', secondary: '#c084fc', mood: 'NEON HAZE' },
+  { key: 'amber', label: '琥珀舞台', desc: '暖色灯束与黑胶余温', primary: '#fbbf24', secondary: '#fb7185', mood: 'GOLDEN STAGE' },
+  { key: 'lime', label: '矩阵声场', desc: '荧绿数据与空间网格', primary: '#a3e635', secondary: '#34d399', mood: 'SOUND MATRIX' },
+  { key: 'ruby', label: '绯红现场', desc: '红色演出灯与深玻璃质感', primary: '#ff536b', secondary: '#ff9b83', mood: 'LIVE ROOM' }
 ]
 
 const THEME_KEY = 'mh_theme'
+const GLASS_KEY = 'mh_glass_opacity'
+
+const readGlassOpacity = () => {
+  const saved = Number(localStorage.getItem(GLASS_KEY))
+  return Number.isFinite(saved) && saved > 0 ? Math.max(40, Math.min(88, saved)) : 68
+}
 
 /** 十六进制颜色转 rgba */
 export function hexToRgba(hex, alpha) {
@@ -23,7 +30,9 @@ export function hexToRgba(hex, alpha) {
 
 export const useThemeStore = defineStore('theme', {
   state: () => ({
-    theme: localStorage.getItem(THEME_KEY) || 'cyan'
+    theme: localStorage.getItem(THEME_KEY) || 'cyan',
+    /** 面板不透明度，越低越通透；仅保存在当前浏览器 */
+    glassOpacity: readGlassOpacity()
   }),
   getters: {
     current: (state) => THEMES.find((t) => t.key === state.theme) || THEMES[0]
@@ -39,6 +48,19 @@ export const useThemeStore = defineStore('theme', {
       root.style.setProperty('--holo-glow', hexToRgba(theme.primary, 0.45))
       root.dataset.theme = theme.key
       localStorage.setItem(THEME_KEY, theme.key)
+      this.applyGlassOpacity(this.glassOpacity)
+    },
+    /** 设置全站玻璃面板不透明度 */
+    applyGlassOpacity(value) {
+      const opacity = Math.max(40, Math.min(88, Math.round(Number(value) || 68)))
+      this.glassOpacity = opacity
+      const alpha = (opacity / 100).toFixed(2)
+      document.documentElement.style.setProperty('--glass-alpha', alpha)
+      document.documentElement.style.setProperty('--bg-panel', `rgba(8, 14, 34, ${alpha})`)
+      localStorage.setItem(GLASS_KEY, String(opacity))
+    },
+    setGlassOpacity(value) {
+      this.applyGlassOpacity(value)
     },
     /** 切换主题并同步到服务端（仅登录用户） */
     async setTheme(key) {

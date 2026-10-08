@@ -11,6 +11,8 @@ import * as searchApi from '@/api/search'
 import * as recommendationApi from '@/api/recommend'
 import * as historyApi from '@/api/history'
 import * as songApi from '@/api/song'
+import * as systemApi from '@/api/system'
+import { useThemeStore, THEMES } from '@/store/theme'
 
 // API 错误仍由 Mock 层抛出；只屏蔽 UI 通知，避免测试输出污染。
 vi.mock('element-plus', () => ({
@@ -158,5 +160,29 @@ describe('内置 Mock API 集成测试', () => {
     await useUserStore().logoutLocal()
     await loginAs('demo')
     await playlistApi.remove(created.id)
+  })
+
+  it('绯红 3D 主题可从接口获取并同步至用户设置', async () => {
+    await loginAs('demo')
+    const settings = await systemApi.getTheme()
+    expect(settings.themes).toContain('ruby')
+    await expect(systemApi.setTheme({ theme: 'ruby', scope: 'user' })).resolves.toMatchObject({ theme: 'ruby' })
+    expect(THEMES.find((theme) => theme.key === 'ruby')).toMatchObject({ label: '绯红现场', mood: 'LIVE ROOM' })
+    await systemApi.setTheme({ theme: 'cyan', scope: 'user' })
+  })
+
+  it('全站玻璃不透明度有安全范围并实时写入 CSS 变量', () => {
+    const themeStore = useThemeStore()
+    themeStore.apply('ruby')
+    themeStore.setGlassOpacity(52)
+    expect(themeStore.glassOpacity).toBe(52)
+    expect(document.documentElement.style.getPropertyValue('--glass-alpha')).toBe('0.52')
+    expect(document.documentElement.style.getPropertyValue('--bg-panel')).toContain('0.52')
+    expect(localStorage.getItem('mh_glass_opacity')).toBe('52')
+
+    themeStore.setGlassOpacity(100)
+    expect(themeStore.glassOpacity).toBe(88)
+    themeStore.apply('cyan')
+    themeStore.setGlassOpacity(68)
   })
 })

@@ -24,7 +24,7 @@ CREATE TABLE `sys_user` (
   `phone`       VARCHAR(20)  DEFAULT NULL            COMMENT '手机号',
   `gender`      TINYINT      DEFAULT 0               COMMENT '性别：0未知 1男 2女',
   `role`        TINYINT      DEFAULT 1               COMMENT '角色：0管理员 1普通用户',
-  `theme`       VARCHAR(20)  DEFAULT 'cyan'          COMMENT '个性化主题：cyan/magenta/amber/lime',
+  `theme`       VARCHAR(20)  DEFAULT 'cyan'          COMMENT '个性化主题：cyan/magenta/amber/lime/ruby',
   `status`      TINYINT      DEFAULT 1               COMMENT '状态：0禁用 1正常',
   `deleted`     TINYINT      DEFAULT 0               COMMENT '逻辑删除：0未删除 1已删除',
   `create_time` DATETIME     DEFAULT NULL            COMMENT '创建时间',
@@ -327,7 +327,7 @@ INSERT INTO `user_play_history` (`id`, `user_id`, `song_id`, `play_count`, `last
 
 -- 系统参数
 INSERT INTO `sys_config` (`id`, `config_key`, `config_value`, `config_name`, `remark`, `create_time`, `update_time`) VALUES
-(1, 'theme',     'cyan',  '全局默认主题', '平台全局默认主题，可选 cyan/magenta/amber/lime', NOW(), NOW()),
+(1, 'theme',     'cyan',  '全局默认主题', '平台全局默认主题，可选 cyan/magenta/amber/lime/ruby', NOW(), NOW()),
 (2, 'site_name', '3D全息音乐', '站点名称', '平台名称', NOW(), NOW());
 
 -- 字典类型

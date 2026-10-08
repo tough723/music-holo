@@ -47,7 +47,7 @@ public class SysUser implements Serializable {
     /** 角色：0管理员 1普通用户 */
     private Integer role;
 
-    /** 个性化主题：cyan / magenta / amber / lime */
+    /** 个性化主题：cyan / magenta / amber / lime / ruby */
     private String theme;
 
     /** 状态：0禁用 1正常 */

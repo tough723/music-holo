@@ -218,13 +218,13 @@ route('put', '/user/password', async (ctx) => {
 route('get', '/system/theme', async (ctx) => {
   const global = state.configs.find((c) => c.configKey === 'theme')?.configValue || 'cyan'
   const current = ctx.user?.theme || global
-  return { theme: current, global, themes: ['cyan', 'magenta', 'amber', 'lime'] }
+  return { theme: current, global, themes: ['cyan', 'magenta', 'amber', 'lime', 'ruby'] }
 })
 
 route('put', '/system/theme', async (ctx) => {
   const user = requireUser(ctx)
   const { theme, scope } = ctx.body
-  const themes = ['cyan', 'magenta', 'amber', 'lime']
+  const themes = ['cyan', 'magenta', 'amber', 'lime', 'ruby']
   if (!themes.includes(theme)) throw mockError(500, '不支持的主题：' + theme)
   if ((scope || 'user') === 'global') {
     if (user.role !== 0) throw mockError(403, '仅管理员可设置全局主题')
