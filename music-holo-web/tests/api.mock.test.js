@@ -14,6 +14,7 @@ import * as historyApi from '@/api/history'
 import * as songApi from '@/api/song'
 import * as systemApi from '@/api/system'
 import { useThemeStore, THEMES } from '@/store/theme'
+import { buildPublicPlaylistShareUrl, shareOrCopy } from '@/utils/share'
 
 // API 错误仍由 Mock 层抛出；只屏蔽 UI 通知，避免测试输出污染。
 vi.mock('element-plus', () => ({
@@ -33,6 +34,61 @@ afterEach(() => {
   usePlayerStore().cancelSleepTimer()
   vi.useRealTimers()
   vi.restoreAllMocks()
+})
+
+describe('公开歌单分享', () => {
+  it('只为公开歌单生成同源链接', () => {
+    const router = { resolve: vi.fn(() => ({ href: '/playlists/42' })) }
+
+    expect(buildPublicPlaylistShareUrl({ id: 42, isPublic: 0 }, router, 'https://music.test')).toBe(null)
+    expect(buildPublicPlaylistShareUrl({ id: 42, isPublic: 1 }, router, 'https://music.test'))
+      .toBe('https://music.test/playlists/42')
+    expect(router.resolve).toHaveBeenCalledWith({ name: 'PlaylistDetail', params: { id: 42 } })
+
+    const externalRouter = { resolve: () => ({ href: 'https://outside.test/playlists/42' }) }
+    expect(buildPublicPlaylistShareUrl({ id: 42, isPublic: 1 }, externalRouter, 'https://music.test')).toBe(null)
+  })
+
+  it('优先调起系统分享，用户主动取消时不误报失败', async () => {
+    const share = vi.fn().mockResolvedValue(undefined)
+    const data = { title: '夜航', text: '来听听', url: 'https://music.test/playlists/42' }
+    const environment = { navigator: { share }, document: {}, isSecureContext: true }
+
+    await expect(shareOrCopy(data, environment)).resolves.toBe('shared')
+    expect(share).toHaveBeenCalledWith(data)
+
+    share.mockRejectedValueOnce(Object.assign(new Error('cancelled'), { name: 'AbortError' }))
+    await expect(shareOrCopy(data, environment)).resolves.toBe('cancelled')
+  })
+
+  it('无原生分享时先用 Clipboard API，失败后尝试兼容复制', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    const environment = { navigator: { clipboard: { writeText } }, isSecureContext: true }
+    const data = { url: 'https://music.test/playlists/42' }
+
+    await expect(shareOrCopy(data, environment)).resolves.toBe('copied')
+    expect(writeText).toHaveBeenCalledWith(data.url)
+
+    const field = {
+      style: {},
+      setAttribute: vi.fn(),
+      focus: vi.fn(),
+      select: vi.fn(),
+      remove: vi.fn()
+    }
+    const legacyEnvironment = {
+      navigator: { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('permission denied')) } },
+      isSecureContext: true,
+      document: {
+        body: { appendChild: vi.fn() },
+        createElement: vi.fn(() => field),
+        execCommand: vi.fn(() => true)
+      }
+    }
+    await expect(shareOrCopy(data, legacyEnvironment)).resolves.toBe('copied')
+    expect(legacyEnvironment.document.execCommand).toHaveBeenCalledWith('copy')
+    expect(field.remove).toHaveBeenCalledOnce()
+  })
 })
 
 describe('播放器睡眠定时', () => {

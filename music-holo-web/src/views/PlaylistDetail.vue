@@ -23,6 +23,9 @@
           <el-button round :disabled="songs.length === 0" @click="addAllToQueue">
             <el-icon><Plus /></el-icon> 加入队列
           </el-button>
+          <el-button v-if="isPublicPlaylist" round plain @click="sharePlaylist">
+            <el-icon><Share /></el-icon> 分享歌单
+          </el-button>
           <template v-if="canManage">
             <el-button round @click="openEdit">
               <el-icon><Edit /></el-icon> 编辑
@@ -152,6 +155,7 @@ import * as commonApi from '@/api/common'
 import { usePlayerStore } from '@/store/player'
 import { useUserStore } from '@/store/user'
 import { fmtCount } from '@/utils/format'
+import { buildPublicPlaylistShareUrl, shareOrCopy } from '@/utils/share'
 import SongList from '@/components/SongList.vue'
 import HoloProjector from '@/components/HoloProjector.vue'
 import Cover from '@/components/Cover.vue'
@@ -181,6 +185,7 @@ const canManage = computed(() => {
   if (!userStore.isLogin || !playlist.value) return false
   return playlist.value.creatorId === userStore.userInfo?.id || userStore.isAdmin
 })
+const isPublicPlaylist = computed(() => Number(playlist.value?.isPublic) === 1)
 
 const loadData = async () => {
   loading.value = true
@@ -210,6 +215,25 @@ const playAll = () => {
 const addAllToQueue = () => {
   songs.value.forEach((s) => playerStore.addToQueue(s))
   ElMessage.success(`已将 ${songs.value.length} 首歌曲加入播放队列`)
+}
+
+const sharePlaylist = async () => {
+  const url = buildPublicPlaylistShareUrl(playlist.value, router, window.location.origin)
+  if (!url) {
+    ElMessage.warning('仅公开歌单可以分享')
+    return
+  }
+  try {
+    const result = await shareOrCopy({
+      title: playlist.value.name,
+      text: `来听听我分享的歌单「${playlist.value.name}」`,
+      url
+    })
+    if (result === 'shared') ElMessage.success('已打开系统分享')
+    else if (result === 'copied') ElMessage.success('歌单链接已复制')
+  } catch (error) {
+    ElMessage.error('无法自动复制，请手动复制地址栏链接')
+  }
 }
 
 const onPlay = (song) => {
@@ -390,6 +414,7 @@ onMounted(loadData)
 }
 .playlist-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   margin-top: 16px;
 }
