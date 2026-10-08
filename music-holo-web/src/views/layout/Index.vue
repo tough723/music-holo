@@ -10,18 +10,16 @@
           <div class="logo-title holo-text">全息音乐</div>
           <div class="logo-sub">MUSIC HOLO</div>
         </div>
-        <el-tooltip :content="sidebarCollapsed ? '展开侧栏' : '收起侧栏'" placement="right">
-          <el-button
-            class="sidebar-toggle"
-            circle
-            text
-            :aria-label="sidebarCollapsed ? '展开侧栏' : '收起侧栏'"
-            :aria-expanded="String(!sidebarCollapsed)"
-            @click.stop="toggleSidebar"
-          >
-            <el-icon><Expand v-if="sidebarCollapsed" /><Fold v-else /></el-icon>
-          </el-button>
-        </el-tooltip>
+        <button
+          type="button"
+          class="sidebar-toggle"
+          :title="sidebarCollapsed ? '展开侧栏' : '收起侧栏'"
+          :aria-label="sidebarCollapsed ? '展开侧栏' : '收起侧栏'"
+          :aria-expanded="String(!sidebarCollapsed)"
+          @click.stop="toggleSidebar"
+        >
+          <el-icon><Expand v-if="sidebarCollapsed" /><Fold v-else /></el-icon>
+        </button>
       </div>
 
       <AppNavigation :collapsed="sidebarIsCollapsed" />
@@ -41,16 +39,15 @@
     <!-- 主区域 -->
     <div class="main">
       <header class="header glass-panel">
-        <el-button
+        <button
+          type="button"
           class="mobile-menu-trigger"
-          circle
-          text
           aria-label="打开导航"
           :aria-expanded="String(mobileNavVisible)"
           @click="mobileNavVisible = true"
         >
           <el-icon><Menu /></el-icon>
-        </el-button>
+        </button>
         <div class="header-title-wrap">
           <div class="header-mark" :class="{ 'is-playing': playerStore.playing }" aria-hidden="true">
             <div class="header-mark__beam"></div>
@@ -267,10 +264,24 @@ const onCommand = async (command) => {
   width: 28px;
   height: 28px;
   padding: 5px;
+  border: 0;
+  border-radius: 50%;
   color: var(--text-sub);
+  background: transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.16s ease, background 0.16s ease, transform 0.16s ease;
 }
 .sidebar-toggle:hover {
   color: var(--holo-primary);
+  background: color-mix(in srgb, var(--holo-primary) 10%, transparent);
+  transform: translate3d(0, -1px, 3px);
+}
+.sidebar-toggle:focus-visible {
+  outline: 2px solid var(--holo-primary);
+  outline-offset: 2px;
 }
 .sidebar.is-collapsed .logo {
   flex-direction: column;
@@ -342,6 +353,24 @@ const onCommand = async (command) => {
   flex: 0 0 34px;
   width: 34px;
   height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--text-main);
+  background: transparent;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.16s ease, background 0.16s ease, transform 0.16s ease;
+}
+.mobile-menu-trigger:hover {
+  color: var(--holo-primary);
+  background: color-mix(in srgb, var(--holo-primary) 10%, transparent);
+  transform: translate3d(0, -1px, 3px);
+}
+.mobile-menu-trigger:focus-visible {
+  outline: 2px solid var(--holo-primary);
+  outline-offset: 2px;
 }
 .mobile-nav-hint {
   margin: -8px 0 12px;
