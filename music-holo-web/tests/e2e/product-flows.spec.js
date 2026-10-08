@@ -72,7 +72,7 @@ test('本地音频可导入，窄屏滚动后播放器仍固定在视口底部',
   await expect(playerBar).toBeVisible()
   await expect(playerBar).toHaveCSS('position', 'fixed')
 
-  await page.getByRole('button', { name: '播放队列' }).click()
+  await page.getByRole('button', { name: '播放队列', exact: true }).click()
   await expect(page.getByText('播放队列', { exact: true }).first()).toBeVisible()
 
   const audio = await readFile(new URL('../../public/audio/song1.wav', import.meta.url))
