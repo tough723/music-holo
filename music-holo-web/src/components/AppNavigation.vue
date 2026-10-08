@@ -110,7 +110,7 @@ const onSelect = (index) => emit('navigate', index)
 .app-nav-menu :deep(.el-menu-item-group__title) {
   white-space: nowrap;
 }
-:deep(.app-nav-menu.el-menu--collapse .el-menu-item-group__title) {
+:global(.app-nav-menu.el-menu--collapse .el-menu-item-group__title) {
   display: none;
 }
 
