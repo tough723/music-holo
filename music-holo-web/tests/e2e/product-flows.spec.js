@@ -57,6 +57,19 @@ test('demo 用户可以收藏歌曲并查看个人播放历史', async ({ page }
   await expect(page.locator('.player-bar .pb-title')).toHaveText('云端信使')
 })
 
+test('每日推荐可按分类筛选并播放歌曲', async ({ page }) => {
+  await loginAs(page, 'demo')
+  await openMenu(page, '每日推荐')
+
+  const rows = page.locator('.el-table__body-wrapper .el-table__row')
+  await expect(rows).toHaveCount(5)
+  await page.getByRole('group', { name: '按音乐分类筛选每日推荐' }).getByRole('button', { name: '华语' }).click()
+  await expect(rows).toHaveCount(1)
+  await expect(rows.first()).toContainText('华语')
+  await rows.first().getByRole('button', { name: '播放《云端信使》' }).click()
+  await expect(page.locator('.player-bar .pb-title')).toHaveText('云端信使')
+})
+
 test('公开歌单的分享回退会复制同源链接', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'share', { configurable: true, value: undefined })

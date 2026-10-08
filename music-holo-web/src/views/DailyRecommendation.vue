@@ -40,6 +40,13 @@
       </div>
     </section>
 
+    <div v-if="loadError" class="daily-load-warning glass-panel" role="alert">
+      <span>{{ loadError }}</span>
+      <el-button text type="primary" :disabled="loading" @click="loadData">
+        {{ loading ? '正在重试…' : '重试' }}
+      </el-button>
+    </div>
+
     <section class="daily-list glass-panel">
       <div class="list-heading">
         <div>
@@ -72,7 +79,7 @@
         @toggle-favorite="onToggleFavorite"
         @add-queue="onAddQueue"
       />
-      <el-empty v-else description="暂时没有推荐歌曲，去曲库发现更多声音吧。" :image-size="112">
+      <el-empty v-else-if="!recommendationUnavailable" description="暂时没有推荐歌曲，去曲库发现更多声音吧。" :image-size="112">
         <el-button type="primary" @click="router.push('/songs')">探索曲库</el-button>
       </el-empty>
     </section>
@@ -95,6 +102,8 @@ const router = useRouter()
 const playerStore = usePlayerStore()
 const userStore = useUserStore()
 const loading = ref(false)
+const loadError = ref('')
+const recommendationUnavailable = ref(false)
 const songs = ref([])
 const categories = ref([])
 const favoriteIds = ref([])
@@ -118,17 +127,29 @@ const intro = computed(() => userStore.isLogin
 
 const loadData = async () => {
   loading.value = true
+  loadError.value = ''
+  recommendationUnavailable.value = false
+  const failedSections = []
   try {
-    const [recommendations, categoryList, favorites] = await Promise.all([
+    const responses = await Promise.allSettled([
       recommendApi.songs(24),
-      categoryApi.list().catch(() => []),
-      userStore.isLogin ? favoriteApi.ids().catch(() => []) : Promise.resolve([])
+      categoryApi.list(),
+      userStore.isLogin ? favoriteApi.ids() : Promise.resolve([])
     ])
-    songs.value = recommendations || []
-    categories.value = categoryList || []
-    favoriteIds.value = favorites || []
-  } catch (error) {
-    songs.value = []
+    const valueOrPrevious = (index, section, previousValue) => {
+      const response = responses[index]
+      if (response.status === 'fulfilled') return response.value
+      failedSections.push(section)
+      return previousValue
+    }
+
+    recommendationUnavailable.value = responses[0].status === 'rejected'
+    songs.value = valueOrPrevious(0, '每日推荐歌曲', songs.value) || []
+    categories.value = valueOrPrevious(1, '分类筛选', categories.value) || []
+    favoriteIds.value = valueOrPrevious(2, '收藏状态', favoriteIds.value) || []
+    loadError.value = failedSections.length
+      ? `暂时无法加载：${failedSections.join('、')}。其他已加载内容仍可使用。`
+      : ''
   } finally {
     loading.value = false
   }
@@ -182,6 +203,18 @@ onMounted(loadData)
   display: flex;
   flex-direction: column;
   gap: 20px;
+}
+.daily-load-warning {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 1px solid rgba(245, 181, 90, 0.28);
+  border-radius: 12px;
+  color: var(--text-sub);
+  font-size: 13px;
 }
 .daily-hero {
   position: relative;
