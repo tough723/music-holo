@@ -134,6 +134,20 @@
           <div class="sleep-note">手动切歌会取消“播完当前歌曲”定时。</div>
         </div>
       </el-popover>
+      <el-tooltip :content="spatialEnabled ? '关闭 3D 空间音效' : '开启 3D 空间音效（本地/同源音源，耳机体验更明显）'" placement="top">
+        <el-button
+          circle
+          text
+          class="pb-spatial"
+          :class="{ active: spatialEnabled }"
+          :disabled="!hasSong || !currentSong?.audioUrl"
+          :aria-label="spatialEnabled ? '关闭 3D 空间音效' : '开启 3D 空间音效'"
+          :aria-pressed="spatialEnabled"
+          @click="toggleSpatialAudio"
+        >
+          <el-icon><Headset /></el-icon>
+        </el-button>
+      </el-tooltip>
       <el-tooltip content="音量" placement="top">
         <div class="pb-volume">
           <el-icon><Mic /></el-icon>
@@ -161,8 +175,9 @@
       </el-tooltip>
     </div>
 
-    <!-- 隐藏的 audio 元素 -->
+    <!-- 原声播放器始终保留；空间音效使用独立媒体元素，确保跨域音源可安全回退原声。 -->
     <audio ref="audioRef" preload="auto"></audio>
+    <audio ref="spatialAudioRef" preload="none"></audio>
   </div>
 
   <!-- 播放队列抽屉 -->
@@ -219,6 +234,7 @@ import { SLEEP_TIMER_MINUTES, usePlayerStore } from '@/store/player'
 import { useUserStore } from '@/store/user'
 import * as favoriteApi from '@/api/favorite'
 import { fmtDuration } from '@/utils/format'
+import { createSpatialAudioGraph, isSpatialAudioUrl } from '@/utils/spatialAudio'
 import HoloProjector from './HoloProjector.vue'
 import Cover from './Cover.vue'
 
@@ -226,7 +242,10 @@ const playerStore = usePlayerStore()
 const userStore = useUserStore()
 
 const audioRef = ref(null)
+const spatialAudioRef = ref(null)
+const spatialEnabled = ref(false)
 const trackRef = ref(null)
+let spatialAudioGraph = null
 const localFileInput = ref(null)
 const queueVisible = ref(false)
 const sleepTimerVisible = ref(false)
@@ -258,6 +277,50 @@ const progressPercent = computed(() => {
   if (!playerStore.duration) return 0
   return Math.min(100, (playerStore.currentTime / playerStore.duration) * 100)
 })
+
+function activeAudioElement() {
+  return spatialEnabled.value ? spatialAudioRef.value : audioRef.value
+}
+
+function ensureSpatialAudioGraph() {
+  if (!spatialAudioGraph) {
+    spatialAudioGraph = createSpatialAudioGraph(spatialAudioRef.value)
+    spatialAudioGraph.setVolume(playerStore.volume)
+  }
+  return spatialAudioGraph
+}
+
+function setAudioSource(audio, audioUrl) {
+  if (!audio) return
+  if (!audioUrl) {
+    audio.pause()
+    audio.removeAttribute('src')
+    audio.load()
+    return
+  }
+  let resolvedUrl = audioUrl
+  try {
+    resolvedUrl = new URL(audioUrl, window.location.href).href
+  } catch {
+    // Let the media element emit its normal error for malformed source URLs.
+  }
+  if (audio.src !== resolvedUrl) audio.src = audioUrl
+}
+
+function seekAudioWhenReady(audio, time) {
+  if (!audio || !Number.isFinite(time) || time < 0) return
+  const sourceAtRequest = audio.src
+  const seek = () => {
+    if (audio.src !== sourceAtRequest) return
+    try {
+      audio.currentTime = time
+    } catch {
+      // Metadata may not expose a seekable range yet; playback will continue from the start.
+    }
+  }
+  if (audio.readyState >= 1) seek()
+  else audio.addEventListener('loadedmetadata', seek, { once: true })
+}
 
 function clearSleepClock() {
   if (sleepClockInterval === null || typeof window === 'undefined') return
@@ -332,7 +395,7 @@ function prev() {
 }
 
 function seekTo(time) {
-  const audio = audioRef.value
+  const audio = activeAudioElement()
   if (audio && playerStore.duration) {
     audio.currentTime = Math.max(0, Math.min(time, playerStore.duration))
     playerStore.currentTime = audio.currentTime
@@ -397,6 +460,68 @@ function onVolume(val) {
   playerStore.setVolume(val / 100)
 }
 
+async function toggleSpatialAudio() {
+  const nativeAudio = audioRef.value
+  const spatialAudio = spatialAudioRef.value
+  const song = currentSong.value
+  if (!nativeAudio || !spatialAudio || !song?.audioUrl) return
+
+  if (spatialEnabled.value) {
+    const resumeAt = spatialAudio.currentTime || playerStore.currentTime
+    spatialAudio.pause()
+    playerStore.currentTime = resumeAt
+    setAudioSource(nativeAudio, song.audioUrl)
+    seekAudioWhenReady(nativeAudio, resumeAt)
+    if (nativeAudio.readyState >= 1 && resumeAt > 0) {
+      try { nativeAudio.currentTime = resumeAt } catch { /* wait for metadata */ }
+    }
+    spatialAudioGraph?.setEnabled(false)
+    spatialEnabled.value = false
+    if (playerStore.playing) {
+      nativeAudio.play().catch(() => { playerStore.playing = false })
+    }
+    ElMessage.info('已关闭 3D 空间音效，切回原声播放')
+    return
+  }
+
+  if (!isSpatialAudioUrl(song.audioUrl, window.location.href)) {
+    ElMessage.warning('该音源不支持空间处理，当前保持原声播放')
+    return
+  }
+
+  try {
+    const graph = ensureSpatialAudioGraph()
+    setAudioSource(spatialAudio, song.audioUrl)
+    const resumeAt = nativeAudio.currentTime || playerStore.currentTime
+    playerStore.currentTime = resumeAt
+    seekAudioWhenReady(spatialAudio, resumeAt)
+    spatialAudio.volume = 1
+    await graph.context.resume()
+    graph.setVolume(playerStore.volume)
+    graph.setEnabled(true)
+    spatialEnabled.value = true
+    nativeAudio.pause()
+    if (playerStore.playing) {
+      try {
+        await spatialAudio.play()
+      } catch (error) {
+        spatialEnabled.value = false
+        graph.setEnabled(false)
+        setAudioSource(nativeAudio, song.audioUrl)
+        seekAudioWhenReady(nativeAudio, resumeAt)
+        await nativeAudio.play().catch(() => { playerStore.playing = false })
+        throw error
+      }
+    }
+    ElMessage.success('已开启 3D 空间音效，使用耳机体验更明显')
+  } catch {
+    spatialAudio.pause()
+    spatialAudioGraph?.setEnabled(false)
+    spatialEnabled.value = false
+    ElMessage.warning('空间音效无法启动，已保持原声播放')
+  }
+}
+
 function startSleepTimer(minutes) {
   if (!playerStore.setSleepTimerMinutes(minutes)) return
   sleepTimerVisible.value = false
@@ -448,74 +573,108 @@ async function onLocalFilesSelected(event) {
 
 function clearQueue() {
   playerStore.clearQueue()
-  const audio = audioRef.value
-  if (audio) {
+  spatialEnabled.value = false
+  spatialAudioGraph?.setEnabled(false)
+  for (const audio of [audioRef.value, spatialAudioRef.value]) {
+    if (!audio) continue
     audio.pause()
     audio.removeAttribute('src')
+    audio.load()
   }
 }
 
 // ---------- audio 元素与 store 双向同步 ----------
 watch(currentSong, (song) => {
-  const audio = audioRef.value
-  if (!audio) return
+  const nativeAudio = audioRef.value
+  const spatialAudio = spatialAudioRef.value
+  if (!nativeAudio || !spatialAudio) return
+
   if (!song) {
-    audio.pause()
-    audio.removeAttribute('src')
+    spatialAudio.pause()
+    nativeAudio.pause()
+    setAudioSource(spatialAudio, '')
+    setAudioSource(nativeAudio, '')
+    spatialEnabled.value = false
+    spatialAudioGraph?.setEnabled(false)
     playerStore.duration = 0
     return
   }
   if (!song.audioUrl) {
-    audio.pause()
-    audio.removeAttribute('src')
-    audio.load()
+    spatialAudio.pause()
+    nativeAudio.pause()
+    setAudioSource(spatialAudio, '')
+    setAudioSource(nativeAudio, '')
+    spatialEnabled.value = false
+    spatialAudioGraph?.setEnabled(false)
     playerStore.playing = false
     playerStore.currentTime = 0
     playerStore.duration = 0
     ElMessage.warning(`《${song.title}》暂无音频地址`)
     return
   }
-  if (audio.src !== song.audioUrl) {
-    audio.src = song.audioUrl
+
+  if (spatialEnabled.value && !isSpatialAudioUrl(song.audioUrl, window.location.href)) {
+    spatialAudio.pause()
+    spatialAudioGraph?.setEnabled(false)
+    spatialEnabled.value = false
+    ElMessage.warning('该音源不支持空间处理，已自动切回原声')
   }
-  if (playerStore.playing) {
+
+  if (spatialEnabled.value) {
+    nativeAudio.pause()
+    setAudioSource(spatialAudio, song.audioUrl)
+    seekAudioWhenReady(spatialAudio, playerStore.currentTime)
+  } else {
+    spatialAudio.pause()
+    setAudioSource(nativeAudio, song.audioUrl)
+    seekAudioWhenReady(nativeAudio, playerStore.currentTime)
+  }
+
+  const audio = activeAudioElement()
+  if (playerStore.playing && audio) {
     audio.play().catch(() => {
-      playerStore.playing = false
+      if (audio === activeAudioElement()) playerStore.playing = false
     })
   }
 })
 
 watch(playing, (isPlaying) => {
-  const audio = audioRef.value
+  const audio = activeAudioElement()
   if (!audio || !currentSong.value) return
   if (isPlaying) {
     audio.play().catch(() => {
-      playerStore.playing = false
+      if (audio === activeAudioElement()) playerStore.playing = false
     })
   } else {
     audio.pause()
   }
 })
 
-watch(() => playerStore.volume, (v) => {
-  if (audioRef.value) audioRef.value.volume = v
+watch(() => playerStore.volume, (value) => {
+  if (audioRef.value) audioRef.value.volume = value
+  if (spatialAudioRef.value) spatialAudioRef.value.volume = 1
+  spatialAudioGraph?.setVolume(value)
 })
 
-function onAudioTimeUpdate() {
-  if (audioRef.value) playerStore.currentTime = audioRef.value.currentTime
+function onAudioTimeUpdate(event) {
+  const audio = event.currentTarget
+  if (audio !== activeAudioElement()) return
+  playerStore.currentTime = audio.currentTime
   playerStore.checkSleepTimer()
 }
 
-function onAudioLoadedMetadata() {
-  const audio = audioRef.value
-  if (audio) playerStore.duration = audio.duration || currentSong.value?.duration || 0
+function onAudioLoadedMetadata(event) {
+  const audio = event.currentTarget
+  if (audio !== activeAudioElement()) return
+  playerStore.duration = audio.duration || currentSong.value?.duration || 0
 }
 
-function onAudioEnded() {
-  const audio = audioRef.value
+function onAudioEnded(event) {
+  const audio = event.currentTarget
+  if (audio !== activeAudioElement()) return
   if (playerStore.checkSleepTimer()) return
   if (playerStore.handleSleepTimerTrackEnd(currentSong.value?.id)) return
-  if (playerStore.mode === 'single' && audio) {
+  if (playerStore.mode === 'single') {
     audio.currentTime = 0
     audio.play().catch(() => {})
     return
@@ -523,7 +682,26 @@ function onAudioEnded() {
   playerStore.next()
 }
 
-function onAudioError() {
+function onAudioError(event) {
+  if (event.currentTarget !== activeAudioElement()) return
+  if (event.currentTarget === spatialAudioRef.value && spatialEnabled.value) {
+    const nativeAudio = audioRef.value
+    const spatialAudio = spatialAudioRef.value
+    const resumeAt = spatialAudio.currentTime || playerStore.currentTime
+    spatialAudio.pause()
+    playerStore.currentTime = resumeAt
+    spatialAudioGraph?.setEnabled(false)
+    spatialEnabled.value = false
+    if (currentSong.value?.audioUrl) {
+      setAudioSource(nativeAudio, currentSong.value.audioUrl)
+      seekAudioWhenReady(nativeAudio, resumeAt)
+      if (playerStore.playing) {
+        nativeAudio.play().catch(() => { playerStore.playing = false })
+      }
+      ElMessage.warning('空间音效遇到播放问题，已自动切回原声')
+      return
+    }
+  }
   if (currentSong.value) ElMessage.error(`《${currentSong.value.title}》音频加载失败`)
   playerStore.playing = false
 }
@@ -541,17 +719,25 @@ function onVisibilityChange() {
 }
 
 onMounted(() => {
-  const audio = audioRef.value
-  if (audio) {
-    audio.volume = playerStore.volume
-    audio.addEventListener('timeupdate', onAudioTimeUpdate)
-    audio.addEventListener('loadedmetadata', onAudioLoadedMetadata)
-    audio.addEventListener('ended', onAudioEnded)
-    audio.addEventListener('error', onAudioError)
+  const nativeAudio = audioRef.value
+  const spatialAudio = spatialAudioRef.value
+  if (nativeAudio) {
+    nativeAudio.volume = playerStore.volume
+    nativeAudio.addEventListener('timeupdate', onAudioTimeUpdate)
+    nativeAudio.addEventListener('loadedmetadata', onAudioLoadedMetadata)
+    nativeAudio.addEventListener('ended', onAudioEnded)
+    nativeAudio.addEventListener('error', onAudioError)
     if (currentSong.value?.audioUrl) {
-      audio.src = currentSong.value.audioUrl
+      setAudioSource(nativeAudio, currentSong.value.audioUrl)
       playerStore.duration = currentSong.value.duration || 0
     }
+  }
+  if (spatialAudio) {
+    spatialAudio.volume = 1
+    spatialAudio.addEventListener('timeupdate', onAudioTimeUpdate)
+    spatialAudio.addEventListener('loadedmetadata', onAudioLoadedMetadata)
+    spatialAudio.addEventListener('ended', onAudioEnded)
+    spatialAudio.addEventListener('error', onAudioError)
   }
   window.addEventListener('mh-seek', onLyricSeek)
   window.addEventListener('keydown', onPlayerShortcut)
@@ -561,12 +747,19 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  const audio = audioRef.value
-  if (audio) {
+  for (const audio of [audioRef.value, spatialAudioRef.value]) {
+    if (!audio) continue
+    audio.pause()
     audio.removeEventListener('timeupdate', onAudioTimeUpdate)
     audio.removeEventListener('loadedmetadata', onAudioLoadedMetadata)
     audio.removeEventListener('ended', onAudioEnded)
     audio.removeEventListener('error', onAudioError)
+  }
+  try {
+    const closing = spatialAudioGraph?.close()
+    closing?.catch?.(() => {})
+  } catch {
+    // Cleanup must not interrupt component teardown.
   }
   window.removeEventListener('mh-seek', onLyricSeek)
   window.removeEventListener('keydown', onPlayerShortcut)
@@ -753,7 +946,8 @@ watch(() => userStore.isLogin, (loggedIn) => {
 .pb-right .active {
   color: var(--holo-primary);
 }
-.pb-sleep.active {
+.pb-sleep.active,
+.pb-spatial.active {
   color: var(--holo-primary);
   filter: drop-shadow(0 0 7px var(--holo-glow));
 }

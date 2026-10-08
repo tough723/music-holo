@@ -26,7 +26,23 @@ test('游客可以搜索歌曲并从结果启动播放', async ({ page }) => {
   await songRow.getByRole('button', { name: '播放《霓虹海》' }).click()
 
   await expect(page.locator('.player-bar .pb-title')).toHaveText('霓虹海')
-  await expect(page.locator('.player-bar audio')).toHaveAttribute('src', /\/audio\/song1\.wav$/)
+  await expect(page.locator('.player-bar audio').first()).toHaveAttribute('src', /\/audio\/song1\.wav$/)
+})
+
+test('同源歌曲播放时可切换 3D 空间音效并恢复原声', async ({ page }) => {
+  await page.goto('/search?q=霓虹海')
+  const songRow = page.locator('.el-table__row').filter({ hasText: '霓虹海' }).first()
+  await expect(songRow).toBeVisible()
+  await songRow.getByRole('button', { name: '播放《霓虹海》' }).click()
+  await expect(page.locator('.player-bar .pb-title')).toHaveText('霓虹海')
+
+  const enableButton = page.getByRole('button', { name: '开启 3D 空间音效' })
+  await enableButton.click()
+  const disableButton = page.getByRole('button', { name: '关闭 3D 空间音效' })
+  await expect(disableButton).toHaveAttribute('aria-pressed', 'true')
+  await disableButton.click()
+  await expect(enableButton).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.locator('.player-bar .pb-title')).toHaveText('霓虹海')
 })
 
 test('demo 用户可以收藏歌曲并查看个人播放历史', async ({ page }) => {
@@ -111,7 +127,7 @@ test('本地音频可导入，窄屏滚动后播放器仍固定在视口底部',
 
   await expect(playerBar.locator('.pb-title')).toHaveText('holo-local-e2e')
   await expect(page.locator('.queue-item').filter({ hasText: 'holo-local-e2e' })).toBeVisible()
-  await expect(page.locator('.player-bar audio')).toHaveAttribute('src', /^blob:/)
+  await expect(page.locator('.player-bar audio').first()).toHaveAttribute('src', /^blob:/)
   await page.keyboard.press('Escape')
 
   const before = await playerBar.evaluate((element) => {
