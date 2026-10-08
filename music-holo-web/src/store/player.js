@@ -96,8 +96,8 @@ export const usePlayerStore = defineStore('player', {
       queue,
       currentIndex,
       playing: false,
-      volume: typeof saved.volume === 'number' ? saved.volume : 0.8,
-      mode: saved.mode || 'order',
+      volume: typeof saved.volume === 'number' && Number.isFinite(saved.volume) ? Math.max(0, Math.min(1, saved.volume)) : 0.8,
+      mode: MODES.some((mode) => mode.key === saved.mode) ? saved.mode : 'order',
       /** 歌词 */
       lyrics: [],
       lyricVisible: false,
@@ -332,15 +332,24 @@ export const usePlayerStore = defineStore('player', {
       }
       return this.playAt(0)
     },
-    /** 切换播放模式（循环：顺序 -> 列表循环 -> 单曲循环 -> 随机） */
+    /** 设置合法的播放模式，供播放器与设置页共用。 */
+    setMode(mode) {
+      if (!MODES.some((item) => item.key === mode)) return false
+      this.mode = mode
+      persist(this)
+      return true
+    },
+    /** 切换播放模式（顺序 -> 列表循环 -> 单曲循环 -> 随机）。 */
     toggleMode() {
       const idx = MODES.findIndex((m) => m.key === this.mode)
-      this.mode = MODES[(idx + 1) % MODES.length].key
-      persist(this)
+      return this.setMode(MODES[(idx + 1) % MODES.length].key)
     },
     setVolume(volume) {
-      this.volume = volume
+      const value = Number(volume)
+      if (!Number.isFinite(value)) return false
+      this.volume = Math.max(0, Math.min(1, value))
       persist(this)
+      return true
     },
     /** 加载当前歌曲歌词 */
     async loadLyrics(song) {

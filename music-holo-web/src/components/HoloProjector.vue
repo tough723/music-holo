@@ -73,7 +73,7 @@ const particleStyle = (n) => {
   clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
   background: linear-gradient(180deg, var(--holo-glow), transparent 88%);
   filter: blur(3px);
-  animation: flicker 3.2s ease-in-out infinite;
+  animation: beamPulse 5.2s ease-in-out infinite;
   z-index: 1;
 }
 
@@ -132,7 +132,7 @@ const particleStyle = (n) => {
   border-radius: 50%;
   border: 1px dashed color-mix(in srgb, var(--holo-primary) 70%, transparent);
   transform: rotateX(72deg);
-  animation: ringPulse 3s ease-in-out infinite;
+  animation: ringPulse 5.8s ease-in-out infinite;
   pointer-events: none;
 }
 .holo-ring.r1 {
@@ -142,7 +142,7 @@ const particleStyle = (n) => {
 .holo-ring.r2 {
   inset: -30%;
   opacity: 0.3;
-  animation-duration: 4.2s;
+  animation-duration: 7.2s;
   animation-direction: reverse;
 }
 
@@ -185,7 +185,7 @@ const particleStyle = (n) => {
   background: var(--holo-primary);
   filter: blur(7px);
   opacity: 0.75;
-  animation: basePulse 2.4s ease-in-out infinite;
+  animation: basePulse 5.2s ease-in-out infinite;
 }
 
 /* 地面投影阴影 */
@@ -196,7 +196,7 @@ const particleStyle = (n) => {
   border-radius: 50%;
   background: radial-gradient(closest-side, var(--holo-glow), transparent);
   filter: blur(4px);
-  animation: shadowPulse 2.4s ease-in-out infinite;
+  animation: shadowPulse 5.2s ease-in-out infinite;
 }
 
 .holo-caption {
@@ -228,15 +228,13 @@ const particleStyle = (n) => {
   from { transform: rotateY(0deg); }
   to { transform: rotateY(360deg); }
 }
-@keyframes flicker {
-  0%, 100% { opacity: 0.55; }
-  25% { opacity: 0.85; }
-  50% { opacity: 0.6; }
-  75% { opacity: 0.9; }
+@keyframes beamPulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 0.82; }
 }
 @keyframes ringPulse {
-  0%, 100% { transform: rotateX(72deg) scale(1); opacity: 0.35; }
-  50% { transform: rotateX(72deg) scale(1.12); opacity: 0.7; }
+  0%, 100% { transform: rotateX(72deg) scale(1); opacity: 0.42; }
+  50% { transform: rotateX(72deg) scale(1.04); opacity: 0.52; }
 }
 @keyframes floatUp {
   0% { transform: translateY(0); opacity: 0; }
@@ -245,11 +243,11 @@ const particleStyle = (n) => {
   100% { transform: translateY(calc(var(--sz) * -1.1)); opacity: 0; }
 }
 @keyframes basePulse {
-  0%, 100% { opacity: 0.5; }
-  50% { opacity: 0.95; }
+  0%, 100% { opacity: 0.68; }
+  50% { opacity: 0.82; }
 }
 @keyframes shadowPulse {
-  0%, 100% { transform: scaleX(1); opacity: 0.7; }
-  50% { transform: scaleX(1.15); opacity: 1; }
+  0%, 100% { transform: scaleX(1); opacity: 0.68; }
+  50% { transform: scaleX(1.04); opacity: 0.82; }
 }
 </style>

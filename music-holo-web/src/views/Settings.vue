@@ -4,7 +4,7 @@
       <div class="page-heading-copy">
         <div class="settings-eyebrow">MUSIC HOLO · PERSONAL CONSOLE</div>
         <div class="page-title">设置中心</div>
-        <div class="page-subtitle">打造属于你的全息视界，管理外观、账号安全与自定义音源。</div>
+        <div class="page-subtitle">按类别管理视觉、播放、本机数据、账号安全与自定义音源。</div>
       </div>
       <div class="settings-overview" aria-label="当前设置概览">
         <div class="overview-chip">
@@ -17,10 +17,19 @@
           <span>玻璃</span>
           <strong>{{ themeStore.glassOpacity }}%</strong>
         </div>
+        <div class="overview-chip">
+          <span class="overview-dot motion-dot"></span>
+          <span>动效</span>
+          <strong>{{ preferencesStore.visualMotion === 'calm' ? '柔和' : '影院' }}</strong>
+        </div>
       </div>
     </div>
 
-    <el-tabs v-model="activeTab" class="settings-tabs" @tab-change="persistActiveTab">
+    <el-tabs v-model="activeTab" :tab-position="tabPosition" class="settings-tabs" @tab-change="persistActiveTab">
+      <el-tab-pane label="通用设置" name="general">
+        <GeneralPreferences @navigate="activeTab = $event" />
+      </el-tab-pane>
+
       <!-- 主题设置 -->
       <el-tab-pane label="全息主题" name="theme">
         <div class="theme-grid">
@@ -92,6 +101,10 @@
             />
           </div>
         </div>
+      </el-tab-pane>
+
+      <el-tab-pane label="播放偏好" name="playback">
+        <PlaybackPreferences />
       </el-tab-pane>
 
       <!-- 个人资料 -->
@@ -175,12 +188,16 @@
       <el-tab-pane label="自定义源" name="sources">
         <CustomSourceManager />
       </el-tab-pane>
+
+      <el-tab-pane label="本机数据" name="data">
+        <SettingsBackupPanel @navigate="activeTab = $event" />
+      </el-tab-pane>
     </el-tabs>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import * as userApi from '@/api/user'
 import * as commonApi from '@/api/common'
@@ -190,15 +207,22 @@ import { usePlayerStore } from '@/store/player'
 import HoloProjector from '@/components/HoloProjector.vue'
 import Cover from '@/components/Cover.vue'
 import CustomSourceManager from '@/components/settings/CustomSourceManager.vue'
+import GeneralPreferences from '@/components/settings/GeneralPreferences.vue'
+import PlaybackPreferences from '@/components/settings/PlaybackPreferences.vue'
+import SettingsBackupPanel from '@/components/settings/SettingsBackupPanel.vue'
+import { usePreferencesStore } from '@/store/preferences'
 
 const userStore = useUserStore()
 const themeStore = useThemeStore()
 const playerStore = usePlayerStore()
+const preferencesStore = usePreferencesStore()
 
 const SETTINGS_TAB_KEY = 'mh_settings_tab'
-const SETTINGS_TABS = ['theme', 'profile', 'password', 'sources']
+const SETTINGS_TABS = ['general', 'theme', 'playback', 'profile', 'password', 'sources', 'data']
 const savedTab = localStorage.getItem(SETTINGS_TAB_KEY)
-const activeTab = ref(SETTINGS_TABS.includes(savedTab) ? savedTab : 'theme')
+const activeTab = ref(SETTINGS_TABS.includes(savedTab) ? savedTab : 'general')
+const tabPosition = ref(typeof window !== 'undefined' && window.innerWidth <= 760 ? 'top' : 'left')
+const updateTabPosition = () => { tabPosition.value = window.innerWidth <= 760 ? 'top' : 'left' }
 const persistActiveTab = (tab) => {
   if (SETTINGS_TABS.includes(tab)) localStorage.setItem(SETTINGS_TAB_KEY, tab)
 }
@@ -409,7 +433,11 @@ const onChangePassword = async () => {
   }
 }
 
-onMounted(loadProfile)
+onMounted(() => {
+  loadProfile()
+  window.addEventListener('resize', updateTabPosition)
+})
+onUnmounted(() => window.removeEventListener('resize', updateTabPosition))
 </script>
 
 <style scoped>
@@ -442,11 +470,52 @@ onMounted(loadProfile)
 .overview-chip strong { color: var(--text-main); font-size: 11px; font-weight: 650; }
 .overview-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--holo-primary); box-shadow: 0 0 10px var(--holo-primary); }
 .glass-dot { background: var(--holo-secondary); box-shadow: 0 0 10px var(--holo-secondary); }
+.motion-dot { background: #a3e635; box-shadow: 0 0 10px #a3e635; }
 .settings-tabs {
+  min-width: 0;
   padding: 0 4px;
+  align-items: flex-start;
+  overflow: visible;
 }
-.settings-tabs :deep(.el-tabs__nav-wrap::after) {
-  background-color: var(--border-color);
+.settings-tabs :deep(.el-tabs__header.is-left) {
+  width: 168px;
+  flex: 0 0 168px;
+  align-self: stretch;
+  padding: 8px;
+  margin-right: 18px;
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--holo-primary) 4%, var(--bg-panel)), var(--bg-panel));
+  box-shadow: 0 18px 42px -36px #000, inset 0 1px 0 rgba(255, 255, 255, .05);
+}
+.settings-tabs :deep(.el-tabs__nav-wrap.is-left),
+.settings-tabs :deep(.el-tabs__nav-scroll) { height: auto; }
+.settings-tabs :deep(.el-tabs__nav-wrap.is-left) { margin-right: 0; overflow: visible; }
+.settings-tabs :deep(.el-tabs__nav-wrap.is-left::after) { display: none; }
+.settings-tabs :deep(.el-tabs__nav.is-left) { display: flex; flex-direction: column; float: none; width: 100%; gap: 4px; }
+.settings-tabs :deep(.el-tabs__item.is-left) {
+  justify-content: flex-start;
+  height: 42px;
+  padding: 0 12px;
+  border-radius: 9px;
+  color: var(--text-sub);
+  text-align: left;
+  transition: color .16s ease, background .16s ease, transform .16s ease;
+}
+.settings-tabs :deep(.el-tabs__item.is-left:hover) { background: color-mix(in srgb, var(--holo-primary) 7%, transparent); transform: translateX(2px); }
+.settings-tabs :deep(.el-tabs__item.is-left.is-active) { color: var(--holo-primary); background: color-mix(in srgb, var(--holo-primary) 11%, transparent); box-shadow: inset 2px 0 0 var(--holo-primary); }
+.settings-tabs :deep(.el-tabs__active-bar.is-left) { display: none; }
+.settings-tabs :deep(.el-tabs__content) { min-width: 0; flex: 1; overflow: visible; }
+.settings-tabs :deep(.el-tab-pane) { min-width: 0; }
+@media (max-width: 760px) {
+  .settings-tabs { display: block; }
+  .settings-tabs :deep(.el-tabs__header) { width: 100%; margin: 0 0 12px; padding: 0 0 4px; border: 0; border-bottom: 1px solid var(--border-color); border-radius: 0; background: transparent; box-shadow: none; }
+  .settings-tabs :deep(.el-tabs__nav-wrap) { overflow: auto; }
+  .settings-tabs :deep(.el-tabs__nav-wrap::after) { display: block; height: 1px; background: var(--border-color); }
+  .settings-tabs :deep(.el-tabs__nav) { flex-direction: row; gap: 2px; }
+  .settings-tabs :deep(.el-tabs__item) { height: 40px; padding: 0 11px; border-radius: 8px; font-size: 12px; }
+  .settings-tabs :deep(.el-tabs__item.is-active) { background: color-mix(in srgb, var(--holo-primary) 9%, transparent); }
+  .settings-tabs :deep(.el-tabs__active-bar) { display: none; }
 }
 
 /* 立体全息主题预览 */

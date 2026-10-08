@@ -142,26 +142,22 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/store/user'
 import { usePlayerStore } from '@/store/player'
+import { usePreferencesStore } from '@/store/preferences'
 import PlayerBar from '@/components/PlayerBar.vue'
 import LyricPanel from '@/components/LyricPanel.vue'
 import HoloProjector from '@/components/HoloProjector.vue'
 import Cover from '@/components/Cover.vue'
 import AppNavigation from '@/components/AppNavigation.vue'
 
-const SIDEBAR_STORAGE_KEY = 'mh_sidebar_collapsed'
-
-function readSidebarPreference() {
-  try { return localStorage.getItem(SIDEBAR_STORAGE_KEY) === 'true' } catch { return false }
-}
-
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
 const playerStore = usePlayerStore()
+const preferencesStore = usePreferencesStore()
 const searchTerm = ref('')
 const searchInput = ref(null)
 const mobileNavVisible = ref(false)
-const sidebarCollapsed = ref(readSidebarPreference())
+const sidebarCollapsed = computed(() => preferencesStore.sidebarCollapsed)
 const viewportWidth = ref(typeof window === 'undefined' ? 1280 : window.innerWidth)
 const sidebarIsCollapsed = computed(() => sidebarCollapsed.value || viewportWidth.value <= 900)
 
@@ -174,12 +170,8 @@ watch(() => route.query.q, (value) => {
   searchTerm.value = String(value || '')
 }, { immediate: true })
 
-watch(sidebarCollapsed, (collapsed) => {
-  try { localStorage.setItem(SIDEBAR_STORAGE_KEY, String(collapsed)) } catch { /* Preference is optional. */ }
-})
-
 const toggleSidebar = () => {
-  if (viewportWidth.value > 900) sidebarCollapsed.value = !sidebarCollapsed.value
+  if (viewportWidth.value > 900) preferencesStore.setSidebarCollapsed(!sidebarCollapsed.value)
 }
 const onViewportResize = () => { viewportWidth.value = window.innerWidth }
 

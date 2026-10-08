@@ -149,6 +149,7 @@ test('设置页支持主题同步、个人资料保存与修改密码校验', as
   await openMenu(page, '设置')
   await expect(page.locator('.settings-eyebrow')).toBeVisible()
 
+  await page.getByRole('tab', { name: '全息主题' }).click()
   await page.getByRole('button', { name: /矩阵声场/ }).click()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'lime')
   await page.getByRole('tab', { name: '个人资料' }).click()
@@ -166,6 +167,33 @@ test('设置页支持主题同步、个人资料保存与修改密码校验', as
   await page.getByPlaceholder('请再次输入新密码').fill('not-the-same')
   await page.getByRole('button', { name: '修改密码' }).click()
   await expect(page.getByText('两次输入的新密码不一致', { exact: true })).toBeVisible()
+})
+
+test('设置中心提供低闪烁动效、播放偏好与本机配置备份', async ({ page }) => {
+  await loginAs(page, 'demo')
+  await openMenu(page, '设置')
+
+  await expect(page.getByRole('tab', { name: '通用设置' })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.locator('html')).toHaveAttribute('data-holo-motion', 'calm')
+  const ambientOrbit = page.locator('.holo-environment .env-orbit').first()
+  await expect.poll(() => ambientOrbit.evaluate((element) => getComputedStyle(element).animationName)).toBe('none')
+
+  await page.getByRole('radio', { name: /影院动态/ }).check({ force: true })
+  await expect(page.locator('html')).toHaveAttribute('data-holo-motion', 'cinematic')
+  await page.getByRole('radio', { name: /柔和全息/ }).check({ force: true })
+  await page.getByRole('tab', { name: '播放偏好' }).click()
+  await page.getByRole('radio', { name: '随机播放' }).click()
+  expect(JSON.parse(await page.evaluate(() => localStorage.getItem('mh_player'))).mode).toBe('random')
+
+  await page.getByRole('tab', { name: '本机数据' }).click()
+  await expect(page.getByText('备份范围刻意保持精简')).toBeVisible()
+  const downloadPromise = page.waitForEvent('download')
+  await page.getByRole('button', { name: '导出本机配置' }).click()
+  const download = await downloadPromise
+  expect(download.suggestedFilename()).toMatch(/^music-holo-settings-.*\.json$/)
+  await page.getByRole('button', { name: '前往自定义源管理' }).click()
+  await expect(page.getByRole('tab', { name: '自定义源' })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByText('脚本默认不会自动运行')).toBeVisible()
 })
 
 test('本机自定义源支持导入、隔离检测、曲库填充、匿名 CORS 试听和导出', async ({ page }) => {

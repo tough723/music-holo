@@ -249,6 +249,18 @@ body {
   background: color-mix(in srgb, var(--holo-primary) 42%, #4f46e5);
 }
 
+/* Calm is the default visual mode: preserve the holographic depth, but remove repeated beam / particle pulsing. */
+:root[data-holo-motion='calm'] :is(.env-haze, .env-orbit, .env-particles i, .holo-cone, .holo-ring, .holo-shadow, .holo-particles i, .playing-icon, .backdrop-orbit, .source-pulse, .signal-one, .signal-two, .hero-disc__ring, .visual-equalizer.active i, .footer-spectrum.active i) {
+  animation: none !important;
+}
+:root[data-holo-motion='calm'] .env-particles i { opacity: 0.17 !important; transform: translate3d(0, 0, -60px) scale(0.82); }
+:root[data-holo-motion='calm'] .holo-cone { opacity: 0.72; }
+:root[data-holo-motion='calm'] .holo-ring.r1 { opacity: 0.46; }
+:root[data-holo-motion='calm'] .holo-ring.r2 { opacity: 0.28; }
+:root[data-holo-motion='calm'] .holo-particles i { opacity: 0.12; }
+:root[data-holo-motion='calm'] .holo-base::after,
+:root[data-holo-motion='calm'] .holo-shadow { opacity: 0.74; }
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

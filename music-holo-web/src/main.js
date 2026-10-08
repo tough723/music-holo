@@ -11,9 +11,11 @@ import router from './router'
 import './styles/global.css'
 
 import { useThemeStore } from './store/theme'
+import { usePreferencesStore } from './store/preferences'
 
 const app = createApp(App)
-app.use(createPinia())
+const pinia = createPinia()
+app.use(pinia)
 app.use(router)
 app.use(ElementPlus, { locale: zhCn })
 
@@ -22,8 +24,12 @@ for (const [name, component] of Object.entries(ElementPlusIconsVue)) {
   app.component(name, component)
 }
 
+// 初始化外观偏好，避免首屏先播放强闪烁动效再切换到用户设置。
+const preferencesStore = usePreferencesStore(pinia)
+preferencesStore.applyVisualMotion()
+
 // 初始化主题（CSS 变量 + data-theme）
-const themeStore = useThemeStore()
+const themeStore = useThemeStore(pinia)
 themeStore.apply(themeStore.theme)
 
 app.mount('#app')
