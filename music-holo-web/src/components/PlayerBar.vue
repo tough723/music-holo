@@ -234,6 +234,7 @@ import { SLEEP_TIMER_MINUTES, usePlayerStore } from '@/store/player'
 import { useUserStore } from '@/store/user'
 import * as favoriteApi from '@/api/favorite'
 import { fmtDuration } from '@/utils/format'
+import { createMediaSessionController } from '@/utils/mediaSession'
 import { createSpatialAudioGraph, isSpatialAudioUrl } from '@/utils/spatialAudio'
 import HoloProjector from './HoloProjector.vue'
 import Cover from './Cover.vue'
@@ -246,6 +247,8 @@ const spatialAudioRef = ref(null)
 const spatialEnabled = ref(false)
 const trackRef = ref(null)
 let spatialAudioGraph = null
+let mediaSessionController = null
+let lastMediaSessionPositionAt = 0
 const localFileInput = ref(null)
 const queueVisible = ref(false)
 const sleepTimerVisible = ref(false)
@@ -399,6 +402,7 @@ function seekTo(time) {
   if (audio && playerStore.duration) {
     audio.currentTime = Math.max(0, Math.min(time, playerStore.duration))
     playerStore.currentTime = audio.currentTime
+    syncMediaSessionPosition(true)
   }
 }
 
@@ -413,6 +417,53 @@ function onSeek(e) {
 function seekByKeyboard(seconds) {
   if (!playerStore.duration) return
   seekTo(playerStore.currentTime + seconds)
+}
+
+function syncMediaSessionMetadata(song = currentSong.value) {
+  mediaSessionController?.updateMetadata(song, typeof window === 'undefined' ? undefined : window.location.href)
+}
+
+function syncMediaSessionPlaybackState() {
+  mediaSessionController?.updatePlaybackState(playerStore.playing, hasSong.value)
+}
+
+function syncMediaSessionPosition(force = false) {
+  if (!mediaSessionController) return
+  const now = Date.now()
+  if (!force && now - lastMediaSessionPositionAt < 1000) return
+  lastMediaSessionPositionAt = now
+  const audio = activeAudioElement()
+  const duration = Number.isFinite(audio?.duration) && audio.duration > 0
+    ? audio.duration
+    : playerStore.duration
+  const position = Number.isFinite(audio?.currentTime) ? audio.currentTime : playerStore.currentTime
+  mediaSessionController.updatePosition({
+    duration,
+    position,
+    playbackRate: audio?.playbackRate || 1
+  })
+}
+
+function installMediaSession() {
+  mediaSessionController = createMediaSessionController({
+    navigatorObject: window.navigator,
+    MediaMetadataConstructor: window.MediaMetadata,
+    actions: {
+      play: () => { if (hasSong.value) playerStore.playing = true },
+      pause: () => { playerStore.playing = false },
+      stop: () => { playerStore.playing = false },
+      previoustrack: prev,
+      nexttrack: next,
+      seekbackward: ({ seekOffset } = {}) => seekByKeyboard(-(Number.isFinite(Number(seekOffset)) ? Number(seekOffset) : 10)),
+      seekforward: ({ seekOffset } = {}) => seekByKeyboard(Number.isFinite(Number(seekOffset)) ? Number(seekOffset) : 10),
+      seekto: ({ seekTime } = {}) => {
+        if (Number.isFinite(Number(seekTime))) seekTo(Number(seekTime))
+      }
+    }
+  })
+  syncMediaSessionMetadata()
+  syncMediaSessionPlaybackState()
+  syncMediaSessionPosition(true)
 }
 
 function onProgressKeydown(event) {
@@ -585,6 +636,9 @@ function clearQueue() {
 
 // ---------- audio 元素与 store 双向同步 ----------
 watch(currentSong, (song) => {
+  syncMediaSessionMetadata(song)
+  syncMediaSessionPlaybackState()
+  syncMediaSessionPosition(true)
   const nativeAudio = audioRef.value
   const spatialAudio = spatialAudioRef.value
   if (!nativeAudio || !spatialAudio) return
@@ -639,6 +693,8 @@ watch(currentSong, (song) => {
 })
 
 watch(playing, (isPlaying) => {
+  syncMediaSessionPlaybackState()
+  syncMediaSessionPosition(true)
   const audio = activeAudioElement()
   if (!audio || !currentSong.value) return
   if (isPlaying) {
@@ -661,12 +717,14 @@ function onAudioTimeUpdate(event) {
   if (audio !== activeAudioElement()) return
   playerStore.currentTime = audio.currentTime
   playerStore.checkSleepTimer()
+  syncMediaSessionPosition()
 }
 
 function onAudioLoadedMetadata(event) {
   const audio = event.currentTarget
   if (audio !== activeAudioElement()) return
   playerStore.duration = audio.duration || currentSong.value?.duration || 0
+  syncMediaSessionPosition(true)
 }
 
 function onAudioEnded(event) {
@@ -739,6 +797,7 @@ onMounted(() => {
     spatialAudio.addEventListener('ended', onAudioEnded)
     spatialAudio.addEventListener('error', onAudioError)
   }
+  installMediaSession()
   window.addEventListener('mh-seek', onLyricSeek)
   window.addEventListener('keydown', onPlayerShortcut)
   window.addEventListener('resize', onViewportResize)
@@ -755,6 +814,8 @@ onUnmounted(() => {
     audio.removeEventListener('ended', onAudioEnded)
     audio.removeEventListener('error', onAudioError)
   }
+  mediaSessionController?.close()
+  mediaSessionController = null
   try {
     const closing = spatialAudioGraph?.close()
     closing?.catch?.(() => {})

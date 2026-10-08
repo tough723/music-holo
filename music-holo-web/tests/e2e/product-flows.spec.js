@@ -45,6 +45,40 @@ test('同源歌曲播放时可切换 3D 空间音效并恢复原声', async ({ p
   await expect(page.locator('.player-bar .pb-title')).toHaveText('霓虹海')
 })
 
+test('播放器同步曲目到系统媒体会话并响应播放暂停操作', async ({ page }) => {
+  await page.addInitScript(() => {
+    const session = {
+      metadata: null,
+      playbackState: 'none',
+      handlers: {},
+      position: null,
+      setActionHandler(action, handler) { this.handlers[action] = handler },
+      setPositionState(state) { this.position = state }
+    }
+    Object.defineProperty(navigator, 'mediaSession', { configurable: true, value: session })
+    Object.defineProperty(window, 'MediaMetadata', {
+      configurable: true,
+      value: class MediaMetadataMock { constructor(data) { Object.assign(this, data) } }
+    })
+    window.__musicHoloMediaSession = session
+  })
+
+  await page.goto('/search?q=霓虹海')
+  const songRow = page.locator('.el-table__row').filter({ hasText: '霓虹海' }).first()
+  await expect(songRow).toBeVisible()
+  await songRow.getByRole('button', { name: '播放《霓虹海》' }).click()
+
+  await expect.poll(() => page.evaluate(() => window.__musicHoloMediaSession.metadata?.title)).toBe('霓虹海')
+  await expect.poll(() => page.evaluate(() => window.__musicHoloMediaSession.playbackState)).toBe('playing')
+  const actions = await page.evaluate(() => Object.keys(window.__musicHoloMediaSession.handlers))
+  expect(actions).toEqual(expect.arrayContaining(['play', 'pause', 'previoustrack', 'nexttrack', 'seekbackward', 'seekforward', 'seekto']))
+
+  await page.evaluate(() => window.__musicHoloMediaSession.handlers.pause())
+  await expect.poll(() => page.evaluate(() => window.__musicHoloMediaSession.playbackState)).toBe('paused')
+  await page.evaluate(() => window.__musicHoloMediaSession.handlers.play())
+  await expect.poll(() => page.evaluate(() => window.__musicHoloMediaSession.playbackState)).toBe('playing')
+})
+
 test('demo 用户可以收藏歌曲并查看个人播放历史', async ({ page }) => {
   await loginAs(page, 'demo')
   await openMenu(page, '全局搜索')
