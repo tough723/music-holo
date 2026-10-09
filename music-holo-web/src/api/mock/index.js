@@ -621,7 +621,7 @@ route('get', '/recommend/songs', async (ctx) => {
     ...history.slice(0, 5).map((h) => h.songId),
     ...favorites.map((f) => f.songId)
   ])
-  const list = state.songs.filter((s) => s.status === 1 && !excluded.has(s.id))
+  const list = state.songs.filter((s) => s.status === 1 && !excluded.has(s.id) && !isDislikedSong(s, ctx.user))
   const score = (song) => (singerWeights.get(song.singerId) || 0) * 5 +
     (categoryWeights.get(song.categoryId) || 0) * 3 + Math.log1p(song.playCount || 0) / 20
   list.sort((a, b) => score(b) - score(a) || b.playCount - a.playCount || b.id - a.id)
@@ -634,7 +634,7 @@ route('get', '/recommend/similar', async (ctx) => {
   const source = state.songs.find((song) => song.id === sourceSongId && song.status === 1)
   if (!source) throw mockError(404, '歌曲不存在或已下架')
 
-  const candidates = state.songs.filter((song) => song.status === 1 && song.id !== sourceSongId)
+  const candidates = state.songs.filter((song) => song.status === 1 && song.id !== sourceSongId && !isDislikedSong(song, ctx.user))
   const score = (song) => (song.singerId === source.singerId ? 5 : 0) +
     (song.categoryId === source.categoryId ? 3 : 0) + Math.log1p(song.playCount || 0) / 20
   candidates.sort((a, b) => score(b) - score(a) || b.playCount - a.playCount || b.id - a.id)
@@ -1370,6 +1370,89 @@ route('post', '/lyric/upload', async (ctx) => {
   const lrc = await readTextFile(ctx.file)
   if (variant === 'translation') song.lyricTranslation = lrc
   else song.lyric = lrc
+  return null
+})
+
+const DISLIKE_SONG_LIMIT = 500
+const DISLIKE_SINGER_LIMIT = 200
+
+function isDislikedSong(song, user) {
+  if (!user || !song) return false
+  if (state.songDislikes.some((row) => row.userId === user.id && row.songId === song.id)) return true
+  return song.singerId != null && state.singerDislikes.some((row) => row.userId === user.id && row.singerId === song.singerId)
+}
+
+function dislikeSummary(user) {
+  const songRules = state.songDislikes
+    .filter((row) => row.userId === user.id)
+    .sort((a, b) => String(b.createTime || '').localeCompare(String(a.createTime || '')))
+  const singerRules = state.singerDislikes
+    .filter((row) => row.userId === user.id)
+    .sort((a, b) => String(b.createTime || '').localeCompare(String(a.createTime || '')))
+  return {
+    songIds: songRules.map((row) => row.songId),
+    singerIds: singerRules.map((row) => row.singerId),
+    songLimit: DISLIKE_SONG_LIMIT,
+    singerLimit: DISLIKE_SINGER_LIMIT,
+    songs: songRules.map((row) => {
+      const song = state.songs.find((item) => item.id === row.songId)
+      const singer = song ? state.singers.find((item) => item.id === song.singerId) : null
+      return {
+        id: row.songId,
+        title: song?.title || '已下架或已删除的歌曲',
+        singerId: song?.singerId ?? null,
+        singerName: singer?.name || '',
+        cover: song?.cover || ''
+      }
+    }),
+    singers: singerRules.map((row) => {
+      const singer = state.singers.find((item) => item.id === row.singerId)
+      return {
+        id: row.singerId,
+        name: singer?.name || '已下架或已删除的歌手',
+        avatar: singer?.avatar || '',
+        region: singer?.region || ''
+      }
+    })
+  }
+}
+
+// ---------- 不喜欢规则：只影响推荐与自动切歌，不改曲库 ----------
+route('get', '/dislike', async (ctx) => dislikeSummary(requireUser(ctx)))
+
+route('post', '/dislike/song/:songId', async (ctx) => {
+  const user = requireUser(ctx)
+  const songId = num(ctx.params.songId)
+  if (!state.songs.some((song) => song.id === songId)) throw mockError(400, '歌曲不存在')
+  const mine = state.songDislikes.filter((row) => row.userId === user.id)
+  if (mine.some((row) => row.songId === songId)) return null
+  if (mine.length >= DISLIKE_SONG_LIMIT) throw mockError(400, '不喜欢的歌曲已达 500 首上限')
+  state.songDislikes.push({ id: state.genId(), userId: user.id, songId, createTime: new Date().toISOString().slice(0, 19).replace('T', ' ') })
+  return null
+})
+
+route('delete', '/dislike/song/:songId', async (ctx) => {
+  const user = requireUser(ctx)
+  const songId = num(ctx.params.songId)
+  state.songDislikes = state.songDislikes.filter((row) => !(row.userId === user.id && row.songId === songId))
+  return null
+})
+
+route('post', '/dislike/singer/:singerId', async (ctx) => {
+  const user = requireUser(ctx)
+  const singerId = num(ctx.params.singerId)
+  if (!state.singers.some((singer) => singer.id === singerId)) throw mockError(400, '歌手不存在')
+  const mine = state.singerDislikes.filter((row) => row.userId === user.id)
+  if (mine.some((row) => row.singerId === singerId)) return null
+  if (mine.length >= DISLIKE_SINGER_LIMIT) throw mockError(400, '不喜欢的歌手已达 200 位上限')
+  state.singerDislikes.push({ id: state.genId(), userId: user.id, singerId, createTime: new Date().toISOString().slice(0, 19).replace('T', ' ') })
+  return null
+})
+
+route('delete', '/dislike/singer/:singerId', async (ctx) => {
+  const user = requireUser(ctx)
+  const singerId = num(ctx.params.singerId)
+  state.singerDislikes = state.singerDislikes.filter((row) => !(row.userId === user.id && row.singerId === singerId))
   return null
 })
 

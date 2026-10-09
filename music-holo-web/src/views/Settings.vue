@@ -104,6 +104,10 @@
         </div>
       </el-tab-pane>
 
+      <el-tab-pane label="不喜欢" name="dislike">
+        <DislikeRulesPanel />
+      </el-tab-pane>
+
       <el-tab-pane label="播放偏好" name="playback">
         <PlaybackPreferences />
       </el-tab-pane>
@@ -214,6 +218,7 @@ import Cover from '@/components/Cover.vue'
 import CustomSourceManager from '@/components/settings/CustomSourceManager.vue'
 import GeneralPreferences from '@/components/settings/GeneralPreferences.vue'
 import PlaybackPreferences from '@/components/settings/PlaybackPreferences.vue'
+import DislikeRulesPanel from '@/components/settings/DislikeRulesPanel.vue'
 import SearchPreferences from '@/components/settings/SearchPreferences.vue'
 import SettingsBackupPanel from '@/components/settings/SettingsBackupPanel.vue'
 import { usePreferencesStore } from '@/store/preferences'
@@ -224,7 +229,7 @@ const playerStore = usePlayerStore()
 const preferencesStore = usePreferencesStore()
 
 const SETTINGS_TAB_KEY = 'mh_settings_tab'
-const SETTINGS_TABS = ['general', 'theme', 'playback', 'search', 'profile', 'password', 'sources', 'data']
+const SETTINGS_TABS = ['general', 'theme', 'dislike', 'playback', 'search', 'profile', 'password', 'sources', 'data']
 const savedTab = localStorage.getItem(SETTINGS_TAB_KEY)
 const activeTab = ref(SETTINGS_TABS.includes(savedTab) ? savedTab : 'general')
 const tabPosition = ref(typeof window !== 'undefined' && window.innerWidth <= 760 ? 'top' : 'left')

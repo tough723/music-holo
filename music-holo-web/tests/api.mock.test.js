@@ -11,6 +11,7 @@ import * as playlistApi from '@/api/playlist'
 import * as queueApi from '@/api/queue'
 import * as searchApi from '@/api/search'
 import * as recommendationApi from '@/api/recommend'
+import * as dislikeApi from '@/api/dislike'
 import * as reviewApi from '@/api/review'
 import * as historyApi from '@/api/history'
 import * as songApi from '@/api/song'
@@ -542,6 +543,46 @@ describe('内置 Mock API 集成测试', () => {
     expect(picks.every((song) => song.singerId === source.singerId || song.categoryId === source.categoryId)).toBe(true)
     expect(picks.every((song) => !Object.hasOwn(song, 'lyric'))).toBe(true)
     await expect(recommendationApi.similar(999, 12)).rejects.toMatchObject({ code: 404 })
+  })
+
+  it('不喜欢规则按账号隔离，只过滤推荐和相似电台，不隐藏搜索', async () => {
+    await loginAs('demo')
+    const before = await recommendationApi.songs(24)
+    expect(before.some((song) => song.id === 2)).toBe(true)
+
+    await dislikeApi.addSong(2)
+    await dislikeApi.addSong(2)
+    await expect(dislikeApi.addSong(999)).rejects.toMatchObject({ code: 400, msg: '歌曲不存在' })
+    const summary = await dislikeApi.summary()
+    expect(summary.songIds).toEqual([2])
+    expect(summary.songs[0]).toMatchObject({ id: 2, title: '云端信使', singerName: '苏晚' })
+
+    const filtered = await recommendationApi.songs(24)
+    expect(filtered.some((song) => song.id === 2)).toBe(false)
+    const search = await searchApi.search('云端信使')
+    expect(search.songs.some((song) => song.id === 2)).toBe(true)
+    const page = await songApi.page({ pageNum: 1, pageSize: 20 })
+    expect(page.records.some((song) => song.id === 2)).toBe(true)
+
+    await dislikeApi.addSinger(2)
+    const similar = await recommendationApi.similar(1, 24)
+    expect(similar.some((song) => song.singerId === 2 || song.id === 2)).toBe(false)
+
+    await useUserStore().logoutLocal()
+    await loginAs('admin')
+    const adminPicks = await recommendationApi.songs(24)
+    expect(adminPicks.some((song) => song.id === 2 || song.singerId === 2)).toBe(true)
+    expect((await dislikeApi.summary()).songIds).toEqual([])
+
+    await useUserStore().logoutLocal()
+    await loginAs('demo')
+    await dislikeApi.removeSong(2)
+    await dislikeApi.removeSinger(2)
+    expect((await dislikeApi.summary()).songIds).toEqual([])
+    expect((await dislikeApi.summary()).singerIds).toEqual([])
+    expect((await recommendationApi.songs(24)).some((song) => song.id === 2)).toBe(true)
+    await useUserStore().logoutLocal()
+    await expect(dislikeApi.addSong(2)).rejects.toMatchObject({ code: 401 })
   })
 
   it('个性化推荐排除最近已听/已收藏歌曲，并限制结果数量', async () => {

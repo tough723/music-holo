@@ -20,7 +20,7 @@
           <span>{{ userStore.isLogin ? '按你的收听与收藏生成' : '热门歌曲冷启动电台' }}</span>
         </div>
         <div class="radio-actions">
-          <el-button type="primary" round :disabled="songs.length === 0" @click="startRadio">
+          <el-button type="primary" round :disabled="visibleSongs.length === 0" @click="startRadio">
             <el-icon><VideoPlay /></el-icon> 播放本轮电台
           </el-button>
           <el-button round :loading="loading" @click="loadRadio">
@@ -50,10 +50,10 @@
           <div class="section-title">{{ sourceSong ? '从这首歌继续' : '为你挑选' }}</div>
           <div class="section-subtitle">{{ sourceSong ? '优先匹配同歌手与同分类，热度曲目用于补齐' : '根据现有收听和收藏偏好生成；未登录时回落热门' }}</div>
         </div>
-        <el-tag effect="plain" round>{{ songs.length }} 首候选</el-tag>
+        <el-tag effect="plain" round>{{ visibleSongs.length }} 首候选</el-tag>
       </div>
       <SongList
-        :songs="songs"
+        :songs="visibleSongs"
         :loading="loading"
         :favorite-ids="favoriteIds"
         show-album
@@ -61,7 +61,7 @@
         @toggle-favorite="toggleFavorite"
         @add-queue="addToQueue"
       />
-      <el-empty v-if="!loading && songs.length === 0" description="暂时没有可用候选，试试排行榜或稍后重试" :image-size="100">
+      <el-empty v-if="!loading && visibleSongs.length === 0" description="暂时没有可用候选，试试排行榜或稍后重试" :image-size="100">
         <el-button type="primary" plain @click="router.push('/charts')">前往排行榜</el-button>
       </el-empty>
     </section>
@@ -69,7 +69,7 @@
 </template>
 
 <script setup>
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import * as songApi from '@/api/song'
@@ -77,6 +77,7 @@ import * as recommendationApi from '@/api/recommend'
 import * as favoriteApi from '@/api/favorite'
 import { usePlayerStore } from '@/store/player'
 import { useUserStore } from '@/store/user'
+import { useDislikeStore } from '@/store/dislike'
 import Cover from '@/components/Cover.vue'
 import HoloProjector from '@/components/HoloProjector.vue'
 import SongList from '@/components/SongList.vue'
@@ -85,10 +86,12 @@ const route = useRoute()
 const router = useRouter()
 const playerStore = usePlayerStore()
 const userStore = useUserStore()
+const dislikeStore = useDislikeStore()
 const sourceSong = ref(null)
 const songs = ref([])
 const favoriteIds = ref([])
 const loading = ref(false)
+const visibleSongs = computed(() => songs.value.filter((song) => !dislikeStore.matches(song)))
 let requestId = 0
 
 async function loadRadio() {
@@ -125,12 +128,12 @@ async function loadFavorites() {
 }
 
 function startRadio() {
-  if (!songs.value.length) return
-  playerStore.playAll(songs.value, songs.value[0].id)
-  ElMessage.success(`相似歌曲电台已开启，共 ${songs.value.length} 首`)
+  if (!visibleSongs.value.length) return
+  playerStore.playAll(visibleSongs.value, visibleSongs.value[0].id)
+  ElMessage.success(`相似歌曲电台已开启，共 ${visibleSongs.value.length} 首`)
 }
 function playSong(song) {
-  if (songs.value.length) playerStore.playAll(songs.value, song.id)
+  if (visibleSongs.value.length) playerStore.playAll(visibleSongs.value, song.id)
 }
 function addToQueue(song) {
   playerStore.addToQueue(song)

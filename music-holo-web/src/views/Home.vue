@@ -140,7 +140,7 @@
         </div>
       </div>
       <SongList
-        :songs="recommendedSongs"
+        :songs="visibleRecommendations"
         :loading="loading"
         :favorite-ids="favoriteIds"
         show-album
@@ -212,7 +212,7 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import * as songApi from '@/api/song'
@@ -225,6 +225,7 @@ import * as recommendApi from '@/api/recommend'
 import { fmtDateTime } from '@/utils/format'
 import { usePlayerStore } from '@/store/player'
 import { useUserStore } from '@/store/user'
+import { useDislikeStore } from '@/store/dislike'
 import SongList from '@/components/SongList.vue'
 import HoloProjector from '@/components/HoloProjector.vue'
 import Cover from '@/components/Cover.vue'
@@ -232,11 +233,13 @@ import Cover from '@/components/Cover.vue'
 const router = useRouter()
 const playerStore = usePlayerStore()
 const userStore = useUserStore()
+const dislikeStore = useDislikeStore()
 
 const loading = ref(false)
 const loadError = ref('')
 const hotSongs = ref([])
 const recommendedSongs = ref([])
+const visibleRecommendations = computed(() => recommendedSongs.value.filter((song) => !dislikeStore.matches(song)))
 const recentSongs = ref([])
 const singers = ref([])
 const playlists = ref([])
@@ -303,7 +306,7 @@ const onPlay = (song, index) => {
 }
 
 const onRecommendPlay = (song, index) => {
-  playerStore.playAll(recommendedSongs.value, song.id ?? recommendedSongs.value[index]?.id)
+  playerStore.playAll(visibleRecommendations.value, song.id ?? visibleRecommendations.value[index]?.id)
 }
 
 const playRecent = (song) => {

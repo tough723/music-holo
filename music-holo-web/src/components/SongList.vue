@@ -69,7 +69,7 @@
       </template>
     </el-table-column>
 
-    <el-table-column label="操作" :width="(showHistory ? 224 : 190) + (hasCustomSources ? 40 : 0) + 40" align="center" fixed="right">
+    <el-table-column label="操作" :width="(showHistory ? 224 : 190) + (hasCustomSources ? 40 : 0) + 40 + (hideDislike ? 0 : 36)" align="center" fixed="right">
       <template #default="{ row, $index }">
         <el-tooltip content="播放" placement="top">
           <el-button circle size="small" :aria-label="`播放《${row.title}》`" @click.stop="emit('play', row, $index)">
@@ -110,6 +110,18 @@
             <el-icon><DArrowRight /></el-icon>
           </el-button>
         </el-tooltip>
+        <el-tooltip v-if="canDislike(row)" :content="dislikeStore.hasSong(row.id) ? '取消不喜欢' : '不喜欢这首歌，自动切歌和推荐会跳过'" placement="top">
+          <el-button
+            circle
+            size="small"
+            :type="dislikeStore.hasSong(row.id) ? 'danger' : 'default'"
+            :plain="!dislikeStore.hasSong(row.id)"
+            :aria-label="dislikeStore.hasSong(row.id) ? `取消不喜欢《${row.title}》` : `不喜欢《${row.title}》`"
+            @click.stop="toggleDislike(row)"
+          >
+            <el-icon><CircleClose /></el-icon>
+          </el-button>
+        </el-tooltip>
         <el-tooltip content="加入播放队列" placement="top">
           <el-button circle size="small" :aria-label="`加入播放队列《${row.title}》`" @click.stop="emit('add-queue', row)">
             <el-icon><Plus /></el-icon>
@@ -147,6 +159,7 @@ import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
 import { usePlayerStore } from '@/store/player'
 import { useUserStore } from '@/store/user'
+import { useDislikeStore } from '@/store/dislike'
 import ReviewPanel from './ReviewPanel.vue'
 import { fmtDuration, fmtCount, fmtDateTime } from '@/utils/format'
 import { customSourceStorageKeyForOwner, readCustomSources } from '@/utils/customSources'
@@ -164,13 +177,16 @@ const props = defineProps({
   /** 收藏的歌曲 id 集合 */
   favoriteIds: { type: Array, default: () => [] },
   /** 隐藏收藏按钮（如管理后台） */
-  hideFavorite: { type: Boolean, default: false }
+  hideFavorite: { type: Boolean, default: false },
+  /** 隐藏不喜欢按钮（本地队列或管理视图） */
+  hideDislike: { type: Boolean, default: false }
 })
 
 const emit = defineEmits(['play', 'toggle-favorite', 'add-queue'])
 
 const playerStore = usePlayerStore()
 const userStore = useUserStore()
+const dislikeStore = useDislikeStore()
 const router = useRouter()
 const sourceOwner = computed(() => userStore.userInfo?.id ?? userStore.userInfo?.username ?? 'local')
 const sourceStorageKey = computed(() => customSourceStorageKeyForOwner(sourceOwner.value))
@@ -216,6 +232,28 @@ function openCustomSourcePlayback(song) {
   if (!hasCustomSources.value) return
   customSourceSong.value = song
   customSourceDialogVisible.value = true
+}
+
+function canDislike(row) {
+  return !props.hideDislike && row && !row.isLocal && row.id != null && row.id !== ''
+}
+
+async function toggleDislike(row) {
+  if (!canDislike(row)) return
+  if (!userStore.isLogin) {
+    ElMessage.warning('请先登录后再设置不喜欢')
+    router.push('/login')
+    return
+  }
+  try {
+    if (dislikeStore.hasSong(row.id)) {
+      await dislikeStore.removeSong(row.id)
+      ElMessage.success(`已取消不喜欢《${row.title}》`)
+    } else {
+      await dislikeStore.addSong(row)
+      ElMessage.success(`已不喜欢《${row.title}》，自动切歌和推荐会跳过`)
+    }
+  } catch { /* 拦截器已提示 */ }
 }
 
 function playNext(song) {

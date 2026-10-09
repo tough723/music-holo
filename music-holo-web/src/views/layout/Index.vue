@@ -143,6 +143,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUserStore } from '@/store/user'
 import { usePlayerStore } from '@/store/player'
+import { useDislikeStore } from '@/store/dislike'
 import { usePreferencesStore } from '@/store/preferences'
 import PlayerBar from '@/components/PlayerBar.vue'
 import LyricPanel from '@/components/LyricPanel.vue'
@@ -154,6 +155,7 @@ const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
 const playerStore = usePlayerStore()
+const dislikeStore = useDislikeStore()
 const preferencesStore = usePreferencesStore()
 const searchTerm = ref('')
 const searchInput = ref(null)
@@ -169,6 +171,11 @@ const headerCaption = computed(() => route.path.startsWith('/admin')
 
 watch(() => route.query.q, (value) => {
   searchTerm.value = String(value || '')
+}, { immediate: true })
+
+watch(() => userStore.token, (token) => {
+  if (token) dislikeStore.load().catch(() => {})
+  else dislikeStore.clear()
 }, { immediate: true })
 
 const toggleSidebar = () => {

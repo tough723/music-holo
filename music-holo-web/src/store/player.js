@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
 import * as songApi from '@/api/song'
 import * as lyricApi from '@/api/lyric'
+import { useDislikeStore } from '@/store/dislike'
+import { findAdvanceIndex } from '@/utils/dislikeSkip'
 
 const PLAYER_KEY = 'mh_player'
 
@@ -37,6 +39,15 @@ function scheduleSleepTimerTimeout(store) {
 
 function isAudioFile(file) {
   return file && (file.type?.toLowerCase().startsWith('audio/') || AUDIO_FILE_EXTENSION.test(file.name || ''))
+}
+
+function currentDislikeRules() {
+  const rules = useDislikeStore()
+  return { songIds: rules.songIds, singerIds: rules.singerIds }
+}
+
+function afterPlay(playPromise, status) {
+  return Promise.resolve(playPromise).then(() => status)
 }
 
 function createLocalTrackId() {
@@ -360,51 +371,45 @@ export const usePlayerStore = defineStore('player', {
       persist(this)
       releaseLocalSongs(previousQueue)
     },
-    /** 下一首：优先消费用户指定曲目一次，再应用循环/随机模式。 */
+    /**
+     * 下一首：先消费用户指定的一次优先曲目（即使它被屏蔽），再按模式跳过不喜欢规则。
+     * play / playAt 仍可显式播放被屏蔽曲目。
+     */
     next() {
-      if (this.queue.length === 0) return
+      if (this.queue.length === 0) return { played: false, blocked: false, skippedCount: 0 }
       if (this.priorityNextSongId !== null) {
         const priorityIndex = this.queue.findIndex((song) => song.id === this.priorityNextSongId)
         this.priorityNextSongId = null
-        if (priorityIndex >= 0 && priorityIndex !== this.currentIndex) return this.playAt(priorityIndex)
+        if (priorityIndex >= 0 && priorityIndex !== this.currentIndex) {
+          return afterPlay(this.playAt(priorityIndex), { played: true, blocked: false, skippedCount: 0, explicit: true })
+        }
         persist(this)
       }
-      if (this.mode === 'random') {
-        if (this.queue.length === 1) return this.playAt(0)
-        let idx = this.currentIndex
-        while (idx === this.currentIndex) {
-          idx = Math.floor(Math.random() * this.queue.length)
-        }
-        return this.playAt(idx)
+      if (this.mode === 'random' && this.queue.length === 1) {
+        return afterPlay(this.playAt(0), { played: true, blocked: false, skippedCount: 0 })
       }
-      const nextIndex = this.currentIndex + 1
-      if (nextIndex < this.queue.length) {
-        return this.playAt(nextIndex)
+      const found = findAdvanceIndex(this.queue, this.currentIndex, 1, this.mode, currentDislikeRules())
+      if (found.index == null) {
+        this.playing = false
+        return { played: false, blocked: found.skippedCount > 0, skippedCount: found.skippedCount }
       }
-      if (this.mode === 'loop') {
-        return this.playAt(0)
-      }
-      // 顺序播放到末尾，停止
-      this.playing = false
+      return afterPlay(this.playAt(found.index), { played: true, blocked: false, skippedCount: found.skippedCount })
     },
-    /** 上一首 */
+    /** 上一首。顺序模式在队首仍回到当前曲目；其余方向跳过不喜欢规则。 */
     prev() {
-      if (this.queue.length === 0) return
-      if (this.mode === 'random') {
-        let idx = this.currentIndex
-        while (idx === this.currentIndex) {
-          idx = Math.floor(Math.random() * this.queue.length)
-        }
-        return this.playAt(idx)
+      if (this.queue.length === 0) return { played: false, blocked: false, skippedCount: 0 }
+      if (this.mode === 'random' && this.queue.length === 1) {
+        return afterPlay(this.playAt(0), { played: true, blocked: false, skippedCount: 0 })
       }
-      const prevIndex = this.currentIndex - 1
-      if (prevIndex >= 0) {
-        return this.playAt(prevIndex)
+      if (this.currentIndex <= 0 && this.mode !== 'loop' && this.mode !== 'random') {
+        return afterPlay(this.playAt(0), { played: true, blocked: false, skippedCount: 0 })
       }
-      if (this.mode === 'loop') {
-        return this.playAt(this.queue.length - 1)
+      const found = findAdvanceIndex(this.queue, this.currentIndex, -1, this.mode, currentDislikeRules())
+      if (found.index == null) {
+        this.playing = false
+        return { played: false, blocked: found.skippedCount > 0, skippedCount: found.skippedCount }
       }
-      return this.playAt(0)
+      return afterPlay(this.playAt(found.index), { played: true, blocked: false, skippedCount: found.skippedCount })
     },
     /** 设置合法的播放模式，供播放器与设置页共用。 */
     setMode(mode) {

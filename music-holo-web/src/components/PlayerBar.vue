@@ -41,7 +41,7 @@
     <div class="pb-center">
       <div class="pb-controls">
         <el-tooltip content="上一首 · Shift + ←" placement="top">
-          <el-button circle :disabled="!hasSong" @click="prev">
+          <el-button circle :disabled="!hasSong" aria-label="播放上一首" @click="prev">
             <el-icon><DArrowLeft /></el-icon>
           </el-button>
         </el-tooltip>
@@ -52,7 +52,7 @@
           </el-button>
         </el-tooltip>
         <el-tooltip content="下一首 · Shift + →" placement="top">
-          <el-button circle :disabled="!hasSong" @click="next">
+          <el-button circle :disabled="!hasSong" aria-label="播放下一首" @click="next">
             <el-icon><DArrowRight /></el-icon>
           </el-button>
         </el-tooltip>
@@ -435,8 +435,16 @@ function togglePlay() {
   playerStore.playing = !playerStore.playing
 }
 
+function notifyAdvance(result, direction) {
+  Promise.resolve(result).then((status) => {
+    if (!status?.blocked) return
+    ElMessage.info(direction < 0
+      ? '前面的歌曲已设为不喜欢，仍可手动点播'
+      : '后面的歌曲已设为不喜欢，仍可手动点播')
+  })
+}
 function next() {
-  playerStore.next()
+  notifyAdvance(playerStore.next(), 1)
 }
 function prev() {
   // 播放超过 3 秒时「上一首」先回到开头
@@ -444,7 +452,7 @@ function prev() {
     seekTo(0)
     return
   }
-  playerStore.prev()
+  notifyAdvance(playerStore.prev(), -1)
 }
 
 function seekTo(time) {
@@ -793,7 +801,7 @@ function onAudioEnded(event) {
     audio.play().catch(() => {})
     return
   }
-  playerStore.next()
+  next()
 }
 
 function onAudioError(event) {

@@ -560,6 +560,64 @@ test('歌曲短评可发布、举报并由管理员隐藏，作者能看到处�
   await expect(hiddenReview).toContainText('经管理员审核，短评已隐藏')
 })
 
+test('登录用户可屏蔽歌曲和歌手，自动播放与推荐跳过但手动点播仍可用', async ({ page }) => {
+  test.setTimeout(60_000)
+  await loginAs(page, 'demo')
+  await openMenu(page, '歌曲')
+
+  const neonRow = page.locator('.el-table__row').filter({ hasText: '霓虹海' }).first()
+  await expect(neonRow).toBeVisible()
+  await neonRow.getByRole('button', { name: '不喜欢《霓虹海》' }).click()
+  await expect(neonRow.getByRole('button', { name: '取消不喜欢《霓虹海》' })).toBeVisible()
+
+  await page.getByRole('button', { name: '播放全部' }).click()
+  await expect(page.locator('.player-bar .pb-title')).toHaveText('极光列车')
+  await page.locator('.player-bar').getByRole('button', { name: '播放下一首', exact: true }).click()
+  await expect(page.locator('.player-bar .pb-title')).toHaveText('深空回响')
+
+  await openMenu(page, '全局搜索')
+  await page.getByPlaceholder('试试歌名、歌手名，或记得的一句歌词…').fill('霓虹海')
+  await page.keyboard.press('Enter')
+  const searchRow = page.locator('.el-table__row').filter({ hasText: '霓虹海' }).first()
+  await expect(searchRow).toBeVisible()
+  await searchRow.getByRole('button', { name: '播放《霓虹海》' }).click()
+  await expect(page.locator('.player-bar .pb-title')).toHaveText('霓虹海')
+
+  await openMenu(page, '每日推荐')
+  const messengerRow = page.locator('.daily-list .el-table__row').filter({ hasText: '云端信使' })
+  await expect(messengerRow).toBeVisible()
+  await messengerRow.getByRole('button', { name: '不喜欢《云端信使》' }).click()
+  await expect(messengerRow).toHaveCount(0)
+
+  await openMenu(page, '歌手')
+  await page.locator('.singer-card').filter({ hasText: '陆呼吸' }).click()
+  await page.getByRole('button', { name: '不喜欢歌手陆呼吸' }).click()
+  const confirm = page.locator('.el-message-box')
+  await expect(confirm).toContainText('不喜欢这位歌手')
+  await confirm.getByRole('button', { name: '确认屏蔽' }).click()
+  await expect(page.getByRole('button', { name: '取消不喜欢歌手陆呼吸' })).toBeVisible()
+
+  await openMenu(page, '每日推荐')
+  await expect(page.locator('.daily-list .el-table__row').first()).toBeVisible()
+  await expect(page.locator('.daily-list .el-table__row').filter({ hasText: '云端信使' })).toHaveCount(0)
+  await expect(page.locator('.daily-list .el-table__row').filter({ hasText: '玻璃糖纸' })).toHaveCount(0)
+
+  await openMenu(page, '设置')
+  await page.getByRole('tab', { name: '不喜欢' }).click()
+  const panel = page.getByRole('region', { name: '不喜欢规则' })
+  await expect(panel).toContainText('霓虹海')
+  await expect(panel).toContainText('云端信使')
+  await expect(panel).toContainText('陆呼吸')
+  await panel.getByRole('button', { name: '取消不喜欢《霓虹海》' }).click()
+  await panel.getByRole('button', { name: '取消不喜欢《云端信使》' }).click()
+  await panel.getByRole('button', { name: '取消不喜欢歌手陆呼吸' }).click()
+  await expect(panel.getByText('还没有不喜欢的歌曲或歌手')).toBeVisible()
+
+  await openMenu(page, '每日推荐')
+  await expect(page.locator('.daily-list .el-table__row').filter({ hasText: '云端信使' })).toBeVisible()
+  await expect(page.locator('.daily-list .el-table__row').filter({ hasText: '玻璃糖纸' })).toBeVisible()
+})
+
 test('管理员可以进入仪表盘并加载运营统计', async ({ page }) => {
   await loginAs(page, 'admin')
   await page.locator('.sidebar .app-nav-menu').getByRole('menuitem', { name: '管理后台' }).click()

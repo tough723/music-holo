@@ -23,18 +23,19 @@ public class RecommendationController {
 
     private final RecommendationService recommendationService;
 
-    @Operation(summary = "获取猜你喜欢歌曲；匿名用户返回热歌冷启动结果")
+    @Operation(summary = "获取猜你喜欢歌曲；匿名用户返回热歌冷启动结果，登录用户跳过不喜欢规则")
     @GetMapping("/songs")
     public Result<List<SongVO>> songs(@RequestParam(defaultValue = "8") Integer limit) {
         Long userId = StpUtil.isLogin() ? StpUtil.getLoginIdAsLong() : null;
         return Result.success(recommendationService.songs(userId, limit));
     }
 
-    @Operation(summary = "根据一首歌曲生成相似歌曲电台候选")
+    @Operation(summary = "根据一首歌曲生成相似歌曲电台候选；登录用户跳过不喜欢的歌曲和歌手")
     @GetMapping("/similar")
     public Result<List<SongVO>> similar(
             @RequestParam Long sourceSongId,
             @RequestParam(defaultValue = "12") Integer limit) {
-        return Result.success(recommendationService.similar(sourceSongId, limit));
+        Long userId = StpUtil.isLogin() ? StpUtil.getLoginIdAsLong() : null;
+        return Result.success(recommendationService.similar(sourceSongId, limit, userId));
     }
 }

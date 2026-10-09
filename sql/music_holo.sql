@@ -158,6 +158,29 @@ CREATE TABLE `user_play_history` (
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '用户最近播放历史';
 
 -- ------------------------------------------------------------
+-- 用户不喜欢的歌曲 / 歌手（账号隔离，可撤销，不删除曲库）
+-- ------------------------------------------------------------
+DROP TABLE IF EXISTS `user_song_dislike`;
+CREATE TABLE `user_song_dislike` (
+  `id`          BIGINT   NOT NULL COMMENT '主键',
+  `user_id`     BIGINT   NOT NULL COMMENT '用户 id',
+  `song_id`     BIGINT   NOT NULL COMMENT '歌曲 id',
+  `create_time` DATETIME DEFAULT NULL COMMENT '创建时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_user_song_dislike` (`user_id`, `song_id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '用户不喜欢的歌曲';
+
+DROP TABLE IF EXISTS `user_singer_dislike`;
+CREATE TABLE `user_singer_dislike` (
+  `id`          BIGINT   NOT NULL COMMENT '主键',
+  `user_id`     BIGINT   NOT NULL COMMENT '用户 id',
+  `singer_id`   BIGINT   NOT NULL COMMENT '歌手 id',
+  `create_time` DATETIME DEFAULT NULL COMMENT '创建时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_user_singer_dislike` (`user_id`, `singer_id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '用户不喜欢的歌手';
+
+-- ------------------------------------------------------------
 -- 9. 歌曲与歌单短评、点赞和举报审核
 -- ------------------------------------------------------------
 DROP TABLE IF EXISTS `music_review_report`;

@@ -140,6 +140,8 @@ jobs:
           # Exercise the additive migration against the initialized schema twice (no-op on an existing column).
           docker compose exec -T mysql mysql -uroot -proot music_holo < sql/migration_20261009_lyric_translation.sql
           docker compose exec -T mysql mysql -uroot -proot music_holo < sql/migration_20261009_lyric_translation.sql
+          docker compose exec -T mysql mysql -uroot -proot music_holo < sql/migration_20261009_dislike.sql
+          docker compose exec -T mysql mysql -uroot -proot music_holo < sql/migration_20261009_dislike.sql
           base=http://127.0.0.1:18088
           curl --fail --silent --show-error "$base/healthz" | grep -qx 'ok'
           curl --fail --silent --show-error "$base/api/system/theme" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 200'
@@ -204,6 +206,26 @@ jobs:
           curl --fail --silent --show-error -X POST -H "music-holo-token: $token" "$base/api/favorite/2" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 200'
           curl --fail --silent --show-error -X PUT -H "music-holo-token: $token" "$base/api/song/2/play" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 200'
           curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/history/page?pageNum=1&pageSize=20" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and any(row["id"] == 2 for row in d["data"]["records"])'
+          # Song 2 was just played and favorited, so daily recommendations already exclude it. Use an otherwise eligible track.
+          curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/recommend/songs?limit=24" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and any(row.get("id") == 5 for row in d["data"])'
+          curl --fail --silent --show-error -X POST -H "music-holo-token: $token" "$base/api/dislike/song/5" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 200'
+          curl --fail --silent --show-error -X POST -H "music-holo-token: $token" "$base/api/dislike/song/5" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 200'
+          curl --silent --show-error -X POST -H "music-holo-token: $token" "$base/api/dislike/song/999999" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 400 and d["msg"] == "歌曲不存在"'
+          curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/dislike" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and d["data"]["songIds"] == [5] and d["data"]["songs"][0]["title"] == "玻璃糖纸"'
+          curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/recommend/songs?limit=24" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and all(row.get("id") != 5 for row in d["data"])'
+          curl --fail --silent --show-error -H "music-holo-token: $token" --get --data-urlencode "keyword=玻璃糖纸" "$base/api/search" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and any(row.get("id") == 5 for row in d["data"]["songs"])'
+          curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/song/page?pageNum=1&pageSize=20" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert any(row.get("id") == 5 for row in d["data"]["records"])'
+          curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/recommend/similar?sourceSongId=1&limit=24" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and any(row.get("singerId") == 6 for row in d["data"])'
+          curl --fail --silent --show-error -X POST -H "music-holo-token: $token" "$base/api/dislike/singer/6" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 200'
+          curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/recommend/similar?sourceSongId=1&limit=24" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and d["data"] and all(row.get("singerId") != 6 and row.get("id") != 5 for row in d["data"])'
+          admin_login=$(curl --fail --silent --show-error -H 'Content-Type: application/json' -d '{"username":"admin","password":"123456"}' "$base/api/auth/login")
+          admin_token=$(printf '%s' "$admin_login" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200; print(d["data"]["token"])')
+          curl --fail --silent --show-error -H "music-holo-token: $admin_token" "$base/api/recommend/songs?limit=24" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert any(row.get("id") == 5 for row in d["data"]) and any(row.get("singerId") == 6 for row in d["data"])'
+          curl --fail --silent --show-error -X DELETE -H "music-holo-token: $token" "$base/api/dislike/song/5" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 200'
+          curl --fail --silent --show-error -X DELETE -H "music-holo-token: $token" "$base/api/dislike/singer/6" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 200'
+          curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/dislike" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["data"]["songIds"] == [] and d["data"]["singerIds"] == []'
+          curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/recommend/songs?limit=24" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert any(row.get("id") == 5 for row in d["data"])'
+          curl --silent --show-error -X POST "$base/api/dislike/song/5" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 401'
           printf 'upload volume survives a server restart\n' > /tmp/music-holo-upload-smoke.txt
           upload=$(curl --fail --silent --show-error -H "music-holo-token: $token" -F file=@/tmp/music-holo-upload-smoke.txt "$base/api/common/upload")
           profile=$(printf '%s' "$upload" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200; print(d["data"]["url"])')

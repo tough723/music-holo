@@ -10,15 +10,15 @@
         <h1>每日推荐<span class="holo-text">，遇见新声音</span></h1>
         <p>{{ intro }}</p>
         <div class="daily-actions">
-          <el-button type="primary" round size="large" :disabled="songs.length === 0" @click="playAll">
+          <el-button type="primary" round size="large" :disabled="visibleSongs.length === 0" @click="playAll">
             <el-icon><VideoPlay /></el-icon> 播放今日推荐
           </el-button>
-          <el-button round size="large" :disabled="songs.length === 0" @click="addAllToQueue">
+          <el-button round size="large" :disabled="visibleSongs.length === 0" @click="addAllToQueue">
             <el-icon><Plus /></el-icon> 加入播放队列
           </el-button>
         </div>
         <div class="daily-stats">
-          <span><b>{{ songs.length }}</b> 首今日精选</span>
+          <span><b>{{ visibleSongs.length }}</b> 首今日精选</span>
           <i></i>
           <span><b>{{ matchedCategoryCount }}</b> 种声音</span>
           <i></i>
@@ -88,6 +88,7 @@
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
+import { useDislikeStore } from '@/store/dislike'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import * as recommendApi from '@/api/recommend'
@@ -101,6 +102,7 @@ import HoloProjector from '@/components/HoloProjector.vue'
 const router = useRouter()
 const playerStore = usePlayerStore()
 const userStore = useUserStore()
+const dislikeStore = useDislikeStore()
 const loading = ref(false)
 const loadError = ref('')
 const recommendationUnavailable = ref(false)
@@ -113,14 +115,15 @@ const now = new Date()
 const dayNumber = computed(() => String(now.getDate()).padStart(2, '0'))
 const monthYear = computed(() => new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long' }).format(now))
 const weekday = computed(() => new Intl.DateTimeFormat('zh-CN', { weekday: 'long' }).format(now))
-const featuredSong = computed(() => songs.value[0] || null)
+const visibleSongs = computed(() => songs.value.filter((song) => !dislikeStore.matches(song)))
+const featuredSong = computed(() => visibleSongs.value[0] || null)
 const availableCategories = computed(() => categories.value.filter((category) =>
-  songs.value.some((song) => song.categoryId === category.id)
+  visibleSongs.value.some((song) => song.categoryId === category.id)
 ))
 const matchedCategoryCount = computed(() => availableCategories.value.length)
 const filteredSongs = computed(() => selectedCategory.value === null
-  ? songs.value
-  : songs.value.filter((song) => song.categoryId === selectedCategory.value))
+  ? visibleSongs.value
+  : visibleSongs.value.filter((song) => song.categoryId === selectedCategory.value))
 const intro = computed(() => userStore.isLogin
   ? '结合近期收听与收藏，为你整理一份轻松开听的专属歌单。'
   : '先从平台热歌开始，登录后还能根据你的收听与收藏发现更多同频声音。')

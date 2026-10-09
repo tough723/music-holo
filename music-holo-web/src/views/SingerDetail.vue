@@ -22,6 +22,14 @@
           <el-button round :disabled="songs.length === 0" @click="addAllToQueue">
             <el-icon><Plus /></el-icon> 加入队列
           </el-button>
+          <el-button
+            round
+            :type="singerDisliked ? 'danger' : 'default'"
+            :aria-label="singerDisliked ? `取消不喜欢歌手${singer.name}` : `不喜欢歌手${singer.name}`"
+            @click="toggleSingerDislike"
+          >
+            {{ singerDisliked ? '已不喜欢这位歌手' : '不喜欢这位歌手' }}
+          </el-button>
         </div>
       </div>
       <div class="singer-holo">
@@ -55,13 +63,14 @@
 </template>
 
 <script setup>
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import * as singerApi from '@/api/singer'
 import * as favoriteApi from '@/api/favorite'
 import { usePlayerStore } from '@/store/player'
 import { useUserStore } from '@/store/user'
+import { useDislikeStore } from '@/store/dislike'
 import SongList from '@/components/SongList.vue'
 import HoloProjector from '@/components/HoloProjector.vue'
 import Cover from '@/components/Cover.vue'
@@ -70,9 +79,11 @@ const route = useRoute()
 const router = useRouter()
 const playerStore = usePlayerStore()
 const userStore = useUserStore()
+const dislikeStore = useDislikeStore()
 
 const loading = ref(false)
 const singer = ref(null)
+const singerDisliked = computed(() => singer.value ? dislikeStore.hasSinger(singer.value.id) : false)
 const songs = ref([])
 const favoriteIds = ref([])
 
@@ -134,6 +145,35 @@ const onToggleFavorite = async (song) => {
 const onAddQueue = (song) => {
   playerStore.addToQueue(song)
   ElMessage.success(`已加入播放队列：《${song.title}》`)
+}
+
+const toggleSingerDislike = async () => {
+  if (!singer.value) return
+  if (!userStore.isLogin) {
+    ElMessage.warning('请先登录后再设置不喜欢')
+    router.push('/login')
+    return
+  }
+  if (dislikeStore.hasSinger(singer.value.id)) {
+    try {
+      await dislikeStore.removeSinger(singer.value.id)
+      ElMessage.success(`已取消不喜欢歌手${singer.value.name}`)
+    } catch { /* 拦截器已提示 */ }
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `自动下一首、每日推荐和相似电台将跳过「${singer.value.name}」的歌曲。搜索、排行榜和手动点播仍可播放，也不会删除曲库。`,
+      '不喜欢这位歌手？',
+      { confirmButtonText: '确认屏蔽', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch {
+    return
+  }
+  try {
+    await dislikeStore.addSinger(singer.value)
+    ElMessage.success(`已不喜欢歌手${singer.value.name}，自动切歌和推荐会跳过`)
+  } catch { /* 拦截器已提示 */ }
 }
 
 watch(() => route.params.id, () => {
@@ -212,6 +252,7 @@ onMounted(loadData)
 }
 .singer-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   margin-top: 16px;
 }

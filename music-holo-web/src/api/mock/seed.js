@@ -93,6 +93,9 @@ export function createSeed() {
     { id: 3, userId: 2, songId: 6, createTime: '2026-01-03 10:02:00' }
   ]
 
+  const songDislikes = []
+  const singerDislikes = []
+
   const playHistory = [
     { id: 1, userId: 2, songId: 6, playCount: 9, lastPlayedAt: new Date(Date.now() - 10 * 60_000).toISOString() },
     { id: 2, userId: 2, songId: 4, playCount: 4, lastPlayedAt: new Date(Date.now() - 35 * 60_000).toISOString() },
@@ -125,5 +128,5 @@ export function createSeed() {
   let nextId = 100
   const genId = () => ++nextId
 
-  return { users, singers, categories, songs, playlists, playlistSongs, favorites, playHistory, reviews, reviewLikes, reviewReports, configs, dictData, queues, genId }
+  return { users, singers, categories, songs, playlists, playlistSongs, favorites, songDislikes, singerDislikes, playHistory, reviews, reviewLikes, reviewReports, configs, dictData, queues, genId }
 }
