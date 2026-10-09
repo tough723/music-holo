@@ -129,6 +129,20 @@
             </el-upload>
           </div>
         </el-form-item>
+        <el-form-item label="罗马音">
+          <div class="lyric-row">
+            <el-input
+              v-model="form.lyricRomaji"
+              type="textarea"
+              :rows="4"
+              :disabled="lyricLoading"
+              placeholder="可选 LRC 罗马音，只接受导入，不抓取外部歌词"
+            />
+            <el-upload :show-file-list="false" :http-request="onUploadLyricRomaji" accept=".lrc,.txt" :disabled="lyricLoading">
+              <el-button>上传罗马音 .lrc</el-button>
+            </el-upload>
+          </div>
+        </el-form-item>
         <el-form-item label="译文歌词">
           <div class="lyric-row">
             <el-input
@@ -192,6 +206,7 @@ const form = reactive({
   audioUrl: '',
   lyric: '',
   lyricTranslation: '',
+  lyricRomaji: '',
   status: 1
 })
 
@@ -227,7 +242,7 @@ const openAdd = () => {
   lyricLoadFailed.value = false
   Object.assign(form, {
     id: null, title: '', singerId: null, categoryId: null, album: '',
-    duration: 10, cover: '', audioUrl: '', lyric: '', lyricTranslation: '', status: 1
+    duration: 10, cover: '', audioUrl: '', lyric: '', lyricTranslation: '', lyricRomaji: '', status: 1
   })
   dialogVisible.value = true
 }
@@ -247,6 +262,7 @@ const openEdit = (row) => {
     audioUrl: row.audioUrl || '',
     lyric: '',
     lyricTranslation: '',
+    lyricRomaji: '',
     status: row.status ?? 1
   })
   // 编辑时单独拉取原歌词与译文，避免列表接口返回大段 LRC 正文。
@@ -254,6 +270,7 @@ const openEdit = (row) => {
     if (requestId !== lyricRequestId) return
     form.lyric = detail.lyric || ''
     form.lyricTranslation = detail.lyricTranslation || ''
+    form.lyricRomaji = detail.lyricRomaji || ''
   }).catch(() => {
     if (requestId !== lyricRequestId) return
     lyricLoadFailed.value = true
@@ -289,6 +306,12 @@ const onUploadLyric = async ({ file }) => {
   const text = await file.text()
   form.lyric = text
   ElMessage.success('原歌词文件已读取，保存后生效')
+}
+
+const onUploadLyricRomaji = async ({ file }) => {
+  const text = await file.text()
+  form.lyricRomaji = text
+  ElMessage.success('罗马音歌词文件已读取，保存后生效')
 }
 
 const onUploadLyricTranslation = async ({ file }) => {

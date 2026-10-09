@@ -109,7 +109,11 @@ public class RecommendationService {
         }
 
         List<SongVO> result = songAssembler.toVOList(recommendations);
-        result.forEach(song -> song.setLyric(null));
+        result.forEach(song -> {
+            song.setLyric(null);
+            song.setLyricTranslation(null);
+            song.setLyricRomaji(null);
+        });
         return result;
     }
 
@@ -168,7 +172,11 @@ public class RecommendationService {
         }
 
         List<SongVO> result = songAssembler.toVOList(candidates);
-        result.forEach(song -> song.setLyric(null));
+        result.forEach(song -> {
+            song.setLyric(null);
+            song.setLyricTranslation(null);
+            song.setLyricRomaji(null);
+        });
         return result;
     }
 

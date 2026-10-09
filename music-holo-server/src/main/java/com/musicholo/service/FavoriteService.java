@@ -80,6 +80,8 @@ public class FavoriteService {
         List<SongVO> voList = songAssembler.toVOList(songs);
         voList.forEach(vo -> {
             vo.setLyric(null);
+            vo.setLyricTranslation(null);
+            vo.setLyricRomaji(null);
             vo.setFavorite(true);
         });
         Page<SongVO> voPage = new Page<>(page.getCurrent(), page.getSize(), page.getTotal());

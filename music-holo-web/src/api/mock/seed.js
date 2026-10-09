@@ -45,6 +45,10 @@ export function createSeed() {
     '[00:00.50]Neon wakes, the city starts to breathe\n[00:02.00]The sea breeze carries every worry away\n[00:03.50]Inside the hologram, I think of you\n[00:05.00]The image sways like the shape of longing\n[00:06.50]When the signal lights, I will say hello\n[00:08.00]Our next stop is a gentle universe',
     null, null, null, null, null, null, null
   ]
+  const LYRIC_ROMAJI = [
+    '[00:00.50]Ni hong liang qi, cheng shi kai shi hu xi\n[00:02.00]Hai feng ba xin shi yi bing dai zou\n[00:03.50]Wo zai quan xi tou ying li xiang ni\n[00:05.00]Tou ying yao huang, xiang si nian de xing zhuang\n[00:06.50]Deng xin hao liang qi, shuo yi ju hello\n[00:08.00]Xia yi zhan shi wen rou de yu zhou',
+    null, null, null, null, null, null, null
+  ]
 
   const songMeta = [
     { title: '霓虹海', singerId: 1, categoryId: 1, album: '《霓虹海》', playCount: 12580 },
@@ -65,6 +69,7 @@ export function createSeed() {
     audioUrl: `/audio/song${i + 1}.wav`,
     lyric: LYRICS[i],
     lyricTranslation: LYRIC_TRANSLATIONS[i],
+    lyricRomaji: LYRIC_ROMAJI[i],
     status: 1,
     createTime: '2026-01-01 10:00:00'
   }))

@@ -210,6 +210,32 @@
         </el-button>
       </div>
     </div>
+    <section class="local-library" aria-label="本机音乐与离线副本">
+      <div class="local-library-row">
+        <button type="button" class="local-library-button" :disabled="!persistentHandlesSupported" @click="rememberLocalFiles">记住本地文件</button>
+        <button type="button" class="local-library-button" :disabled="rememberedHandles.length === 0" @click="restoreRememberedFiles">恢复已记住的本地音乐</button>
+      </div>
+      <p class="local-library-note">{{ persistentHandlesSupported ? '授权后句柄留在本机，刷新可再次请求权限。文件不会上传。' : '当前浏览器不能记住文件句柄，刷新后需要重新选择。' }}</p>
+      <button
+        v-if="canSaveDemoAudio"
+        type="button"
+        class="local-library-button"
+        :aria-label="demoCached ? '删除当前歌曲的演示副本' : `保存《${currentSong.title}》的演示音频到本机`"
+        @click="toggleDemoCache"
+      >{{ demoCached ? '删除当前演示副本' : '保存当前演示音频' }}</button>
+      <ul v-if="rememberedHandles.length" class="local-library-list">
+        <li v-for="item in rememberedHandles" :key="item.id">
+          <span>{{ item.name }}</span>
+          <button type="button" :aria-label="`忘记本地文件《${item.name}》`" @click="forgetHandle(item.id)">忘记</button>
+        </li>
+      </ul>
+      <ul v-if="cachedDemoAudio.length" class="local-library-list">
+        <li v-for="clip in cachedDemoAudio" :key="clip.path">
+          <span>{{ clip.title }} · 演示副本</span>
+          <button type="button" :aria-label="`删除《${clip.title}》的离线副本`" @click="removeCachedDemo(clip.path)">删除</button>
+        </li>
+      </ul>
+    </section>
     <div v-if="playerStore.queue.length === 0" class="queue-empty">队列空空如也，点上方“导入本地音乐”选择文件，或去曲库挑几首歌吧～</div>
     <div
       v-for="(song, index) in playerStore.queue"
@@ -274,6 +300,21 @@ import * as favoriteApi from '@/api/favorite'
 import { fmtDuration } from '@/utils/format'
 import { createMediaSessionController } from '@/utils/mediaSession'
 import { createSpatialAudioGraph, isSpatialAudioUrl } from '@/utils/spatialAudio'
+import {
+  filesFromGrantedHandles,
+  forgetRememberedHandle,
+  listRememberedHandles,
+  rememberHandle,
+  supportsPersistentFileHandles
+} from '@/utils/localLibrary'
+import {
+  deleteCachedDemoAudio,
+  hasCachedDemoAudio,
+  isOwnDemoAudioUrl,
+  listCachedDemoAudio,
+  objectUrlForCachedDemo,
+  saveOwnDemoAudio
+} from '@/utils/demoAudioCache'
 import HoloProjector from './HoloProjector.vue'
 import Cover from './Cover.vue'
 
@@ -289,6 +330,11 @@ let spatialAudioGraph = null
 let mediaSessionController = null
 let lastMediaSessionPositionAt = 0
 const localFileInput = ref(null)
+const persistentHandlesSupported = supportsPersistentFileHandles()
+const rememberedHandles = ref([])
+const cachedDemoAudio = ref([])
+const demoCached = ref(false)
+const offlineFallbackAttempted = ref(null)
 const queueVisible = ref(false)
 const sleepTimerVisible = ref(false)
 const sleepClockNow = ref(Date.now())
@@ -662,8 +708,125 @@ function openRadio() {
   router.push({ path: '/radio', query: { sourceId: song.id } })
 }
 
+const canSaveDemoAudio = computed(() => Boolean(
+  currentSong.value &&
+  !currentSong.value.isLocal &&
+  !currentSong.value.isCustomSource &&
+  isOwnDemoAudioUrl(currentSong.value.audioUrl, window.location.href)
+))
+
 function openLocalFilePicker() {
   localFileInput.value?.click()
+}
+
+async function refreshLocalPanels() {
+  try {
+    rememberedHandles.value = (await listRememberedHandles()).map(({ id, name, addedAt }) => ({ id, name, addedAt }))
+  } catch {
+    rememberedHandles.value = []
+  }
+  try {
+    cachedDemoAudio.value = await listCachedDemoAudio()
+  } catch {
+    cachedDemoAudio.value = []
+  }
+  demoCached.value = canSaveDemoAudio.value
+    ? await hasCachedDemoAudio(currentSong.value.audioUrl, window.location.href).catch(() => false)
+    : false
+}
+
+async function rememberLocalFiles() {
+  if (!persistentHandlesSupported) {
+    ElMessage.warning('当前浏览器不能记住文件句柄')
+    return
+  }
+  let handles = []
+  try {
+    handles = await window.showOpenFilePicker({
+      multiple: true,
+      excludeAcceptAllOption: false,
+      types: [{
+        description: '音频',
+        accept: {
+          'audio/*': ['.aac', '.aiff', '.flac', '.m4a', '.mp3', '.oga', '.ogg', '.opus', '.wav', '.webm']
+        }
+      }]
+    })
+  } catch (error) {
+    if (error?.name === 'AbortError') return
+    ElMessage.error('没有获得读取这些文件的权限')
+    return
+  }
+  const entries = []
+  for (const handle of handles) {
+    try {
+      const saved = await rememberHandle(handle)
+      entries.push({ file: await handle.getFile(), handleId: saved.id, name: saved.name })
+    } catch {
+      // 单个句柄失败不影响其余文件。
+    }
+  }
+  if (entries.length === 0) {
+    ElMessage.warning('没有识别到可播放的音频文件')
+    return
+  }
+  const result = playerStore.addRememberedLocalFiles(entries)
+  await refreshLocalPanels()
+  if (result.count > 0) {
+    await playerStore.playAt(result.startIndex)
+    ElMessage.success(`已记住并播放 ${result.count} 首本地音乐，文件仍只在本机`)
+  }
+}
+
+async function restoreRememberedFiles() {
+  let records = []
+  try {
+    records = await listRememberedHandles()
+  } catch {
+    ElMessage.error('无法读取已记住的本地音乐')
+    return
+  }
+  const restored = await filesFromGrantedHandles(records, { requestIfNeeded: true })
+  if (restored.files.length === 0) {
+    ElMessage.warning(restored.blocked ? '需要重新授权后才能恢复这些文件' : '还没有记住的本地文件')
+    return
+  }
+  const result = playerStore.addRememberedLocalFiles(restored.files)
+  if (result.count > 0) {
+    await playerStore.playAt(result.startIndex)
+    ElMessage.success(`已恢复 ${result.count} 首本地音乐`)
+  }
+  if (restored.blocked) ElMessage.warning(`${restored.blocked} 个文件没有获得读取权限`)
+}
+
+async function forgetHandle(id) {
+  await forgetRememberedHandle(id)
+  await refreshLocalPanels()
+}
+
+async function toggleDemoCache() {
+  const song = currentSong.value
+  if (!canSaveDemoAudio.value || !song) return
+  try {
+    if (demoCached.value) {
+      const path = new URL(song.audioUrl, window.location.href).pathname
+      await deleteCachedDemoAudio(path)
+      demoCached.value = false
+      ElMessage.success('已删除本机演示副本')
+    } else {
+      await saveOwnDemoAudio(song, window.location.href)
+      demoCached.value = true
+      ElMessage.success('已保存本站演示音频，可在队列里删除')
+    }
+    cachedDemoAudio.value = await listCachedDemoAudio()
+  } catch (error) {
+    ElMessage.error(error?.message || '演示音频没能保存到本机')
+  }
+}
+
+async function removeCachedDemo(path) {
+  await deleteCachedDemoAudio(path)
+  await refreshLocalPanels()
 }
 
 async function onLocalFilesSelected(event) {
@@ -699,7 +862,18 @@ function clearQueue() {
 }
 
 // ---------- audio 元素与 store 双向同步 ----------
+watch(queueVisible, (open) => {
+  if (open) refreshLocalPanels()
+})
+
 watch(currentSong, (song) => {
+  offlineFallbackAttempted.value = null
+  demoCached.value = false
+  if (song && isOwnDemoAudioUrl(song.audioUrl, window.location.href)) {
+    hasCachedDemoAudio(song.audioUrl, window.location.href).then((cached) => {
+      if (currentSong.value?.id === song.id) demoCached.value = cached
+    }).catch(() => {})
+  }
   syncMediaSessionMetadata(song)
   syncMediaSessionPlaybackState()
   syncMediaSessionPosition(true)
@@ -824,10 +998,30 @@ function onAudioError(event) {
       return
     }
   }
-  if (currentSong.value?.isCustomSource) {
-    ElMessage.error(`《${currentSong.value.title}》加载失败：链接可能已过期，或音频站未开放匿名 CORS`)
-  } else if (currentSong.value) {
-    ElMessage.error(`《${currentSong.value.title}》音频加载失败`)
+  const song = currentSong.value
+  const canFallback = song && !song.isCustomSource && !song.isLocal && offlineFallbackAttempted.value !== song.id
+  if (canFallback) {
+    const audio = event.currentTarget
+    offlineFallbackAttempted.value = song.id
+    objectUrlForCachedDemo(song.audioUrl, window.location.href).then((cachedUrl) => {
+      if (!cachedUrl || currentSong.value?.id !== song.id) {
+        reportAudioLoadFailure(song)
+        return
+      }
+      setAudioSource(audio, cachedUrl)
+      if (playerStore.playing) audio.play().catch(() => { playerStore.playing = false })
+      ElMessage.info('网络音频不可用，已改用本机保存的演示副本')
+    }).catch(() => reportAudioLoadFailure(song))
+    return
+  }
+  reportAudioLoadFailure(song)
+}
+
+function reportAudioLoadFailure(song) {
+  if (song?.isCustomSource) {
+    ElMessage.error(`《${song.title}》加载失败：链接可能已过期，或音频站未开放匿名 CORS`)
+  } else if (song) {
+    ElMessage.error(`《${song.title}》音频加载失败`)
   }
   playerStore.playing = false
 }
@@ -1143,6 +1337,45 @@ watch(() => userStore.isLogin, (loggedIn) => {
 }
 .local-file-input {
   display: none;
+}
+.local-library {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.local-library-row,
+.local-library-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.local-library-button,
+.local-library-list button {
+  border: 1px solid var(--el-border-color);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-sub);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.local-library-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.local-library-note {
+  margin: 0;
+  color: var(--text-sub);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.local-library-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 .queue-count {
   color: var(--text-sub);

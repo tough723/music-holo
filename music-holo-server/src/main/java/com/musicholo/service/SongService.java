@@ -50,8 +50,12 @@ public class SongService {
         Page<Song> page = songMapper.selectPage(
                 new Page<>(query.getPageNum(), query.getPageSize()), qw);
         Page<SongVO> voPage = songAssembler.toVOPage(page);
-        // 列表接口不返回歌词内容，节省流量
-        voPage.getRecords().forEach(vo -> vo.setLyric(null));
+        // 列表接口不返回歌词正文，避免原文、译文和罗马音随分页泄漏。
+        voPage.getRecords().forEach(vo -> {
+            vo.setLyric(null);
+            vo.setLyricTranslation(null);
+            vo.setLyricRomaji(null);
+        });
         return voPage;
     }
 
@@ -82,6 +86,7 @@ public class SongService {
         }
         validateLrcSize(dto.getLyric());
         validateLrcSize(dto.getLyricTranslation());
+        validateLrcSize(dto.getLyricRomaji());
         Song song;
         if (dto.getId() == null) {
             song = new Song();
@@ -103,6 +108,9 @@ public class SongService {
         song.setLyric(dto.getLyric());
         if (dto.getId() == null || dto.getLyricTranslation() != null) {
             song.setLyricTranslation(dto.getLyricTranslation());
+        }
+        if (dto.getId() == null || dto.getLyricRomaji() != null) {
+            song.setLyricRomaji(dto.getLyricRomaji());
         }
         if (dto.getId() == null) {
             songMapper.insert(song);

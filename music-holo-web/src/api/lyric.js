@@ -6,7 +6,7 @@ export const parse = (songId) => api({ url: '/lyric/parse', method: 'get', param
 
 /** 导出原歌词或译文为 .lrc 文件 */
 export const exportLrc = (songId, title, variant = 'original') => {
-  const suffix = variant === 'translation' ? '-translation' : ''
+  const suffix = variant === 'translation' ? '-translation' : variant === 'romaji' ? '-romaji' : ''
   return downloadFile('/lyric/export', { songId, variant }, `${title || 'lyric'}${suffix}.lrc`)
 }
 

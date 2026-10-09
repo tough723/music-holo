@@ -50,6 +50,9 @@ public class Song implements Serializable {
     /** 歌词译文（独立 LRC 文本，按时间标签与原歌词对齐） */
     private String lyricTranslation;
 
+    /** 罗马音歌词（独立 LRC 文本，只接受用户导入） */
+    private String lyricRomaji;
+
     /** 状态：0下架 1正常 */
     private Integer status;
 

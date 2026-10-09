@@ -20,4 +20,7 @@ public class LyricVO implements Serializable {
 
     /** 按时间升序排列的译文歌词行；无译文时为空数组 */
     private List<LyricLine> translationLines;
+
+    /** 按时间升序排列的罗马音歌词行；未导入时为空数组 */
+    private List<LyricLine> romajiLines;
 }

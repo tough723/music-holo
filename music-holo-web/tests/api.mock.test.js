@@ -135,22 +135,44 @@ describe('本地音乐播放', () => {
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:music/night.wav')
   })
 
+  it('已授权句柄只在本次显式恢复时入队，刷新后的持久队列不含本地地址', async () => {
+    vi.stubGlobal('URL', {
+      createObjectURL: vi.fn((file) => `blob:music/${file.name}`),
+      revokeObjectURL: vi.fn()
+    })
+    const player = usePlayerStore()
+    const result = player.addRememberedLocalFiles([
+      { file: new File(['local'], 'remembered.wav', { type: 'audio/wav' }), handleId: 'handle-1', name: 'remembered.wav' },
+      { file: new File(['notes'], 'notes.txt', { type: 'text/plain' }), handleId: 'handle-2', name: 'notes.txt' }
+    ])
+
+    expect(result).toMatchObject({ count: 1, skipped: 1 })
+    expect(player.queue[0]).toMatchObject({ title: 'remembered', isLocal: true, localHandleId: 'handle-1' })
+    const persisted = JSON.parse(localStorage.getItem('mh_player'))
+    expect(persisted.queue).toEqual([])
+    expect(JSON.stringify(persisted)).not.toContain('blob:')
+    expect(JSON.stringify(persisted)).not.toContain('handle-1')
+  })
+
   it('曲库歌曲独立加载译文，并在切换到无译文曲目时清空旧内容', async () => {
     vi.spyOn(songApi, 'play').mockResolvedValue(undefined)
     vi.spyOn(lyricApi, 'parse')
       .mockResolvedValueOnce({
         lines: [{ time: 0.5, text: '原歌词' }],
-        translationLines: [{ time: 0.5, text: 'translated lyric' }]
+        translationLines: [{ time: 0.5, text: 'translated lyric' }],
+        romajiLines: [{ time: 0.5, text: 'Ni hong' }]
       })
-      .mockResolvedValueOnce({ lines: [{ time: 1, text: '下一首' }], translationLines: [] })
+      .mockResolvedValueOnce({ lines: [{ time: 1, text: '下一首' }], translationLines: [], romajiLines: [] })
     const player = usePlayerStore()
 
     await player.playSong({ id: 501, title: '双语测试' })
     expect(player.lyrics).toEqual([{ time: 0.5, text: '原歌词' }])
     expect(player.lyricTranslations).toEqual([{ time: 0.5, text: 'translated lyric' }])
+    expect(player.lyricRomaji).toEqual([{ time: 0.5, text: 'Ni hong' }])
 
     await player.playSong({ id: 502, title: '无译文测试' })
     expect(player.lyricTranslations).toEqual([])
+    expect(player.lyricRomaji).toEqual([])
   })
 
   it('自定义源曲目只在内存播放，不写入持久队列或调用后端 API', async () => {
@@ -419,7 +441,9 @@ describe('内置 Mock API 集成测试', () => {
     expect(result.lines[0]).toMatchObject({ time: 0.5, text: '霓虹亮起 城市开始呼吸' })
     expect(result.lines.every((line) => typeof line.time === 'number' && typeof line.text === 'string')).toBe(true)
     expect(result.translationLines[0]).toMatchObject({ time: 0.5, text: 'Neon wakes, the city starts to breathe' })
+    expect(result.romajiLines[0]).toMatchObject({ time: 0.5, text: 'Ni hong liang qi, cheng shi kai shi hu xi' })
     expect(result.translationLines).toHaveLength(result.lines.length)
+    expect(result.romajiLines).toHaveLength(result.lines.length)
   })
 
   it('译文可独立编辑或上传；旧客户端省略字段不清除已有译文', async () => {
@@ -442,7 +466,40 @@ describe('内置 Mock API 集成测试', () => {
       await lyricApi.save({ songId: 1, lyricTranslation: '' })
       expect((await lyricApi.parse(1)).translationLines).toEqual([])
     } finally {
-      await lyricApi.save({ songId: 1, lyric: original.lyric, lyricTranslation: original.lyricTranslation })
+      await lyricApi.save({ songId: 1, lyric: original.lyric, lyricTranslation: original.lyricTranslation, lyricRomaji: original.lyricRomaji })
+    }
+  })
+
+  it('罗马音可独立导入；省略字段不清除，空字符串才清空，列表不返回正文', async () => {
+    await loginAs('admin')
+    const original = await songApi.detail(1)
+    const uploadedRomaji = '[00:00.50]Uploaded romaji\n[00:02.00]Second romaji line'
+    try {
+      const { lyricRomaji, ...legacyUpdate } = original
+      await songApi.save(legacyUpdate)
+      expect((await songApi.detail(1)).lyricRomaji).toBe(lyricRomaji)
+
+      await lyricApi.save({ songId: 1, lyricRomaji: uploadedRomaji })
+      await lyricApi.save({ songId: 1, lyric: original.lyric })
+      expect((await songApi.detail(1)).lyricRomaji).toBe(uploadedRomaji)
+      expect((await lyricApi.parse(1)).romajiLines[0].text).toBe('Uploaded romaji')
+
+      await lyricApi.upload(1, new File([uploadedRomaji], 'romaji.lrc', { type: 'text/plain' }), 'romaji')
+      expect((await songApi.detail(1)).lyric).toBe(original.lyric)
+      expect((await songApi.detail(1)).lyricTranslation).toBe(original.lyricTranslation)
+
+      const listed = await songApi.page({ pageNum: 1, pageSize: 10, keyword: '霓虹海' })
+      expect(listed.records.find((song) => song.id === 1)).not.toHaveProperty('lyricRomaji')
+
+      await lyricApi.save({ songId: 1, lyricRomaji: '' })
+      expect((await lyricApi.parse(1)).romajiLines).toEqual([])
+    } finally {
+      await lyricApi.save({
+        songId: 1,
+        lyric: original.lyric,
+        lyricTranslation: original.lyricTranslation,
+        lyricRomaji: original.lyricRomaji
+      })
     }
   })
 
@@ -504,7 +561,7 @@ describe('内置 Mock API 集成测试', () => {
     expect(exported).toMatchObject({ format: 'music-holo-playlists', version: 1 })
     expect(exported.playlists.map((playlist) => playlist.name)).toEqual(['华语精选'])
     expect(exported.playlists[0].songs[0]).toMatchObject({ id: '1', title: '霓虹海', singerName: '林澈' })
-    expect(JSON.stringify(exported)).not.toMatch(/\"(?:audioUrl|lyric|lyricTranslation|token|password|script|audio)\"\s*:/)
+    expect(JSON.stringify(exported)).not.toMatch(/\"(?:audioUrl|lyric|lyricTranslation|lyricRomaji|token|password|script|audio)\"\s*:/)
 
     const backup = {
       ...exported,
@@ -554,10 +611,15 @@ describe('内置 Mock API 集成测试', () => {
     expect(result.playlists.some((playlist) => playlist.name === '深夜霓虹')).toBe(true)
     expect(result.songs[0]).not.toHaveProperty('lyric')
     expect(result.songs[0]).not.toHaveProperty('lyricTranslation')
+    expect(result.songs[0]).not.toHaveProperty('lyricRomaji')
 
     const translationMatch = await searchApi.search('Neon wakes', 12)
     expect(translationMatch.songs.map((song) => song.id)).toContain(1)
     expect(translationMatch.songs[0]).not.toHaveProperty('lyricTranslation')
+
+    const romajiMatch = await searchApi.search('Ni hong', 12)
+    expect(romajiMatch.songs.map((song) => song.id)).toContain(1)
+    expect(romajiMatch.songs[0]).not.toHaveProperty('lyricRomaji')
   })
 
   it('专辑从现有歌曲聚合，可按歌手筛选并查询曲目', async () => {

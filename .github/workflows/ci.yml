@@ -142,17 +142,24 @@ jobs:
           docker compose exec -T mysql mysql -uroot -proot music_holo < sql/migration_20261009_lyric_translation.sql
           docker compose exec -T mysql mysql -uroot -proot music_holo < sql/migration_20261009_dislike.sql
           docker compose exec -T mysql mysql -uroot -proot music_holo < sql/migration_20261009_dislike.sql
+          docker compose exec -T mysql mysql -uroot -proot music_holo < sql/migration_20261009_lyric_romaji.sql
+          docker compose exec -T mysql mysql -uroot -proot music_holo < sql/migration_20261009_lyric_romaji.sql
           base=http://127.0.0.1:18088
           curl --fail --silent --show-error "$base/healthz" | grep -qx 'ok'
           curl --fail --silent --show-error "$base/api/system/theme" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 200'
-          curl --fail --silent --show-error "$base/api/song/page?pageNum=1&pageSize=2" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and d["data"]["total"] > 0'
+          curl --fail --silent --show-error "$base/api/song/page?pageNum=1&pageSize=2" | python3 -c 'import json,sys; d=json.load(sys.stdin); rows=d.get("data", {}).get("records", []); assert d.get("code") == 200 and d.get("data", {}).get("total", 0) > 0 and all(row.get(field) in (None, "") for row in rows for field in ("lyric", "lyricTranslation", "lyricRomaji"))'
           lyric_response=$(curl --fail --silent --show-error "$base/api/lyric/parse?songId=1")
-          if ! lyric_report=$(printf '%s' "$lyric_response" | python3 -c 'import json,sys; d=json.load(sys.stdin); data=d.get("data", {}); ok=d.get("code") == 200 and len(data.get("lines", [])) > 0 and data.get("translationLines", [{}])[0].get("text") == "Neon wakes, the city starts to breathe"; print("OK" if ok else json.dumps(d, ensure_ascii=False)); sys.exit(0 if ok else 1)' 2>&1); then
+          if ! lyric_report=$(printf '%s' "$lyric_response" | python3 -c 'import json,sys; d=json.load(sys.stdin); data=d.get("data", {}); ok=d.get("code") == 200 and len(data.get("lines", [])) > 0 and data.get("translationLines", [{}])[0].get("text") == "Neon wakes, the city starts to breathe" and data.get("romajiLines", [{}])[0].get("text") == "Ni hong liang qi, cheng shi kai shi hu xi"; print("OK" if ok else json.dumps(d, ensure_ascii=False)); sys.exit(0 if ok else 1)' 2>&1); then
             echo "::error title=Bilingual lyric API smoke failed::$(printf '%s' "$lyric_report" | tr '\n' ' ')"
             exit 1
           fi
+          romaji_search=$(curl --fail --silent --show-error "$base/api/search?keyword=Ni%20hong&limit=8")
+          if ! romaji_search_report=$(printf '%s' "$romaji_search" | python3 -c 'import json,sys; d=json.load(sys.stdin); songs=d.get("data", {}).get("songs", []); ok=d.get("code") == 200 and any(row.get("id") == 1 for row in songs) and all(row.get("lyric") in (None, "") and row.get("lyricTranslation") in (None, "") and row.get("lyricRomaji") in (None, "") for row in songs); print("OK" if ok else json.dumps(d, ensure_ascii=False)); sys.exit(0 if ok else 1)' 2>&1); then
+            echo "::error title=Romaji search API smoke failed::$(printf '%s' "$romaji_search_report" | tr '\n' ' ')"
+            exit 1
+          fi
           translation_search=$(curl --fail --silent --show-error "$base/api/search?keyword=Neon%20wakes&limit=8")
-          if ! translation_search_report=$(printf '%s' "$translation_search" | python3 -c 'import json,sys; d=json.load(sys.stdin); songs=d.get("data", {}).get("songs", []); ok=d.get("code") == 200 and any(row.get("id") == 1 for row in songs) and all(row.get("lyricTranslation") in (None, "") for row in songs); print("OK" if ok else json.dumps(d, ensure_ascii=False)); sys.exit(0 if ok else 1)' 2>&1); then
+          if ! translation_search_report=$(printf '%s' "$translation_search" | python3 -c 'import json,sys; d=json.load(sys.stdin); songs=d.get("data", {}).get("songs", []); ok=d.get("code") == 200 and any(row.get("id") == 1 for row in songs) and all(row.get("lyricTranslation") in (None, "") and row.get("lyricRomaji") in (None, "") for row in songs); print("OK" if ok else json.dumps(d, ensure_ascii=False)); sys.exit(0 if ok else 1)' 2>&1); then
             echo "::error title=Translation search API smoke failed::$(printf '%s' "$translation_search_report" | tr '\n' ' ')"
             exit 1
           fi

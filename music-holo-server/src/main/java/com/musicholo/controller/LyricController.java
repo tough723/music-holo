@@ -50,7 +50,7 @@ public class LyricController {
     @SaCheckLogin
     @PutMapping
     public Result<Void> save(@Validated @RequestBody LyricSaveDTO dto) {
-        lyricService.save(dto.getSongId(), dto.getLyric(), dto.getLyricTranslation());
+        lyricService.save(dto.getSongId(), dto.getLyric(), dto.getLyricTranslation(), dto.getLyricRomaji());
         return Result.success();
     }
 

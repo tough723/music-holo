@@ -36,6 +36,16 @@
             >
               {{ showTranslation ? '隐藏译文' : '显示译文' }}
             </el-button>
+            <el-button
+              v-if="hasRomaji"
+              text
+              size="small"
+              class="translation-toggle"
+              :aria-pressed="showRomaji"
+              @click="showRomaji = !showRomaji"
+            >
+              {{ showRomaji ? '隐藏罗马音' : '显示罗马音' }}
+            </el-button>
             <el-tooltip :content="immersive ? '退出沉浸模式' : '沉浸式歌词'" placement="top">
               <el-button circle text :aria-label="immersive ? '退出沉浸模式' : '进入沉浸模式'" @click="toggleImmersive">
                 <el-icon><ScaleToOriginal v-if="immersive" /><FullScreen v-else /></el-icon>
@@ -93,6 +103,9 @@
                   <span v-if="showTranslation && alignedTranslations[index]" class="line-translation">
                     {{ alignedTranslations[index] }}
                   </span>
+                  <span v-if="showRomaji && alignedRomaji[index]" class="line-translation line-romaji">
+                    {{ alignedRomaji[index] }}
+                  </span>
                 </span>
                 <span class="line-rail"><i></i></span>
               </button>
@@ -145,6 +158,7 @@ const playerStore = usePlayerStore()
 const bodyRef = ref(null)
 const immersive = ref(false)
 const showTranslation = ref(true)
+const showRomaji = ref(false)
 const offsetY = ref(0)
 const seekPreview = ref(0)
 const scrubbing = ref(false)
@@ -160,29 +174,30 @@ const activeIndex = computed(() => {
   return index
 })
 
-const alignedTranslations = computed(() => {
-  const originals = playerStore.lyrics
-  const translations = playerStore.lyricTranslations
-  if (!originals.length || !translations.length) return []
-
+function alignLines(originals, extras) {
+  if (!originals.length || !extras.length) return []
   let cursor = 0
   return originals.map((line) => {
     const time = Number(line.time)
-    while (cursor + 1 < translations.length) {
-      const currentDistance = Math.abs(Number(translations[cursor]?.time) - time)
-      const nextDistance = Math.abs(Number(translations[cursor + 1]?.time) - time)
+    while (cursor + 1 < extras.length) {
+      const currentDistance = Math.abs(Number(extras[cursor]?.time) - time)
+      const nextDistance = Math.abs(Number(extras[cursor + 1]?.time) - time)
       if (nextDistance > currentDistance) break
       cursor++
     }
-    const match = translations[cursor]
+    const match = extras[cursor]
     return match && Math.abs(Number(match.time) - time) <= 1.25 ? (match.text || '') : ''
   })
-})
+}
+
+const alignedTranslations = computed(() => alignLines(playerStore.lyrics, playerStore.lyricTranslations))
+const alignedRomaji = computed(() => alignLines(playerStore.lyrics, playerStore.lyricRomaji || []))
 const hasTranslations = computed(() => alignedTranslations.value.some((text) => String(text || '').trim()))
+const hasRomaji = computed(() => alignedRomaji.value.some((text) => String(text || '').trim()))
 const viewportWidth = ref(typeof window === 'undefined' ? 1280 : window.innerWidth)
 const rowHeight = computed(() => {
   const baseHeight = immersive.value ? (viewportWidth.value <= 640 ? 60 : 78) : 50
-  return baseHeight + (showTranslation.value && hasTranslations.value ? 20 : 0)
+  return baseHeight + (showTranslation.value && hasTranslations.value ? 20 : 0) + (showRomaji.value && hasRomaji.value ? 16 : 0)
 })
 
 const activeProgress = computed(() => {
@@ -550,6 +565,9 @@ onUnmounted(() => {
   line-height: 1.45;
   letter-spacing: 0.15px;
   transition: color 0.3s ease, font-size 0.3s ease, filter 0.3s ease;
+}
+.line-romaji {
+  font-style: italic;
 }
 .line-translation {
   overflow: hidden;

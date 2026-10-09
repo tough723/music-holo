@@ -115,6 +115,7 @@ function songListVO(song) {
   const vo = songVO(song)
   delete vo.lyric
   delete vo.lyricTranslation
+  delete vo.lyricRomaji
   return vo
 }
 
@@ -584,6 +585,7 @@ route('get', '/search', async (ctx) => {
       (s.album || '').toLocaleLowerCase().includes(q) ||
       (s.lyric || '').toLocaleLowerCase().includes(q) ||
       (s.lyricTranslation || '').toLocaleLowerCase().includes(q) ||
+      (s.lyricRomaji || '').toLocaleLowerCase().includes(q) ||
       singerIds.has(s.singerId)
     ))
     .sort((a, b) => b.playCount - a.playCount || b.id - a.id)
@@ -660,6 +662,7 @@ route('post', '/song', async (ctx) => {
   const dto = ctx.body
   validateLrcSize(dto.lyric)
   validateLrcSize(dto.lyricTranslation)
+  validateLrcSize(dto.lyricRomaji)
   const song = {
     id: state.genId(),
     title: dto.title,
@@ -671,6 +674,7 @@ route('post', '/song', async (ctx) => {
     audioUrl: dto.audioUrl,
     lyric: dto.lyric || '',
     lyricTranslation: dto.lyricTranslation ?? '',
+    lyricRomaji: dto.lyricRomaji ?? '',
     status: dto.status ?? 1,
     playCount: 0,
     createTime: new Date().toISOString().slice(0, 19).replace('T', ' ')
@@ -684,6 +688,7 @@ route('put', '/song', async (ctx) => {
   const dto = ctx.body
   validateLrcSize(dto.lyric)
   validateLrcSize(dto.lyricTranslation)
+  validateLrcSize(dto.lyricRomaji)
   const song = state.songs.find((s) => s.id === num(dto.id))
   if (!song) throw mockError(500, '歌曲不存在')
   Object.assign(song, {
@@ -696,6 +701,7 @@ route('put', '/song', async (ctx) => {
     audioUrl: dto.audioUrl,
     lyric: dto.lyric ?? song.lyric,
     lyricTranslation: dto.lyricTranslation ?? song.lyricTranslation,
+    lyricRomaji: dto.lyricRomaji ?? song.lyricRomaji,
     status: dto.status ?? song.status
   })
   return songVO(song)
@@ -1358,7 +1364,8 @@ route('get', '/lyric/parse', async (ctx) => {
     songId: song.id,
     title: song.title,
     lines: parseLrc(song.lyric),
-    translationLines: parseLrc(song.lyricTranslation)
+    translationLines: parseLrc(song.lyricTranslation),
+    romajiLines: parseLrc(song.lyricRomaji)
   }
 })
 
@@ -1366,21 +1373,23 @@ route('get', '/lyric/export', async (ctx) => {
   const song = state.songs.find((s) => s.id === num(ctx.params.songId))
   if (!song) throw mockError(500, '歌曲不存在')
   const variant = String(ctx.params.variant || 'original').toLowerCase()
-  if (!['original', 'translation'].includes(variant)) throw mockError(400, '歌词类型无效')
-  const lrc = variant === 'translation' ? song.lyricTranslation : song.lyric
+  if (!['original', 'translation', 'romaji'].includes(variant)) throw mockError(400, '歌词类型无效')
+  const lrc = variant === 'translation' ? song.lyricTranslation : variant === 'romaji' ? song.lyricRomaji : song.lyric
   return new Blob([toLrc(parseLrc(lrc))], { type: 'text/plain;charset=utf-8' })
 })
 
 route('put', '/lyric', async (ctx) => {
   requireUser(ctx)
-  const { songId, lyric, lyricTranslation } = ctx.body
+  const { songId, lyric, lyricTranslation, lyricRomaji } = ctx.body
   validateLrcSize(lyric)
   validateLrcSize(lyricTranslation)
+  validateLrcSize(lyricRomaji)
   const song = state.songs.find((s) => s.id === num(songId))
   if (!song) throw mockError(500, '歌曲不存在')
   // 未提交字段时保持原值；提交空字符串才显式清空。
   if (lyric != null) song.lyric = lyric
   if (lyricTranslation != null) song.lyricTranslation = lyricTranslation
+  if (lyricRomaji != null) song.lyricRomaji = lyricRomaji
   return null
 })
 
@@ -1394,9 +1403,10 @@ route('post', '/lyric/upload', async (ctx) => {
   if (!['lrc', 'txt'].includes(extension)) throw mockError(500, '仅支持 .lrc / .txt 歌词文件')
   if (ctx.file.size > 65_535) throw mockError(500, '单份 LRC 文本不能超过 64 KB')
   const variant = String(ctx.params.variant || 'original').toLowerCase()
-  if (!['original', 'translation'].includes(variant)) throw mockError(400, '歌词类型无效')
+  if (!['original', 'translation', 'romaji'].includes(variant)) throw mockError(400, '歌词类型无效')
   const lrc = await readTextFile(ctx.file)
   if (variant === 'translation') song.lyricTranslation = lrc
+  else if (variant === 'romaji') song.lyricRomaji = lrc
   else song.lyric = lrc
   return null
 })

@@ -132,6 +132,7 @@ export const usePlayerStore = defineStore('player', {
       /** 原歌词与可选译文歌词 */
       lyrics: [],
       lyricTranslations: [],
+      lyricRomaji: [],
       lyricLoadRequestId: 0,
       lyricVisible: false,
       /** 播放进度（秒，由播放器组件实时更新） */
@@ -183,6 +184,43 @@ export const usePlayerStore = defineStore('player', {
         persist(this)
       }
       return { count: tracks.length, startIndex, skipped: selected.length - tracks.length }
+    },
+    /** 把已授权句柄读出的文件加入队列。句柄本身只留在 IndexedDB，不写入播放队列持久化。 */
+    addRememberedLocalFiles(entries) {
+      const selected = Array.from(entries || [])
+      const startIndex = this.queue.length
+      const tracks = []
+      let skipped = 0
+      for (const entry of selected) {
+        const file = entry?.file
+        if (!isAudioFile(file)) {
+          skipped += 1
+          continue
+        }
+        try {
+          const audioUrl = URL.createObjectURL(file)
+          const fileName = file.name || entry.name || '本地音乐'
+          tracks.push({
+            id: createLocalTrackId(),
+            title: fileName.replace(/\.[^.]+$/, '') || fileName,
+            singerName: '本地文件',
+            album: '本地导入',
+            cover: '',
+            duration: 0,
+            audioUrl,
+            localFileName: fileName,
+            localHandleId: entry.handleId || null,
+            isLocal: true
+          })
+        } catch {
+          skipped += 1
+        }
+      }
+      if (tracks.length > 0) {
+        this.queue.push(...tracks)
+        persist(this)
+      }
+      return { count: tracks.length, startIndex, skipped }
     },
     /** 设定本机倒计时，选择的时长必须来自产品提供的固定选项 */
     setSleepTimerMinutes(minutes) {
@@ -335,6 +373,7 @@ export const usePlayerStore = defineStore('player', {
         this.lyricLoadRequestId++
         this.lyrics = []
         this.lyricTranslations = []
+        this.lyricRomaji = []
         persist(this)
         return
       }
@@ -354,6 +393,7 @@ export const usePlayerStore = defineStore('player', {
           this.lyricLoadRequestId++
           this.lyrics = []
           this.lyricTranslations = []
+          this.lyricRomaji = []
         }
       }
     },
@@ -368,6 +408,7 @@ export const usePlayerStore = defineStore('player', {
       this.lyricLoadRequestId++
       this.lyrics = []
       this.lyricTranslations = []
+      this.lyricRomaji = []
       persist(this)
       releaseLocalSongs(previousQueue)
     },
@@ -436,11 +477,13 @@ export const usePlayerStore = defineStore('player', {
       if (song?.isCustomSource) {
         this.lyrics = Array.isArray(song.customLyrics) ? song.customLyrics : []
         this.lyricTranslations = Array.isArray(song.customTranslationLyrics) ? song.customTranslationLyrics : []
+        this.lyricRomaji = Array.isArray(song.customRomajiLyrics) ? song.customRomajiLyrics : []
         return
       }
       if (!song?.id || song.isLocal) {
         this.lyrics = []
         this.lyricTranslations = []
+        this.lyricRomaji = []
         return
       }
       try {
@@ -448,10 +491,12 @@ export const usePlayerStore = defineStore('player', {
         if (requestId !== this.lyricLoadRequestId) return
         this.lyrics = Array.isArray(res?.lines) ? res.lines : []
         this.lyricTranslations = Array.isArray(res?.translationLines) ? res.translationLines : []
+        this.lyricRomaji = Array.isArray(res?.romajiLines) ? res.romajiLines : []
       } catch (e) {
         if (requestId !== this.lyricLoadRequestId) return
         this.lyrics = []
         this.lyricTranslations = []
+        this.lyricRomaji = []
       }
     },
     toggleLyric() {

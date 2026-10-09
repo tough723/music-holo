@@ -54,7 +54,11 @@ public class AlbumService {
             query.eq(Song::getSingerId, resolvedSingerId);
         }
         List<SongVO> songs = songAssembler.toVOList(songMapper.selectList(query));
-        songs.forEach(song -> song.setLyric(null));
+        songs.forEach(song -> {
+            song.setLyric(null);
+            song.setLyricTranslation(null);
+            song.setLyricRomaji(null);
+        });
         return songs;
     }
 }

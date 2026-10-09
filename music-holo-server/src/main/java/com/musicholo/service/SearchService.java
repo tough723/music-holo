@@ -61,7 +61,8 @@ public class SearchService {
                     w.like(Song::getTitle, keyword)
                             .or().like(Song::getAlbum, keyword)
                             .or().like(Song::getLyric, keyword)
-                            .or().like(Song::getLyricTranslation, keyword);
+                            .or().like(Song::getLyricTranslation, keyword)
+                            .or().like(Song::getLyricRomaji, keyword);
                     if (!singerIds.isEmpty()) {
                         w.or().in(Song::getSingerId, singerIds);
                     }
@@ -70,7 +71,11 @@ public class SearchService {
                 .orderByDesc(Song::getId)
                 .last("LIMIT " + limit);
         List<SongVO> songVOs = songAssembler.toVOList(songMapper.selectList(songQuery));
-        songVOs.forEach(song -> song.setLyric(null));
+        songVOs.forEach(song -> {
+            song.setLyric(null);
+            song.setLyricTranslation(null);
+            song.setLyricRomaji(null);
+        });
 
         PlaylistQuery playlistQuery = new PlaylistQuery();
         playlistQuery.setKeyword(keyword);

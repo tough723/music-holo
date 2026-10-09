@@ -33,6 +33,7 @@ public class SongAssembler {
         SongVO vo = toVOList(List.of(song)).get(0);
         vo.setLyric(song.getLyric());
         vo.setLyricTranslation(song.getLyricTranslation());
+        vo.setLyricRomaji(song.getLyricRomaji());
         return vo;
     }
 

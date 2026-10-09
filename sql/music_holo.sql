@@ -83,6 +83,7 @@ CREATE TABLE `song` (
   `audio_url`   VARCHAR(500) DEFAULT NULL            COMMENT '音频地址',
   `lyric`       TEXT                                 COMMENT '原歌词内容（LRC 格式）',
   `lyric_translation` TEXT                           COMMENT '译文歌词内容（LRC 格式）',
+  `lyric_romaji` TEXT                                COMMENT '罗马音歌词内容（LRC 格式，仅用户导入）',
   `status`      TINYINT      DEFAULT 1               COMMENT '状态：0下架 1正常',
   `play_count`  BIGINT       DEFAULT 0               COMMENT '播放量',
   `deleted`     TINYINT      DEFAULT 0               COMMENT '逻辑删除',
@@ -377,6 +378,15 @@ UPDATE `song` SET `lyric_translation` =
 [00:05.00]The image sways like the shape of longing
 [00:06.50]When the signal lights, I will say hello
 [00:08.00]Our next stop is a gentle universe'
+WHERE `id` = 1;
+
+UPDATE `song` SET `lyric_romaji` =
+'[00:00.50]Ni hong liang qi, cheng shi kai shi hu xi
+[00:02.00]Hai feng ba xin shi yi bing dai zou
+[00:03.50]Wo zai quan xi tou ying li xiang ni
+[00:05.00]Tou ying yao huang, xiang si nian de xing zhuang
+[00:06.50]Deng xin hao liang qi, shuo yi ju hello
+[00:08.00]Xia yi zhan shi wen rou de yu zhou'
 WHERE `id` = 1;
 
 -- 歌单
