@@ -1,0 +1,86 @@
+const { test } = require('node:test')
+const assert = require('node:assert/strict')
+const { SourceSessions } = require('../sessions.cjs')
+const tick = () => new Promise((resolve) => setImmediate(resolve))
+test('origin approvals deduplicated and never reused between sessions', async () => {
+  let prompts = 0, requests = 0
+  const sessions = new SourceSessions({ confirm: async () => { prompts++; return true }, request: async () => { requests++; return 'ok' } })
+  const id = sessions.open('test')
+  await Promise.all([sessions.run(id, 'a', 'https://api.example.com/a'), sessions.run(id, 'b', 'https://api.example.com/b')])
+  assert.equal(prompts, 1); assert.equal(requests, 2)
+  sessions.close(id)
+  await assert.rejects(sessions.run(id, 'c', 'https://api.example.com'), /结束/)
+  await sessions.run(sessions.open('new'), 'd', 'https://api.example.com')
+  assert.equal(prompts, 2); sessions.closeAll()
+})
+test('deny means no network, and a cancelled native confirmation cannot dispatch', async () => {
+  let requests = 0
+  const deny = new SourceSessions({ confirm: async () => false, request: async () => requests++ })
+  await assert.rejects(deny.run(deny.open('deny'), 'a', 'https://example.com'), /拒绝/)
+  assert.equal(requests, 0); deny.closeAll()
+  let approve
+  const pending = new SourceSessions({ confirm: () => new Promise((resolve) => { approve = resolve }), request: async () => requests++ })
+  const id = pending.open('pending')
+  const result = pending.run(id, 'a', 'https://example.com')
+  await tick(); pending.close(id); approve(true)
+  await assert.rejects(result)
+  assert.equal(requests, 0)
+})
+test('cancellation aborts in-flight network and duplicate IDs/concurrency are bounded', async () => {
+  const sessions = new SourceSessions({ confirm: async () => true, request: (_url, _options, { signal }) => new Promise((resolve, reject) => {
+    signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true })
+  }) })
+  const id = sessions.open('cancel')
+  const promises = ['a', 'b', 'c', 'd'].map((key) => sessions.run(id, key, 'https://example.com'))
+  const results = Promise.allSettled(promises)
+  await tick()
+  await assert.rejects(sessions.run(id, 'a', 'https://example.com'), /重复/)
+  await assert.rejects(sessions.run(id, 'e', 'https://example.com'), /并发/)
+  sessions.cancel(id, 'a'); sessions.closeAll()
+  assert.ok((await results).every(({ status }) => status === 'rejected'))
+  assert.equal(sessions.active, 0)
+})
+test('absolute session expiry and session-count limit', async () => {
+  const sessions = new SourceSessions({ ttl: 10, confirm: async () => true, request: async () => null })
+  const id = sessions.open('expiry')
+  for (let i = 1; i < 8; i++) sessions.open('other')
+  assert.throws(() => sessions.open('ninth'), /过多/)
+  await new Promise((resolve) => setTimeout(resolve, 25))
+  await assert.rejects(sessions.run(id, 'a', 'https://example.com'), /结束/)
+  sessions.closeAll()
+})
+test('cancelling the last waiter releases its slot and closes an unanswered prompt', async () => {
+  let promptSignal
+  const sessions = new SourceSessions({ confirm: (_name, _url, signal) => { promptSignal = signal; return new Promise(() => {}) }, request: async () => assert.fail('must not request') })
+  const id = sessions.open('pending')
+  const result = sessions.run(id, 'a', 'https://example.com')
+  const rejected = assert.rejects(result, /取消/)
+  await tick(); sessions.cancel(id, 'a'); await rejected
+  assert.equal(promptSignal.aborted, true)
+  assert.equal(sessions.active, 0)
+  assert.equal(sessions.sessions.get(id).approvals.size, 0)
+  sessions.closeAll()
+})
+test('one cancelled waiter does not close a shared permission prompt', async () => {
+  let approve, promptSignal
+  const sessions = new SourceSessions({ confirm: (_name, _url, signal) => { promptSignal = signal; return new Promise((resolve) => { approve = resolve }) }, request: async () => 'ok' })
+  const id = sessions.open('shared')
+  const first = sessions.run(id, 'a', 'https://example.com/1')
+  const rejected = assert.rejects(first, /取消/)
+  const second = sessions.run(id, 'b', 'https://example.com/2')
+  await tick(); sessions.cancel(id, 'a'); await rejected
+  assert.equal(promptSignal.aborted, false)
+  approve(true); assert.equal(await second, 'ok')
+  sessions.closeAll()
+})
+test('invalid request options never prompt and origin grants are capped', async () => {
+  let prompts = 0
+  const sessions = new SourceSessions({ confirm: async () => { prompts++; return true }, request: async () => 'ok' })
+  const id = sessions.open('bounded')
+  await assert.rejects(sessions.run(id, 'bad', 'https://example.com', { method: 'CONNECT' }))
+  assert.equal(prompts, 0)
+  for (let i = 0; i < 16; i++) await sessions.run(id, `r${i}`, `https://host${i}.example.com`)
+  await assert.rejects(sessions.run(id, 'extra', 'https://extra.example.com'), /16/)
+  assert.equal(prompts, 16)
+  sessions.closeAll()
+})

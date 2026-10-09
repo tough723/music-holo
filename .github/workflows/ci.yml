@@ -1,0 +1,253 @@
+name: Music Holo CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'arena/**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Frontend test, build, and audit
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: music-holo-web
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: music-holo-web/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Security audit
+        run: npm audit --audit-level=moderate
+      - name: Mock API integration tests
+        run: npm test
+      - name: Production build
+        run: npm run build
+
+  browser-e2e:
+    name: Production browser journeys
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: music-holo-web
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: music-holo-web/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Run production-build browser journeys
+        shell: bash
+        run: |
+          set +e
+          npm run test:e2e > /tmp/playwright-e2e.log 2>&1
+          status=$?
+          cat /tmp/playwright-e2e.log
+          if [ "$status" -ne 0 ]; then
+            tail -n 60 /tmp/playwright-e2e.log >> "$GITHUB_STEP_SUMMARY"
+            summary=$(tail -n 60 /tmp/playwright-e2e.log | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            echo "::error title=Playwright browser journeys failed::$summary"
+          fi
+          exit "$status"
+      - name: Upload browser diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: music-holo-playwright-debug
+          path: |
+            music-holo-web/playwright-report/
+            music-holo-web/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  backend:
+    name: Backend compile
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: music-holo-server
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - name: Compile and verify
+        shell: bash
+        run: |
+          set +e
+          mvn --batch-mode --no-transfer-progress verify > /tmp/maven-verify.log 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            if [ -d target/surefire-reports ]; then
+              {
+                printf '\n--- Surefire failure details ---\n'
+                grep -R -n -B 2 -A 18 -E '<<< FAILURE!|<<< ERROR!|Failures: [1-9]|Errors: [1-9]' target/surefire-reports --include='*.txt' || true
+              } >> /tmp/maven-verify.log
+            fi
+            cat /tmp/maven-verify.log
+            summary=$(tail -n 80 /tmp/maven-verify.log | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            echo "::error title=Maven verify failed::$summary"
+          else
+            cat /tmp/maven-verify.log
+          fi
+          exit "$status"
+
+  containers:
+    name: Local production stack smoke test
+    runs-on: ubuntu-24.04
+    env:
+      MYSQL_HOST_PORT: 13306
+      REDIS_HOST_PORT: 16379
+      API_HOST_PORT: 18080
+      WEB_HOST_PORT: 18088
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+      - name: Start and wait for the production-like stack
+        run: docker compose up --build --detach --wait --wait-timeout 300
+      - name: Smoke-test same-origin web, API, playback, and persistent uploads
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'echo "::error title=Container API smoke failed::Failed at shell line $LINENO"' ERR
+          # Exercise the additive migration against the initialized schema twice (no-op on an existing column).
+          docker compose exec -T mysql mysql -uroot -proot music_holo < sql/migration_20261009_lyric_translation.sql
+          docker compose exec -T mysql mysql -uroot -proot music_holo < sql/migration_20261009_lyric_translation.sql
+          docker compose exec -T mysql mysql -uroot -proot music_holo < sql/migration_20261009_dislike.sql
+          docker compose exec -T mysql mysql -uroot -proot music_holo < sql/migration_20261009_dislike.sql
+          docker compose exec -T mysql mysql -uroot -proot music_holo < sql/migration_20261009_lyric_romaji.sql
+          docker compose exec -T mysql mysql -uroot -proot music_holo < sql/migration_20261009_lyric_romaji.sql
+          base=http://127.0.0.1:18088
+          curl --fail --silent --show-error "$base/healthz" | grep -qx 'ok'
+          curl --fail --silent --show-error "$base/api/system/theme" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 200'
+          curl --fail --silent --show-error "$base/api/song/page?pageNum=1&pageSize=2" | python3 -c 'import json,sys; d=json.load(sys.stdin); rows=d.get("data", {}).get("records", []); assert d.get("code") == 200 and d.get("data", {}).get("total", 0) > 0 and all(row.get(field) in (None, "") for row in rows for field in ("lyric", "lyricTranslation", "lyricRomaji"))'
+          lyric_response=$(curl --fail --silent --show-error "$base/api/lyric/parse?songId=1")
+          if ! lyric_report=$(printf '%s' "$lyric_response" | python3 -c 'import json,sys; d=json.load(sys.stdin); data=d.get("data", {}); ok=d.get("code") == 200 and len(data.get("lines", [])) > 0 and data.get("translationLines", [{}])[0].get("text") == "Neon wakes, the city starts to breathe" and data.get("romajiLines", [{}])[0].get("text") == "Ni hong liang qi, cheng shi kai shi hu xi"; print("OK" if ok else json.dumps(d, ensure_ascii=False)); sys.exit(0 if ok else 1)' 2>&1); then
+            echo "::error title=Bilingual lyric API smoke failed::$(printf '%s' "$lyric_report" | tr '\n' ' ')"
+            exit 1
+          fi
+          romaji_search=$(curl --fail --silent --show-error "$base/api/search?keyword=Ni%20hong&limit=8")
+          if ! romaji_search_report=$(printf '%s' "$romaji_search" | python3 -c 'import json,sys; d=json.load(sys.stdin); songs=d.get("data", {}).get("songs", []); ok=d.get("code") == 200 and any(row.get("id") == 1 for row in songs) and all(row.get("lyric") in (None, "") and row.get("lyricTranslation") in (None, "") and row.get("lyricRomaji") in (None, "") for row in songs); print("OK" if ok else json.dumps(d, ensure_ascii=False)); sys.exit(0 if ok else 1)' 2>&1); then
+            echo "::error title=Romaji search API smoke failed::$(printf '%s' "$romaji_search_report" | tr '\n' ' ')"
+            exit 1
+          fi
+          translation_search=$(curl --fail --silent --show-error "$base/api/search?keyword=Neon%20wakes&limit=8")
+          if ! translation_search_report=$(printf '%s' "$translation_search" | python3 -c 'import json,sys; d=json.load(sys.stdin); songs=d.get("data", {}).get("songs", []); ok=d.get("code") == 200 and any(row.get("id") == 1 for row in songs) and all(row.get("lyricTranslation") in (None, "") and row.get("lyricRomaji") in (None, "") for row in songs); print("OK" if ok else json.dumps(d, ensure_ascii=False)); sys.exit(0 if ok else 1)' 2>&1); then
+            echo "::error title=Translation search API smoke failed::$(printf '%s' "$translation_search_report" | tr '\n' ' ')"
+            exit 1
+          fi
+          album_response=$(curl --fail --silent --show-error "$base/api/album/page?pageNum=1&pageSize=2")
+          if ! album_report=$(printf '%s' "$album_response" | python3 -c 'import json,sys; d=json.load(sys.stdin); ok=d["code"] == 200 and d["data"]["total"] > 0 and all(row["album"] and row["songCount"] > 0 for row in d["data"]["records"]); print("OK" if ok else json.dumps(d, ensure_ascii=False)); sys.exit(0 if ok else 1)' 2>&1); then
+            echo "::error title=Album API smoke failed::$(printf '%s' "$album_report" | tr '\n' ' ')"
+            exit 1
+          fi
+          similar_response=$(curl --fail --silent --show-error "$base/api/recommend/similar?sourceSongId=1&limit=8")
+          if ! similar_report=$(printf '%s' "$similar_response" | python3 -c 'import json,sys; d=json.load(sys.stdin); ok=d["code"] == 200 and isinstance(d["data"], list) and len(d["data"]) > 0 and all(row["id"] != 1 for row in d["data"]); print("OK" if ok else json.dumps(d, ensure_ascii=False)); sys.exit(0 if ok else 1)' 2>&1); then
+            echo "::error title=Similar radio API smoke failed::$(printf '%s' "$similar_report" | tr '\n' ' ')"
+            exit 1
+          fi
+          curl --fail --silent --show-error "$base/audio/song1.wav" -o /tmp/music-holo-demo.wav
+          test -s /tmp/music-holo-demo.wav
+          login=$(curl --fail --silent --show-error -H 'Content-Type: application/json' -d '{"username":"demo","password":"123456"}' "$base/api/auth/login")
+          token=$(printf '%s' "$login" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200; print(d["data"]["token"])')
+          curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/playlist/backup" -o /tmp/music-holo-playlists-backup.json
+          python3 - <<'PY'
+          import json,sys
+          def require(condition, message):
+              if not condition:
+                  print(f'::error title=Playlist backup export smoke failed::{message}')
+                  sys.exit(1)
+          backup=json.load(open('/tmp/music-holo-playlists-backup.json'))
+          require(backup.get('code') == 200, 'export endpoint did not return code 200')
+          data=backup.get('data')
+          require(isinstance(data, dict), 'export response data is not an object')
+          require(data.get('format') == 'music-holo-playlists' and data.get('version') == 1, 'format/version mismatch')
+          require([item.get('name') for item in data.get('playlists', [])] == ['华语精选'], 'account export did not return the expected owned playlist')
+          # Check allow-listed keys, not substrings: the word description contains script.
+          require(set(data) == {'format', 'version', 'exportedAt', 'playlists'}, 'unexpected top-level fields: ' + str(sorted(data)))
+          playlist_fields = [sorted(item) for item in data['playlists']]
+          expected_playlist_fields = ['description', 'name', 'songs', 'sourcePublic']
+          require(playlist_fields == [expected_playlist_fields] * len(playlist_fields), 'unexpected playlist fields: ' + str(playlist_fields))
+          song_fields = [sorted(track) for item in data['playlists'] for track in item['songs']]
+          expected_song_fields = ['album', 'duration', 'id', 'singerName', 'title']
+          require(song_fields == [expected_song_fields] * len(song_fields), 'unexpected song fields: ' + str(song_fields))
+          source=data['playlists'][0]
+          require(bool(source.get('songs')), 'seed playlist has no songs to exercise import matching')
+          source['songs']=[source['songs'][0], {'id':'9223372036854775807','title':'CI 缺失曲目','singerName':'未知','album':'','duration':10}]
+          json.dump(data, open('/tmp/music-holo-playlists-import.json','w'), ensure_ascii=False)
+          request={'backup':data,'selectedPlaylistIndexes':[0],'publicPlaylistIndexes':[],'trackChoices':[]}
+          json.dump(request, open('/tmp/music-holo-playlists-import-request.json','w'), ensure_ascii=False)
+          PY
+          curl --fail --silent --show-error -H "music-holo-token: $token" -H 'Content-Type: application/json' --data-binary @/tmp/music-holo-playlists-import.json "$base/api/playlist/backup/preview" | python3 -c 'import json,sys; d=json.load(sys.stdin); p=d["data"]; assert d["code"] == 200 and p["matchedSongCount"] == 1 and p["missingSongCount"] == 1 and p["playlists"][0]["nameConflict"]'
+          imported=$(curl --fail --silent --show-error -H "music-holo-token: $token" -H 'Content-Type: application/json' --data-binary @/tmp/music-holo-playlists-import-request.json "$base/api/playlist/backup/import")
+          playlist_id=$(printf '%s' "$imported" | python3 -c 'import json,sys; d=json.load(sys.stdin); p=d["data"]; assert d["code"] == 200 and p["importedPlaylistCount"] == 1 and p["importedSongCount"] == 1 and p["missingSongCount"] == 1; item=p["playlists"][0]; assert item["importedName"] == "华语精选（导入 2）" and not item["isPublic"]; print(item["playlistId"])')
+          curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/playlist/$playlist_id" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and d["data"]["isPublic"] == 0 and d["data"]["songCount"] == 1'
+          curl --fail --silent --show-error -X DELETE -H "music-holo-token: $token" "$base/api/playlist/$playlist_id" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 200'
+          curl --fail --silent --show-error -X POST -H "music-holo-token: $token" "$base/api/favorite/2" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 200'
+          curl --fail --silent --show-error -X PUT -H "music-holo-token: $token" "$base/api/song/2/play" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 200'
+          curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/history/page?pageNum=1&pageSize=20" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and any(row["id"] == 2 for row in d["data"]["records"])'
+          # Song 2 was just played and favorited, so daily recommendations already exclude it. Use an otherwise eligible track.
+          curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/recommend/songs?limit=24" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and any(row.get("id") == 5 for row in d["data"])'
+          curl --fail --silent --show-error -X POST -H "music-holo-token: $token" "$base/api/dislike/song/5" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 200'
+          curl --fail --silent --show-error -X POST -H "music-holo-token: $token" "$base/api/dislike/song/5" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 200'
+          curl --silent --show-error -X POST -H "music-holo-token: $token" "$base/api/dislike/song/999999" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 400 and d["msg"] == "歌曲不存在"'
+          curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/dislike" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and d["data"]["songIds"] == [5] and d["data"]["songs"][0]["title"] == "玻璃糖纸"'
+          curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/recommend/songs?limit=24" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and all(row.get("id") != 5 for row in d["data"])'
+          curl --fail --silent --show-error -H "music-holo-token: $token" --get --data-urlencode "keyword=玻璃糖纸" "$base/api/search" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and any(row.get("id") == 5 for row in d["data"]["songs"])'
+          curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/song/page?pageNum=1&pageSize=20" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert any(row.get("id") == 5 for row in d["data"]["records"])'
+          curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/recommend/similar?sourceSongId=1&limit=24" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and any(row.get("singerId") == 6 for row in d["data"])'
+          curl --fail --silent --show-error -X POST -H "music-holo-token: $token" "$base/api/dislike/singer/6" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 200'
+          curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/recommend/similar?sourceSongId=1&limit=24" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and d["data"] and all(row.get("singerId") != 6 and row.get("id") != 5 for row in d["data"])'
+          admin_login=$(curl --fail --silent --show-error -H 'Content-Type: application/json' -d '{"username":"admin","password":"123456"}' "$base/api/auth/login")
+          admin_token=$(printf '%s' "$admin_login" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200; print(d["data"]["token"])')
+          curl --silent --show-error -X PUT -H "music-holo-token: $admin_token" -H 'Content-Type: application/json' -d '{"songId":2,"direction":-1}' "$base/api/playlist/3/songs/order" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"]==403 and d["msg"]=="只能调整自己创建的歌单顺序", d'
+          curl --fail --silent --show-error -X PUT -H "music-holo-token: $token" -H 'Content-Type: application/json' -d '{"songId":2,"direction":-1}' "$base/api/playlist/3/songs/order" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"]==200 and d["data"]==[2,1,7], d'
+          curl --fail --silent --show-error -X PUT -H "music-holo-token: $token" -H 'Content-Type: application/json' -d '{"songId":2,"direction":-1}' "$base/api/playlist/3/songs/order" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"]==200 and d["data"]==[2,1,7], d'
+          curl --silent --show-error -X PUT -H "music-holo-token: $token" -H 'Content-Type: application/json' -d '{"songId":99,"direction":1}' "$base/api/playlist/3/songs/order" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"]==400 and d["msg"]=="歌曲不在歌单中", d'
+          curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/playlist/3/songs" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"]==200 and [row["id"] for row in d["data"]]==[2,1,7], d'
+          curl --fail --silent --show-error -X PUT -H "music-holo-token: $token" -H 'Content-Type: application/json' -d '{"songId":2,"direction":1}' "$base/api/playlist/3/songs/order" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"]==200 and d["data"]==[1,2,7], d'
+          curl --silent --show-error -X PUT -H 'Content-Type: application/json' -d '{"songId":1,"direction":1}' "$base/api/playlist/3/songs/order" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"]==401'
+          curl --fail --silent --show-error -H "music-holo-token: $admin_token" "$base/api/recommend/songs?limit=24" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert any(row.get("id") == 5 for row in d["data"]) and any(row.get("singerId") == 6 for row in d["data"])'
+          curl --fail --silent --show-error -X DELETE -H "music-holo-token: $token" "$base/api/dislike/song/5" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 200'
+          curl --fail --silent --show-error -X DELETE -H "music-holo-token: $token" "$base/api/dislike/singer/6" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 200'
+          curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/dislike" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["data"]["songIds"] == [] and d["data"]["singerIds"] == []'
+          curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/recommend/songs?limit=24" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert any(row.get("id") == 5 for row in d["data"])'
+          curl --silent --show-error -X POST "$base/api/dislike/song/5" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 401'
+          printf 'upload volume survives a server restart\n' > /tmp/music-holo-upload-smoke.txt
+          upload=$(curl --fail --silent --show-error -H "music-holo-token: $token" -F file=@/tmp/music-holo-upload-smoke.txt "$base/api/common/upload")
+          profile=$(printf '%s' "$upload" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200; print(d["data"]["url"])')
+          case "$profile" in /profile/*) ;; *) echo "Unexpected upload URL: $profile" >&2; exit 1;; esac
+          curl --fail --silent --show-error "$base$profile" | cmp - /tmp/music-holo-upload-smoke.txt
+          docker compose restart server
+          docker compose up --detach --wait --wait-timeout 180 server web
+          curl --fail --silent --show-error "$base$profile" | cmp - /tmp/music-holo-upload-smoke.txt
+      - name: Stop stack and discard CI data
+        if: always()
+        run: docker compose down --volumes --remove-orphans

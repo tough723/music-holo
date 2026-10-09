@@ -1,0 +1,61 @@
+{
+  "name": "music-holo-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Music Holo desktop client with a restricted LX source network bridge",
+  "author": "Music Holo contributors",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.cjs",
+    "build:web": "npm --prefix ../music-holo-web run build",
+    "build:demo": "node scripts/build-demo.cjs",
+    "pack": "npm run build:web && electron-builder --dir",
+    "dist": "npm run build:web && electron-builder",
+    "test:smoke": "node scripts/smoke.cjs"
+  },
+  "dependencies": {
+    "ipaddr.js": "2.3.0"
+  },
+  "devDependencies": {
+    "electron": "44.7.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "com.musicholo.desktop",
+    "productName": "Music Holo",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "*.cjs",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../music-holo-web/dist",
+        "to": "web"
+      }
+    ],
+    "linux": {
+      "target": [
+        "AppImage"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.music"
+    }
+  },
+  "overrides": {
+    "global-agent": "4.1.3"
+  }
+}
