@@ -182,7 +182,7 @@ public class PlaylistService {
     }
 
     /**
-     * 批量添加歌曲到歌单（自动去重）
+     * 批量添加曲库中可播放的歌曲到歌单（自动去重；先批量校验，避免每首歌单独查库）
      */
     @Transactional(rollbackFor = Exception.class)
     public int addSongs(Long playlistId, List<Long> songIds, Long userId) {
@@ -191,20 +191,27 @@ public class PlaylistService {
         if (songIds == null || songIds.isEmpty()) {
             throw new BusinessException("歌曲列表不能为空");
         }
-        Set<Long> existIds = playlistSongMapper.selectList(
-                        new LambdaQueryWrapper<PlaylistSong>().eq(PlaylistSong::getPlaylistId, playlistId))
-                .stream().map(PlaylistSong::getSongId).collect(Collectors.toCollection(HashSet::new));
-        int maxSort = playlistSongMapper.selectList(
-                        new LambdaQueryWrapper<PlaylistSong>().eq(PlaylistSong::getPlaylistId, playlistId))
-                .stream().map(PlaylistSong::getSort).filter(s -> s != null)
+        List<PlaylistSong> existingRelations = playlistSongMapper.selectList(
+                new LambdaQueryWrapper<PlaylistSong>().eq(PlaylistSong::getPlaylistId, playlistId));
+        Set<Long> existingIds = existingRelations.stream().map(PlaylistSong::getSongId)
+                .collect(Collectors.toCollection(HashSet::new));
+        int sort = existingRelations.stream().map(PlaylistSong::getSort).filter(s -> s != null)
                 .max(Integer::compareTo).orElse(0);
+
+        List<Long> candidates = songIds.stream().filter(id -> id != null && id > 0 && !existingIds.contains(id))
+                .distinct().collect(Collectors.toList());
+        Map<Long, Song> availableSongs = new HashMap<>();
+        final int batchSize = 400;
+        for (int start = 0; start < candidates.size(); start += batchSize) {
+            List<Long> batch = candidates.subList(start, Math.min(start + batchSize, candidates.size()));
+            songMapper.selectBatchIds(batch).stream()
+                    .filter(song -> Integer.valueOf(1).equals(song.getStatus()))
+                    .forEach(song -> availableSongs.put(song.getId(), song));
+        }
+
         int added = 0;
-        int sort = maxSort;
         for (Long songId : songIds) {
-            if (existIds.contains(songId)) {
-                continue;
-            }
-            if (songMapper.selectById(songId) == null) {
+            if (existingIds.contains(songId) || !availableSongs.containsKey(songId)) {
                 continue;
             }
             PlaylistSong relation = new PlaylistSong();
@@ -212,7 +219,7 @@ public class PlaylistService {
             relation.setSongId(songId);
             relation.setSort(++sort);
             playlistSongMapper.insert(relation);
-            existIds.add(songId);
+            existingIds.add(songId);
             added++;
         }
         return added;

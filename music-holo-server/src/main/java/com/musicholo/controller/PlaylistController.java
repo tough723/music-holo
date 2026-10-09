@@ -4,13 +4,20 @@ import cn.dev33.satoken.annotation.SaCheckLogin;
 import cn.dev33.satoken.stp.StpUtil;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.musicholo.common.Result;
+import com.musicholo.common.exception.BusinessException;
+import com.musicholo.dto.PlaylistBackupDTO;
+import com.musicholo.dto.PlaylistBackupImportRequestDTO;
 import com.musicholo.dto.PlaylistQuery;
 import com.musicholo.dto.PlaylistSaveDTO;
+import com.musicholo.service.PlaylistBackupService;
 import com.musicholo.service.PlaylistService;
+import com.musicholo.vo.PlaylistBackupImportResultVO;
+import com.musicholo.vo.PlaylistBackupPreviewVO;
 import com.musicholo.vo.PlaylistVO;
 import com.musicholo.vo.SongVO;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -34,6 +41,40 @@ import java.util.List;
 public class PlaylistController {
 
     private final PlaylistService playlistService;
+    private final PlaylistBackupService playlistBackupService;
+
+    @Operation(summary = "导出当前账号拥有的歌单备份")
+    @SaCheckLogin
+    @GetMapping("/backup")
+    public Result<PlaylistBackupDTO> exportBackup() {
+        return Result.success(playlistBackupService.exportOwn(StpUtil.getLoginIdAsLong()));
+    }
+
+    @Operation(summary = "预览歌单备份与曲库匹配结果")
+    @SaCheckLogin
+    @PostMapping("/backup/preview")
+    public Result<PlaylistBackupPreviewVO> previewBackup(
+            @Validated @RequestBody PlaylistBackupDTO backup,
+            HttpServletRequest request) {
+        assertBackupRequestSize(request);
+        return Result.success(playlistBackupService.preview(backup, StpUtil.getLoginIdAsLong()));
+    }
+
+    @Operation(summary = "按预览选择创建歌单副本")
+    @SaCheckLogin
+    @PostMapping("/backup/import")
+    public Result<PlaylistBackupImportResultVO> importBackup(
+            @Validated @RequestBody PlaylistBackupImportRequestDTO requestBody,
+            HttpServletRequest request) {
+        assertBackupRequestSize(request);
+        return Result.success(playlistBackupService.importSelected(requestBody, StpUtil.getLoginIdAsLong()));
+    }
+
+    private void assertBackupRequestSize(HttpServletRequest request) {
+        if (request.getContentLengthLong() > PlaylistBackupService.MAX_REQUEST_BYTES) {
+            throw new BusinessException(400, "歌单备份请求不能超过 4 MB");
+        }
+    }
 
     @Operation(summary = "歌单分页查询")
     @GetMapping("/page")

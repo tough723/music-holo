@@ -159,6 +159,27 @@ jobs:
           test -s /tmp/music-holo-demo.wav
           login=$(curl --fail --silent --show-error -H 'Content-Type: application/json' -d '{"username":"demo","password":"123456"}' "$base/api/auth/login")
           token=$(printf '%s' "$login" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200; print(d["data"]["token"])')
+          curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/playlist/backup" -o /tmp/music-holo-playlists-backup.json
+          python3 - <<'PY'
+          import json
+          backup=json.load(open('/tmp/music-holo-playlists-backup.json'))
+          assert backup['code'] == 200
+          data=backup['data']
+          assert data['format'] == 'music-holo-playlists' and data['version'] == 1
+          assert [item['name'] for item in data['playlists']] == ['华语精选']
+          encoded=json.dumps(data, ensure_ascii=False)
+          assert all(key not in encoded for key in ('audioUrl','lyric','lyricTranslation','token','password','script'))
+          source=data['playlists'][0]
+          source['songs']=[source['songs'][0], {'id':'9223372036854775807','title':'CI 缺失曲目','singerName':'未知','album':'','duration':10}]
+          json.dump(data, open('/tmp/music-holo-playlists-import.json','w'), ensure_ascii=False)
+          request={'backup':data,'selectedPlaylistIndexes':[0],'publicPlaylistIndexes':[],'trackChoices':[]}
+          json.dump(request, open('/tmp/music-holo-playlists-import-request.json','w'), ensure_ascii=False)
+          PY
+          curl --fail --silent --show-error -H "music-holo-token: $token" -H 'Content-Type: application/json' --data-binary @/tmp/music-holo-playlists-import.json "$base/api/playlist/backup/preview" | python3 -c 'import json,sys; d=json.load(sys.stdin); p=d["data"]; assert d["code"] == 200 and p["matchedSongCount"] == 1 and p["missingSongCount"] == 1 and p["playlists"][0]["nameConflict"]'
+          imported=$(curl --fail --silent --show-error -H "music-holo-token: $token" -H 'Content-Type: application/json' --data-binary @/tmp/music-holo-playlists-import-request.json "$base/api/playlist/backup/import")
+          playlist_id=$(printf '%s' "$imported" | python3 -c 'import json,sys; d=json.load(sys.stdin); p=d["data"]; assert d["code"] == 200 and p["importedPlaylistCount"] == 1 and p["importedSongCount"] == 1 and p["missingSongCount"] == 1; item=p["playlists"][0]; assert item["importedName"] == "华语精选（导入 2）" and not item["isPublic"]; print(item["playlistId"])')
+          curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/playlist/$playlist_id" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and d["data"]["isPublic"] == 0 and d["data"]["songCount"] == 1'
+          curl --fail --silent --show-error -X DELETE -H "music-holo-token: $token" "$base/api/playlist/$playlist_id" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 200'
           curl --fail --silent --show-error -X POST -H "music-holo-token: $token" "$base/api/favorite/2" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 200'
           curl --fail --silent --show-error -X PUT -H "music-holo-token: $token" "$base/api/song/2/play" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 200'
           curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/history/page?pageNum=1&pageSize=20" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and any(row["id"] == 2 for row in d["data"]["records"])'

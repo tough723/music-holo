@@ -6,6 +6,7 @@ import { ElMessage } from 'element-plus'
 import router from '@/router'
 import { useUserStore } from '@/store/user'
 import { createSeed, clone } from './seed'
+import { parsePlaylistBackup, PLAYLIST_BACKUP_FORMAT, PLAYLIST_BACKUP_VERSION } from '@/utils/playlistBackup'
 
 export const mockEnabled = import.meta.env.VITE_API_MOCK === 'true'
 
@@ -163,6 +164,88 @@ function playlistVO(playlist) {
   const songCount = state.playlistSongs.filter((ps) => ps.playlistId === playlist.id).length
   const creator = state.users.find((u) => u.id === playlist.creatorId)
   return { ...clone(playlist), songCount, creatorName: creator?.nickname || creator?.username || '' }
+}
+
+function normalizePlaylistName(value) {
+  return String(value || '').trim().toLocaleLowerCase()
+}
+
+function uniqueImportedPlaylistName(value, usedNames) {
+  const base = String(value || '导入歌单').trim().slice(0, 100) || '导入歌单'
+  if (!usedNames.has(normalizePlaylistName(base))) {
+    usedNames.add(normalizePlaylistName(base))
+    return base
+  }
+  for (let suffix = 2; suffix < 10000; suffix += 1) {
+    const tag = `（导入 ${suffix}）`
+    const candidate = `${base.slice(0, 100 - tag.length)}${tag}`
+    if (!usedNames.has(normalizePlaylistName(candidate))) {
+      usedNames.add(normalizePlaylistName(candidate))
+      return candidate
+    }
+  }
+  throw mockError(400, '无法为同名歌单生成唯一名称')
+}
+
+function sameMockTrackIdentity(track, song) {
+  const view = songVO(song)
+  const normalize = (value) => String(value || '').trim().toLocaleLowerCase()
+  return normalize(track.title) === normalize(view.title) &&
+    (!track.singerName || normalize(track.singerName) === normalize(view.singerName)) &&
+    (!track.album || normalize(track.album) === normalize(view.album))
+}
+
+function createPlaylistBackupPreview(backup, user) {
+  const usedNames = new Set(state.playlists.filter((playlist) => playlist.creatorId === user.id).map((playlist) => normalizePlaylistName(playlist.name)))
+  const previews = backup.playlists.map((source, playlistIndex) => {
+    const suggestedName = uniqueImportedPlaylistName(source.name, usedNames)
+    const tracks = source.songs.map((sourceTrack, trackIndex) => {
+      const idMatch = sourceTrack.id
+        ? state.songs.find((song) => String(song.id) === String(sourceTrack.id) && song.status === 1 && sameMockTrackIdentity(sourceTrack, song))
+        : null
+      let matches = idMatch ? [idMatch] : state.songs.filter((song) => song.status === 1 && sameMockTrackIdentity(sourceTrack, song))
+      matches = [...new Map(matches.map((song) => [song.id, song])).values()]
+      const candidates = matches.slice(0, 20).map((song) => {
+        const view = songVO(song)
+        return { id: String(view.id), title: view.title, singerName: view.singerName || '', album: view.album || '' }
+      })
+      const status = matches.length === 0 ? 'missing' : matches.length === 1 ? 'matched' : 'ambiguous'
+      return {
+        index: trackIndex,
+        title: sourceTrack.title,
+        singerName: sourceTrack.singerName || '',
+        album: sourceTrack.album || '',
+        status,
+        resolvedSongId: status === 'matched' ? candidates[0].id : null,
+        candidates
+      }
+    })
+    const matchedSongCount = tracks.filter((track) => track.status === 'matched').length
+    const missingSongCount = tracks.filter((track) => track.status === 'missing').length
+    const ambiguousSongCount = tracks.filter((track) => track.status === 'ambiguous').length
+    return {
+      index: playlistIndex,
+      name: source.name,
+      description: source.description || '',
+      sourcePublic: source.sourcePublic,
+      suggestedName,
+      nameConflict: suggestedName !== source.name,
+      totalSongCount: tracks.length,
+      matchedSongCount,
+      missingSongCount,
+      ambiguousSongCount,
+      tracks
+    }
+  })
+  const tracks = previews.flatMap((playlist) => playlist.tracks)
+  return {
+    playlistCount: previews.length,
+    totalSongCount: tracks.length,
+    matchedSongCount: tracks.filter((track) => track.status === 'matched').length,
+    missingSongCount: tracks.filter((track) => track.status === 'missing').length,
+    ambiguousSongCount: tracks.filter((track) => track.status === 'ambiguous').length,
+    playlists: previews
+  }
 }
 
 const reviewTargetTitle = (type, id) => type === 'song'
@@ -686,6 +769,180 @@ route('delete', '/category/:id', async (ctx) => {
 })
 
 // ---------- 歌单 ----------
+route('get', '/playlist/backup', async (ctx) => {
+  const user = requireUser(ctx)
+  const owned = state.playlists.filter((playlist) => playlist.creatorId === user.id).sort((a, b) => a.id - b.id)
+  if (owned.length > 200) throw mockError(400, '单次最多导出 200 张歌单，请先减少歌单数量')
+  let totalSongs = 0
+  const playlists = owned.map((playlist) => {
+    const songs = state.playlistSongs
+      .filter((relation) => relation.playlistId === playlist.id)
+      .sort((a, b) => a.sort - b.sort || a.id - b.id)
+      .map((relation) => state.songs.find((song) => song.id === relation.songId && song.status === 1))
+      .filter(Boolean)
+      .map((song) => {
+        const view = songVO(song)
+        return {
+          id: String(view.id),
+          title: view.title,
+          singerName: view.singerName || '',
+          album: view.album || '',
+          duration: view.duration ?? null
+        }
+      })
+    if (songs.length > 2000) throw mockError(400, `歌单「${playlist.name}」超过单次备份的曲目上限`)
+    totalSongs += songs.length
+    return {
+      name: playlist.name,
+      description: playlist.description || '',
+      sourcePublic: playlist.isPublic === 1,
+      songs
+    }
+  })
+  if (totalSongs > 10000) throw mockError(400, '单次最多备份 10000 首歌曲')
+  const backup = {
+    format: PLAYLIST_BACKUP_FORMAT,
+    version: PLAYLIST_BACKUP_VERSION,
+    exportedAt: new Date().toISOString(),
+    playlists
+  }
+  try {
+    if (new TextEncoder().encode(JSON.stringify(backup)).length > 2 * 1024 * 1024) {
+      throw mockError(400, '歌单备份文件不能超过 2 MB')
+    }
+  } catch (error) {
+    if (error.code) throw error
+    throw mockError(400, '无法生成歌单备份')
+  }
+  return backup
+})
+
+route('post', '/playlist/backup/preview', async (ctx) => {
+  const user = requireUser(ctx)
+  let backup
+  try {
+    backup = parsePlaylistBackup(ctx.body)
+  } catch (error) {
+    throw mockError(400, error.message || '歌单备份无效')
+  }
+  return createPlaylistBackupPreview(backup, user)
+})
+
+route('post', '/playlist/backup/import', async (ctx) => {
+  const user = requireUser(ctx)
+  let backup
+  try {
+    backup = parsePlaylistBackup(ctx.body?.backup)
+  } catch (error) {
+    throw mockError(400, error.message || '歌单备份无效')
+  }
+  const selectedIndexes = ctx.body?.selectedPlaylistIndexes
+  const publicIndexes = ctx.body?.publicPlaylistIndexes || []
+  const rawChoices = ctx.body?.trackChoices || []
+  const indexSet = new Set()
+  if (!Array.isArray(selectedIndexes) || selectedIndexes.length === 0 || selectedIndexes.length > 200) {
+    throw mockError(400, '至少选择一张歌单')
+  }
+  for (const index of selectedIndexes) {
+    if (!Number.isInteger(index) || index < 0 || index >= backup.playlists.length || indexSet.has(index)) {
+      throw mockError(400, '歌单选择列表包含重复或无效项')
+    }
+    indexSet.add(index)
+  }
+  const publicSet = new Set()
+  if (!Array.isArray(publicIndexes)) throw mockError(400, '公开歌单选择无效')
+  for (const index of publicIndexes) {
+    if (!indexSet.has(index) || publicSet.has(index)) throw mockError(400, '公开设置只能应用于已选中的歌单')
+    publicSet.add(index)
+  }
+
+  const preview = createPlaylistBackupPreview(backup, user)
+  const choices = new Map()
+  if (!Array.isArray(rawChoices) || rawChoices.length > 10000) throw mockError(400, '人工匹配曲目数量超出上限')
+  for (const choice of rawChoices) {
+    if (!choice || !indexSet.has(choice.playlistIndex) || !Number.isInteger(choice.trackIndex)) {
+      throw mockError(400, '曲目匹配选择无效')
+    }
+    const track = preview.playlists[choice.playlistIndex]?.tracks?.[choice.trackIndex]
+    if (track?.status !== 'ambiguous' || !track.candidates.some((candidate) => candidate.id === String(choice.songId))) {
+      throw mockError(400, '所选歌曲不属于此曲目的候选项')
+    }
+    const key = `${choice.playlistIndex}:${choice.trackIndex}`
+    if (choices.has(key)) throw mockError(400, '同一曲目不能选择多个匹配项')
+    choices.set(key, String(choice.songId))
+  }
+
+  const usedNames = new Set(state.playlists.filter((playlist) => playlist.creatorId === user.id).map((playlist) => normalizePlaylistName(playlist.name)))
+  const imported = []
+  let importedSongCount = 0
+  let missingSongCount = 0
+  let ambiguousSkippedCount = 0
+  for (let playlistIndex = 0; playlistIndex < backup.playlists.length; playlistIndex += 1) {
+    if (!indexSet.has(playlistIndex)) continue
+    const source = backup.playlists[playlistIndex]
+    const matchedPlaylist = preview.playlists[playlistIndex]
+    const songIds = []
+    const uniqueSongs = new Set()
+    let missingCount = 0
+    let skippedAmbiguous = 0
+    for (const track of matchedPlaylist.tracks) {
+      let targetId = track.status === 'matched' ? track.resolvedSongId : null
+      if (track.status === 'ambiguous') {
+        targetId = choices.get(`${playlistIndex}:${track.index}`) || null
+        if (!targetId) skippedAmbiguous += 1
+      }
+      if (track.status === 'missing') missingCount += 1
+      const parsedId = Number(targetId)
+      if (targetId && Number.isSafeInteger(parsedId) && !uniqueSongs.has(parsedId)) {
+        uniqueSongs.add(parsedId)
+        songIds.push(parsedId)
+      }
+    }
+
+    let name = matchedPlaylist.suggestedName
+    if (usedNames.has(normalizePlaylistName(name))) name = uniqueImportedPlaylistName(name, usedNames)
+    else usedNames.add(normalizePlaylistName(name))
+    const playlist = {
+      id: state.genId(),
+      name,
+      cover: '',
+      description: source.description || '',
+      creatorId: user.id,
+      isPublic: publicSet.has(playlistIndex) ? 1 : 0,
+      playCount: 0,
+      createTime: new Date().toISOString().slice(0, 19).replace('T', ' ')
+    }
+    state.playlists.push(playlist)
+    let sort = 0
+    let added = 0
+    for (const songId of songIds) {
+      const song = state.songs.find((row) => row.id === songId && row.status === 1)
+      if (!song) continue
+      state.playlistSongs.push({ id: state.genId(), playlistId: playlist.id, songId, sort: ++sort, createTime: new Date().toISOString().slice(0, 19).replace('T', ' ') })
+      added += 1
+    }
+    imported.push({
+      playlistId: String(playlist.id),
+      sourceName: source.name,
+      importedName: name,
+      addedSongCount: added,
+      missingSongCount: missingCount,
+      ambiguousSkippedCount: skippedAmbiguous,
+      isPublic: publicSet.has(playlistIndex)
+    })
+    importedSongCount += added
+    missingSongCount += missingCount
+    ambiguousSkippedCount += skippedAmbiguous
+  }
+  return {
+    importedPlaylistCount: imported.length,
+    importedSongCount,
+    missingSongCount,
+    ambiguousSkippedCount,
+    playlists: imported
+  }
+})
+
 route('get', '/playlist/page', async (ctx) => {
   const { pageNum = 1, pageSize = 12, keyword, onlyMine } = ctx.params
   let list = state.playlists

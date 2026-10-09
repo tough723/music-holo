@@ -458,6 +458,55 @@ describe('内置 Mock API 集成测试', () => {
     await expect(playlistApi.detail(created.id)).rejects.toMatchObject({ code: 500 })
   })
 
+  it('歌单备份仅导出当前账号歌单，并安全预览、重名另存与默认私密导入', async () => {
+    await loginAs('demo')
+    const exported = await playlistApi.exportBackup()
+    expect(exported).toMatchObject({ format: 'music-holo-playlists', version: 1 })
+    expect(exported.playlists.map((playlist) => playlist.name)).toEqual(['华语精选'])
+    expect(exported.playlists[0].songs[0]).toMatchObject({ id: '1', title: '霓虹海', singerName: '林澈' })
+    expect(JSON.stringify(exported)).not.toMatch(/\"(?:audioUrl|lyric|lyricTranslation|token|password|script|audio)\"\s*:/)
+
+    const backup = {
+      ...exported,
+      playlists: [{
+        ...exported.playlists[0],
+        songs: [
+          { id: '1', title: '霓虹海', singerName: '林澈', album: '《霓虹海》', duration: 10, audioUrl: 'https://media.invalid/signed' },
+          { id: '999999', title: '不在曲库', singerName: '未知歌手', album: '未知专辑', duration: 180 }
+        ]
+      }]
+    }
+    const preview = await playlistApi.previewBackup(backup)
+    expect(preview).toMatchObject({
+      playlistCount: 1,
+      matchedSongCount: 1,
+      missingSongCount: 1,
+      playlists: [{ name: '华语精选', nameConflict: true, suggestedName: '华语精选（导入 2）' }]
+    })
+    expect(preview.playlists[0].tracks[0]).toMatchObject({ status: 'matched', resolvedSongId: '1' })
+    expect(preview.playlists[0].tracks[1]).toMatchObject({ status: 'missing' })
+
+    const result = await playlistApi.importBackup({
+      backup,
+      selectedPlaylistIndexes: [0],
+      publicPlaylistIndexes: [],
+      trackChoices: []
+    })
+    expect(result).toMatchObject({ importedPlaylistCount: 1, importedSongCount: 1, missingSongCount: 1 })
+    const createdId = Number(result.playlists[0].playlistId)
+    expect(await playlistApi.detail(createdId)).toMatchObject({
+      name: '华语精选（导入 2）',
+      isPublic: 0,
+      creatorId: 2
+    })
+    expect((await playlistApi.songsOfPlaylist(createdId)).map((song) => song.id)).toEqual([1])
+    expect(await playlistApi.detail(3)).toMatchObject({ name: '华语精选', isPublic: 1 })
+    await playlistApi.remove(createdId)
+
+    await useUserStore().logoutLocal()
+    await expect(playlistApi.exportBackup()).rejects.toMatchObject({ code: 401 })
+  })
+
   it('全局搜索支持歌曲/原歌词/译文/歌手和公开歌单，并隐藏完整歌词正文', async () => {
     const result = await searchApi.search('霓虹', 12)
     expect(result.keyword).toBe('霓虹')
