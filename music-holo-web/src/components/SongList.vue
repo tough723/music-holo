@@ -152,7 +152,7 @@
           </el-button>
         </el-tooltip>
         <el-tooltip content="快速换源：换一个可用的音源播放" placement="top">
-          <el-button circle size="small" :aria-label="`换源播放《${row.title}》`" @click.stop="switchSource(row)">
+          <el-button circle size="small" :aria-label="`切换音源：《${row.title}》`" @click.stop="switchSource(row)">
             <el-icon><Switch /></el-icon>
           </el-button>
         </el-tooltip>
