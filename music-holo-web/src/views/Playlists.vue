@@ -17,7 +17,16 @@
         />
         <el-checkbox v-if="userStore.isLogin" v-model="onlyMine" @change="loadData">只看我的</el-checkbox>
         <div v-if="userStore.isLogin" class="playlist-backup-actions">
-          <el-button round :loading="exporting" @click="exportMyPlaylists">导出我的歌单</el-button>
+          <button type="button" class="playlist-export-button" :disabled="exporting" @click="exportMyPlaylists">
+            {{ exporting ? '正在导出…' : '导出我的歌单' }}
+          </button>
+          <a
+            v-if="exportDownloadUrl"
+            class="playlist-export-link"
+            data-testid="playlist-export-download"
+            :href="exportDownloadUrl"
+            :download="exportFileName"
+          >保存歌单备份</a>
           <el-button round type="primary" plain @click="fileInput?.click()">导入 JSON 备份</el-button>
           <input
             ref="fileInput"
@@ -30,6 +39,15 @@
         </div>
       </div>
     </div>
+    <p
+      v-if="exportStatus"
+      class="backup-export-status"
+      role="status"
+      aria-live="polite"
+      data-testid="playlist-export-status"
+    >
+      {{ exportStatus }}
+    </p>
 
     <div v-loading="loading" class="playlist-grid">
       <div
@@ -163,12 +181,11 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import * as playlistApi from '@/api/playlist'
 import { useUserStore } from '@/store/user'
 import Cover from '@/components/Cover.vue'
-import { triggerDownload } from '@/utils/download'
 import { MAX_PLAYLIST_BACKUP_BYTES, parsePlaylistBackup, serializePlaylistBackup } from '@/utils/playlistBackup'
 
 const userStore = useUserStore()
@@ -182,6 +199,9 @@ const keyword = ref('')
 const onlyMine = ref(false)
 const fileInput = ref(null)
 const exporting = ref(false)
+const exportStatus = ref('')
+const exportDownloadUrl = ref('')
+const exportFileName = ref('')
 const importing = ref(false)
 const backupPreviewVisible = ref(false)
 const pendingBackup = ref(null)
@@ -206,25 +226,44 @@ const loadData = async () => {
   }
 }
 
+const revokeExportDownload = () => {
+  if (!exportDownloadUrl.value) return
+  URL.revokeObjectURL(exportDownloadUrl.value)
+  exportDownloadUrl.value = ''
+  exportFileName.value = ''
+}
+
 const exportMyPlaylists = async () => {
   exporting.value = true
+  exportStatus.value = '正在生成歌单备份…'
   try {
     const backup = await playlistApi.exportBackup()
     const json = serializePlaylistBackup(backup)
     const sanitized = parsePlaylistBackup(json)
+    revokeExportDownload()
     if (sanitized.playlists.length === 0) {
-      ElMessage.info('当前账号没有可导出的歌单')
+      exportStatus.value = '当前账号没有可导出的歌单'
+      ElMessage.info(exportStatus.value)
       return
     }
-    const blob = new Blob([json], { type: 'application/json;charset=utf-8' })
-    triggerDownload(blob, `music-holo-playlists-${new Date().toISOString().slice(0, 10)}.json`)
-    ElMessage.success(`已导出 ${sanitized.playlists.length} 张自己的歌单`)
+    // Keep the file behind a real user-activated link. A programmatic click after the
+    // async export is not a reliable browser download and can be dropped silently.
+    exportFileName.value = `music-holo-playlists-${new Date().toISOString().slice(0, 10)}.json`
+    exportDownloadUrl.value = URL.createObjectURL(new Blob([json], { type: 'application/json;charset=utf-8' }))
+    exportStatus.value = `已生成 ${sanitized.playlists.length} 张歌单备份，请保存文件`
+    ElMessage.success(exportStatus.value)
   } catch (error) {
-    if (error?.name === 'PlaylistBackupError') ElMessage.error(error.message)
+    revokeExportDownload()
+    exportStatus.value = error?.name === 'PlaylistBackupError'
+      ? error.message
+      : `导出失败：${error?.message || '请稍后重试'}`
+    ElMessage.error(exportStatus.value)
   } finally {
     exporting.value = false
   }
 }
+
+onBeforeUnmount(revokeExportDownload)
 
 const onBackupFileSelected = async (event) => {
   const file = event.target.files?.[0]
@@ -346,10 +385,45 @@ onMounted(loadData)
   flex-wrap: wrap;
   gap: 12px;
 }
+.backup-export-status {
+  margin: -6px 0 0 auto;
+  color: var(--text-sub);
+  font-size: 12px;
+}
 .playlist-backup-actions {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 8px;
+}
+.playlist-export-button,
+.playlist-export-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--holo-primary) 8%, transparent);
+  color: var(--text-main);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
+}
+.playlist-export-button:disabled {
+  cursor: progress;
+  opacity: 0.65;
+}
+.playlist-export-link {
+  border-color: color-mix(in srgb, var(--holo-primary) 58%, var(--border-color));
+  color: var(--holo-primary);
+}
+.playlist-export-button:hover:not(:disabled),
+.playlist-export-link:hover {
+  box-shadow: 0 0 16px var(--holo-glow);
 }
 .playlist-backup-file-input {
   display: none;

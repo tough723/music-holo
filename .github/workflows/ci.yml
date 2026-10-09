@@ -181,8 +181,14 @@ jobs:
           require(isinstance(data, dict), 'export response data is not an object')
           require(data.get('format') == 'music-holo-playlists' and data.get('version') == 1, 'format/version mismatch')
           require([item.get('name') for item in data.get('playlists', [])] == ['华语精选'], 'account export did not return the expected owned playlist')
-          encoded=json.dumps(data, ensure_ascii=False)
-          require(all(key not in encoded for key in ('audioUrl','lyric','lyricTranslation','token','password','script')), 'export contains a forbidden property')
+          # Check allow-listed keys, not substrings: the word description contains script.
+          require(set(data) == {'format', 'version', 'exportedAt', 'playlists'}, 'unexpected top-level fields: ' + str(sorted(data)))
+          playlist_fields = [sorted(item) for item in data['playlists']]
+          expected_playlist_fields = ['description', 'name', 'songs', 'sourcePublic']
+          require(playlist_fields == [expected_playlist_fields] * len(playlist_fields), 'unexpected playlist fields: ' + str(playlist_fields))
+          song_fields = [sorted(track) for item in data['playlists'] for track in item['songs']]
+          expected_song_fields = ['album', 'duration', 'id', 'singerName', 'title']
+          require(song_fields == [expected_song_fields] * len(song_fields), 'unexpected song fields: ' + str(song_fields))
           source=data['playlists'][0]
           require(bool(source.get('songs')), 'seed playlist has no songs to exercise import matching')
           source['songs']=[source['songs'][0], {'id':'9223372036854775807','title':'CI 缺失曲目','singerName':'未知','album':'','duration':10}]
