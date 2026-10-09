@@ -789,15 +789,23 @@ async function resolveAudition() {
         // 歌词是可选能力；失败不影响已解析的音频。
       }
     }
-    // 音源脚本未返回歌词/封面时（例如只做 URL 解析的分支），用平台适配器补齐。
+    // 与曲库解析一致：先按协议调用脚本的 pic 动作；脚本未返回时再用平台适配器补齐。
     let coverUrl = ''
+    if (runtimePlatform.actions.includes('pic')) {
+      try {
+        const picResult = await session.request({ source: runtimePlatform.key, action: 'pic', info: { musicInfo } })
+        if (typeof picResult === 'string' && picResult.trim()) coverUrl = picResult.trim()
+      } catch {
+        // 封面是可选能力；失败不影响已解析的音频。
+      }
+    }
     try {
       const catalogTrack = selectedCatalogTrack.value && selectedCatalogTrack.value.platform === runtimePlatform.key
         ? { ...selectedCatalogTrack.value, musicInfo }
         : { musicInfo }
       const extras = await fetchPlatformTrackExtras(runtimePlatform.key, catalogTrack, { signal: controller.signal })
       if (!customLyrics.length && extras?.lyric) customLyrics = parseCustomSourceLyrics(extras.lyric)
-      if (extras?.coverUrl) coverUrl = String(extras.coverUrl)
+      if (!coverUrl && extras?.coverUrl) coverUrl = String(extras.coverUrl)
     } catch {
       // 附加信息是可选能力；失败不影响已解析的音频。
     }
