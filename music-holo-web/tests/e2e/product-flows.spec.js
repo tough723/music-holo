@@ -208,7 +208,7 @@ test('搜索与隐私设置可关闭探索词和历史记忆并限制本机记�
   await openMenu(page, '设置')
   await page.getByRole('tab', { name: '搜索与隐私' }).click()
 
-  await page.getByRole('combobox', { name: '最近搜索保留条数' }).click()
+  await page.locator('.history-limit .el-select__wrapper').click()
   await page.getByRole('option', { name: '4 条' }).click()
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('music-holo-recent-searches'))))
     .toEqual(seededTerms.slice(0, 4))
