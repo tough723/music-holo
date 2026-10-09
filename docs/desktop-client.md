@@ -9,7 +9,7 @@
 | 能力 | 本轮状态 |
 | --- | --- |
 | 加载打包的 Vue 界面，独立本机存储、账号登录、原曲库与播放器 | 已接入；桌面用 hash 路由，页面由 `app://music-holo/` 提供 |
-| 音源文件导入、备份、能力检测、手动传入 musicInfo 解析试听 | 复用原有 UI；脚本导入不会执行 |
+| 音源文件导入、备份、能力检测、手动传入 musicInfo 解析试听 | 桌面默认进入免登录本机音源工作台，无需业务后端；脚本导入不会执行 |
 | HTTPS URL 下载源脚本 | 桌面原生请求，先原生窗口授权；仍有 128 KB 文件限制 |
 | `lx.request` 桌面网络桥 | 受控 HTTP(S) 请求，不依赖浏览器 CORS；独立于账号 API 通道 |
 | 播放与封面 | 显式授权后签发临时媒体票据，经 `app://music-holo/__source_media/<随机票据>` 流式加载；支持单段 Range |
@@ -31,7 +31,19 @@ npm ci --prefix music-holo-desktop
 
 安装 Electron 会从其发行站下载运行文件，需要网络可达。仅 `npm ci --ignore-scripts` 不代表 Electron 已安装完整。
 
-### 无后端的界面/协议演示
+### 先使用本机音源（无需后端或账号）
+
+```sh
+cd music-holo-desktop
+npm run build:web
+npm start
+```
+
+启动后默认进入「本机音源工作台」。访客可以导入、检测脚本并填写平台曲目信息试听，不请求业务 API，也不需要演示账号。脚本保存在本机访客源库；登录后切换到独立账号源库，不自动迁移。可以通过导出/导入备份显式迁移。音源自己的网络接口仍需联网，所谓“无需后端”不表示音乐能离线获取。
+
+网页登录设置、收藏、歌单和管理员权限不受此入口影响；网页版无法进入 `/sources` 工作台。
+
+### 无后端的完整界面演示（可选）
 
 ```sh
 cd music-holo-desktop
@@ -66,11 +78,11 @@ npm start
 
 `your-backend.example.com` 是占位地址，必须换成真实服务。远程后端要求 HTTPS，本机回环可用 HTTP。桌面将 `/api/*` 转到配置后端的 `/*`，`/profile/*` 保留路径转发；现有账号令牌只进入业务 API。源网络桥拒绝业务后端主机名，也不会接收其 Cookie 或令牌。
 
-这一版没有面向普通用户的后端配置向导；部署者必须提供可用的业务后端或以演示构建验收。桌面包并不自带 MySQL、Redis 或 Spring Boot。
+这一版没有面向普通用户的后端配置向导；使用账号和站内曲库时，部署者仍需提供可用的业务后端，或以演示构建验收；本机音源工作台无需配置后端。桌面包并不自带 MySQL、Redis 或 Spring Boot。
 
 ## 如何导入用户提供的音源
 
-1. 登录 → 设置 → 自定义源，选择本机 `.js/.mjs`，或粘贴 HTTPS 脚本链接。
+1. 打开客户端进入「本机音源工作台」（无需登录），选择本机 `.js/.mjs`，或粘贴 HTTPS 脚本链接。已有账号也可以登录后从设置 → 自定义源进入。
 2. URL 导入会显示原生域名授权窗口；拒绝则不下载，不自动执行下载到的脚本。
 3. 点击隔离兼容检测并确认信任；脚本通过 `globalThis.lx` 注册能力。
 4. 首次请求某个 HTTP(S) 来源时出现原生授权窗口。域名授权只属于本次音源会话；HTTP 会标记明文风险。
@@ -112,7 +124,7 @@ npm run pack   # 重建生产网页，生成当前系统的未安装应用目录
 npm run dist   # 重建生产网页，按当前系统生成 AppImage / NSIS / DMG
 ```
 
-输出在被 Git 忽略的 `music-holo-desktop/release/`。不同系统应在相应系统构建并验收；当前没有代码签名证书、自动发布和自动更新，不应声称已有可供公众安装的正式发行包。依赖锁定在 `package-lock.json`；开发依赖 `global-agent` 覆盖到 4.1.3，避免旧依赖链的审计问题，打包兼容性仍须 CI 验收。
+输出在被 Git 忽略的 `music-holo-desktop/release/`。不同系统应在相应系统构建并验收；当前没有代码签名证书、自动发布和自动更新，不应声称已有可供公众安装的正式发行包。依赖锁定在 `package-lock.json`；开发依赖 `global-agent` 覆盖到 4.1.3，避免旧依赖链的审计问题，Linux 目录打包已通过下述 CI；Windows/macOS 及签名发行仍待验收。
 
 ## 验证与后续验收
 
@@ -120,17 +132,17 @@ npm run dist   # 重建生产网页，按当前系统生成 AppImage / NSIS / DM
 npm test --prefix music-holo-desktop
 npm test --prefix music-holo-web
 node --test examples/lx-custom-source/music-holo-local.test.cjs
-npm run build:demo --prefix music-holo-desktop
+npm run build:web --prefix music-holo-desktop
 npm run test:smoke --prefix music-holo-desktop
 ```
 
 Linux 无显示器时最后一步使用 `xvfb-run -a npm run test:smoke --prefix music-holo-desktop`。
 
-桌面单元测试覆盖 IPC sender、URL/DNS/请求限制、域名授权、取消与超时、拒绝重定向、媒体票据/Range/刷新撤销以及业务 API 通道隔离。Electron smoke 脚本使用真实窗口和沙箱，测试代码通过调试通道模拟第三方网络及原生确认；应用本身没有测试旁路。新增 `.github/workflows/desktop.yml` 会运行测试、smoke 与目录打包。
+桌面单元测试覆盖 IPC sender、URL/DNS/请求限制、域名授权、取消与超时、拒绝重定向、媒体票据/Range/刷新撤销以及业务 API 通道隔离。Electron smoke 使用生产网页构建、真实窗口，并显式设置 `chromiumSandbox: true`，额外断言不存在 `--no-sandbox`（Playwright 在 Linux 下默认会添加该参数，不能只检查窗口 preferences）。测试代码通过调试通道模拟第三方网络及原生确认，拒绝任何业务后端请求，验证访客导入/解析/媒体播放、Range、拒绝授权、脚本持久化与刷新票据撤销；应用本身没有测试旁路。新增 `.github/workflows/desktop.yml` 会运行测试、smoke 与目录打包。
 
-**本轮沙箱实测**：桌面 33 项单元测试、前端测试与构建可运行；Electron 运行文件下载报 `fetch failed`，所以未完成本机 Electron 窗口 smoke 和实际打包，也未完成真实星海接口播放验收。新增 CI 配置不等于 CI 已通过。
+**已验证**：桌面 33 项单元测试、前端 111 项测试和生产构建通过。本机沙箱仍因发行文件下载受限无法启动 Electron，但已在 [桌面 CI run 37965363398](https://github.com/tough723/music-holo/actions/runs/37965363398) 验证代码提交 `8632f53`：真实 Electron + 显式开启 Chromium 沙箱的免登录/无业务后端播放测试、依赖审计、生产 Linux 目录打包全部通过。测试使用模拟音源服务，不代表星海真实接口可用，也不是 Windows/macOS 人工验收或正式签名发布。 同一代码提交的 [原项目 CI run 37965363418](https://github.com/tough723/music-holo/actions/runs/37965363418) 也全部通过，包括前端测试/审计、生产浏览器旅程、Java verify 和 Docker 全栈 smoke。
 
-下一阶段顺序：先在有桌面的开发机/CI 跑通 smoke 和媒体回归，再逐项验收用户脚本依赖；之后接入明确的平台搜索/榜单适配器与正确的平台曲目 ID，最后做真实客户端播放、后台播放、安装包签名及升级验收。
+下一阶段：逐项验收真实用户脚本与接口，接入明确的平台搜索/榜单适配器及正确的平台曲目 ID，然后进行多系统人工播放、后台播放、安装包签名及升级验收。
 
 ### 星海脚本静态兼容核对
 

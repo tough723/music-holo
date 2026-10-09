@@ -11,13 +11,13 @@
 
 项目新增 `music-holo-desktop/`，复用当前 Vue 界面，以 **Electron 桌面端作为用户自定义音源的主路线**。脚本继续在受限 Worker 中执行；桌面网络桥通过原生域名确认、公网 DNS 校验与受限 HTTP(S) 请求接入音源，媒体用本窗口临时票据流式播放。网页端保留原有 HTTPS/CORS 限制，不开放 Node 权限。
 
-运行、后端配置、打包、安全边界和验收状态见 [桌面客户端说明](docs/desktop-client.md)。**这次只交付桌面音源基础接入；第三方平台搜索/榜单尚未实现，星海脚本和 Electron 窗口链路尚未完成实机验收，不代表全部 LX 脚本可用。**
+运行、后端配置、打包、安全边界和验收状态见 [桌面客户端说明](docs/desktop-client.md)。**桌面已提供免登录、无需业务后端的本机音源工作台；真实 Electron 沙箱播放测试和 Linux 目录打包已通过 [CI 验证](https://github.com/tough723/music-holo/actions/runs/37965363398)。第三方平台搜索/榜单尚未实现，星海真实接口尚未完成验收，不代表全部 LX 脚本可用。**
 
 ```sh
 npm ci --prefix music-holo-web
 npm ci --prefix music-holo-desktop
 cd music-holo-desktop
-npm run build:demo  # 无后端演示，demo / 123456；正式连接后端用 build:web
+npm run build:web   # 启动后直接使用本机音源，无需登录；账号/曲库功能需业务后端
 npm start
 ```
 
