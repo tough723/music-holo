@@ -194,6 +194,9 @@
       </el-tab-pane>
 
       <!-- 自定义音源：脚本本地管理，不在未隔离环境执行 -->
+      <el-tab-pane label="数据同步" name="sync">
+        <SyncPanel />
+      </el-tab-pane>
       <el-tab-pane label="桌面集成" name="desktop">
         <DesktopIntegrationPanel />
       </el-tab-pane>
@@ -220,6 +223,7 @@ import HoloProjector from '@/components/HoloProjector.vue'
 import Cover from '@/components/Cover.vue'
 import CustomSourceManager from '@/components/settings/CustomSourceManager.vue'
 import DesktopIntegrationPanel from '@/components/settings/DesktopIntegrationPanel.vue'
+import SyncPanel from '@/components/settings/SyncPanel.vue'
 import GeneralPreferences from '@/components/settings/GeneralPreferences.vue'
 import PlaybackPreferences from '@/components/settings/PlaybackPreferences.vue'
 import DislikeRulesPanel from '@/components/settings/DislikeRulesPanel.vue'
@@ -233,7 +237,7 @@ const playerStore = usePlayerStore()
 const preferencesStore = usePreferencesStore()
 
 const SETTINGS_TAB_KEY = 'mh_settings_tab'
-const SETTINGS_TABS = ['general', 'theme', 'dislike', 'playback', 'search', 'profile', 'password', 'desktop', 'sources', 'data']
+const SETTINGS_TABS = ['general', 'theme', 'dislike', 'playback', 'search', 'profile', 'password', 'sync', 'desktop', 'sources', 'data']
 const savedTab = localStorage.getItem(SETTINGS_TAB_KEY)
 const activeTab = ref(SETTINGS_TABS.includes(savedTab) ? savedTab : 'general')
 const tabPosition = ref(typeof window !== 'undefined' && window.innerWidth <= 760 ? 'top' : 'left')

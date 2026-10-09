@@ -19,7 +19,7 @@
         v-model="extraFields"
         type="textarea"
         :rows="2"
-        placeholder="可选：平台专属曲目字段（JSON，例如 {"songmid":"xxx"}）"
+        placeholder="可选：平台专属曲目字段（JSON，例如 { songmid: 平台曲目ID }）"
         :disabled="running"
       />
     </div>
