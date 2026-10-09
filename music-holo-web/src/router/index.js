@@ -48,6 +48,7 @@ const routes = [
       { path: 'admin/reviews', name: 'AdminReviews', component: () => import('@/views/admin/ReviewModeration.vue'), meta: { title: '短评审核', requiresAuth: true, requiresAdmin: true } }
     ]
   },
+  { path: '/lyrics', name: 'LyricWindow', component: () => import('@/views/LyricWindow.vue'), meta: { title: '桌面歌词' } },
   { path: '/:pathMatch(.*)*', redirect: '/home' }
 ]
 
