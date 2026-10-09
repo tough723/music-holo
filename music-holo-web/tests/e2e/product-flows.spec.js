@@ -563,12 +563,13 @@ test('歌曲短评可发布、举报并由管理员隐藏，作者能看到处�
 test('登录用户可屏蔽歌曲和歌手，自动播放与推荐跳过但手动点播仍可用', async ({ page }) => {
   test.setTimeout(60_000)
   await loginAs(page, 'demo')
+  await expect(page.locator('.user-name')).toHaveText('演示用户')
   await openMenu(page, '歌曲')
 
   const neonRow = page.locator('.el-table__row').filter({ hasText: '霓虹海' }).first()
   await expect(neonRow).toBeVisible()
-  await neonRow.getByRole('button', { name: '不喜欢《霓虹海》' }).click()
-  await expect(page.getByText('已不喜欢《霓虹海》，自动切歌和推荐会跳过')).toBeVisible()
+  await neonRow.getByTestId('dislike-song-1').click()
+  await expect(page.getByTestId('dislike-status')).toHaveText('已不喜欢《霓虹海》，自动切歌和推荐会跳过')
   await expect(neonRow.getByTestId('dislike-song-1')).toHaveAttribute('data-disliked', 'true')
 
   await page.getByRole('button', { name: '播放全部' }).click()
@@ -587,8 +588,8 @@ test('登录用户可屏蔽歌曲和歌手，自动播放与推荐跳过但手�
   await openMenu(page, '每日推荐')
   const messengerRow = page.locator('.daily-list .el-table__row').filter({ hasText: '云端信使' })
   await expect(messengerRow).toBeVisible()
-  await messengerRow.getByRole('button', { name: '不喜欢《云端信使》' }).click()
-  await expect(page.getByText('已不喜欢《云端信使》，自动切歌和推荐会跳过')).toBeVisible()
+  await messengerRow.getByTestId('dislike-song-2').click()
+  await expect(page.getByTestId('dislike-status')).toHaveText('已不喜欢《云端信使》，自动切歌和推荐会跳过')
   await expect(messengerRow).toHaveCount(0)
 
   await openMenu(page, '歌手')
@@ -597,7 +598,7 @@ test('登录用户可屏蔽歌曲和歌手，自动播放与推荐跳过但手�
   const confirm = page.locator('.el-message-box')
   await expect(confirm).toContainText('不喜欢这位歌手')
   await confirm.getByRole('button', { name: '确认屏蔽' }).click()
-  await expect(page.getByText('已不喜欢歌手陆呼吸，自动切歌和推荐会跳过')).toBeVisible()
+  await expect(page.getByTestId('singer-dislike-status')).toHaveText('已不喜欢歌手陆呼吸，自动切歌和推荐会跳过')
   await expect(page.getByTestId('dislike-singer')).toHaveAttribute('data-disliked', 'true')
 
   await openMenu(page, '每日推荐')

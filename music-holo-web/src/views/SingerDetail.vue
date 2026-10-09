@@ -32,6 +32,7 @@
           >
             {{ singerDisliked ? '已不喜欢这位歌手' : '不喜欢这位歌手' }}
           </el-button>
+          <p class="dislike-status" role="status" data-testid="singer-dislike-status">{{ singerDislikeStatus }}</p>
         </div>
       </div>
       <div class="singer-holo">
@@ -149,18 +150,24 @@ const onAddQueue = (song) => {
   ElMessage.success(`已加入播放队列：《${song.title}》`)
 }
 
+const singerDislikeStatus = ref('')
+
 const toggleSingerDislike = async () => {
   if (!singer.value) return
   if (!userStore.isLogin) {
-    ElMessage.warning('请先登录后再设置不喜欢')
+    singerDislikeStatus.value = '请先登录后再设置不喜欢'
+    ElMessage.warning(singerDislikeStatus.value)
     router.push('/login')
     return
   }
   if (dislikeStore.hasSinger(singer.value.id)) {
     try {
       await dislikeStore.removeSinger(singer.value.id)
-      ElMessage.success(`已取消不喜欢歌手${singer.value.name}`)
-    } catch { /* 拦截器已提示 */ }
+      singerDislikeStatus.value = `已取消不喜欢歌手${singer.value.name}`
+      ElMessage.success(singerDislikeStatus.value)
+    } catch (err) {
+      singerDislikeStatus.value = err?.msg || err?.message || '不喜欢设置失败'
+    }
     return
   }
   try {
@@ -174,8 +181,11 @@ const toggleSingerDislike = async () => {
   }
   try {
     await dislikeStore.addSinger(singer.value)
-    ElMessage.success(`已不喜欢歌手${singer.value.name}，自动切歌和推荐会跳过`)
-  } catch { /* 拦截器已提示 */ }
+    singerDislikeStatus.value = `已不喜欢歌手${singer.value.name}，自动切歌和推荐会跳过`
+    ElMessage.success(singerDislikeStatus.value)
+  } catch (err) {
+    singerDislikeStatus.value = err?.msg || err?.message || '不喜欢设置失败'
+  }
 }
 
 watch(() => route.params.id, () => {
@@ -186,6 +196,15 @@ onMounted(loadData)
 </script>
 
 <style scoped>
+.dislike-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
 .page {
   display: flex;
   flex-direction: column;

@@ -29,6 +29,16 @@
             </div>
             <div class="song-artist">{{ row.singerName || '-' }}</div>
           </div>
+          <button
+            v-if="canDislike(row)"
+            type="button"
+            class="dislike-link"
+            :aria-pressed="dislikeStore.hasSong(row.id) ? 'true' : 'false'"
+            :aria-label="dislikeStore.hasSong(row.id) ? `取消不喜欢《${row.title}》` : `不喜欢《${row.title}》`"
+            :data-testid="`dislike-song-${row.id}`"
+            :data-disliked="dislikeStore.hasSong(row.id) ? 'true' : 'false'"
+            @click.stop="toggleDislike(row)"
+          >{{ dislikeStore.hasSong(row.id) ? '已不喜欢' : '不喜欢' }}</button>
         </div>
       </template>
     </el-table-column>
@@ -69,7 +79,7 @@
       </template>
     </el-table-column>
 
-    <el-table-column label="操作" :width="(showHistory ? 224 : 190) + (hasCustomSources ? 40 : 0) + 40 + (hideDislike ? 0 : 36)" align="center" fixed="right">
+    <el-table-column label="操作" :width="(showHistory ? 224 : 190) + (hasCustomSources ? 40 : 0) + 40" align="center" fixed="right">
       <template #default="{ row, $index }">
         <el-tooltip content="播放" placement="top">
           <el-button circle size="small" :aria-label="`播放《${row.title}》`" @click.stop="emit('play', row, $index)">
@@ -110,20 +120,6 @@
             <el-icon><DArrowRight /></el-icon>
           </el-button>
         </el-tooltip>
-        <el-tooltip v-if="canDislike(row)" :content="dislikeStore.hasSong(row.id) ? '取消不喜欢' : '不喜欢这首歌，自动切歌和推荐会跳过'" placement="top">
-          <el-button
-            circle
-            size="small"
-            :type="dislikeStore.hasSong(row.id) ? 'danger' : 'default'"
-            :plain="!dislikeStore.hasSong(row.id)"
-            :aria-label="dislikeStore.hasSong(row.id) ? `取消不喜欢《${row.title}》` : `不喜欢《${row.title}》`"
-            :data-testid="`dislike-song-${row.id}`"
-            :data-disliked="dislikeStore.hasSong(row.id) ? 'true' : 'false'"
-            @click.stop="toggleDislike(row)"
-          >
-            <el-icon><CircleClose /></el-icon>
-          </el-button>
-        </el-tooltip>
         <el-tooltip content="加入播放队列" placement="top">
           <el-button circle size="small" :aria-label="`加入播放队列《${row.title}》`" @click.stop="emit('add-queue', row)">
             <el-icon><Plus /></el-icon>
@@ -133,6 +129,7 @@
       </template>
     </el-table-column>
   </el-table>
+  <p class="dislike-status" role="status" data-testid="dislike-status">{{ dislikeStatus }}</p>
   <el-dialog
     v-model="reviewVisible"
     :title="activeReviewSong ? `《${activeReviewSong.title}》的短评` : '歌曲短评'"
@@ -199,6 +196,7 @@ const customSourceSong = ref(null)
 const playing = computed(() => playerStore.playing)
 const reviewVisible = ref(false)
 const activeReviewSong = ref(null)
+const dislikeStatus = ref('')
 
 function refreshCustomSources() {
   localCustomSources.value = readCustomSources(globalThis.localStorage, sourceStorageKey.value)
@@ -243,19 +241,23 @@ function canDislike(row) {
 async function toggleDislike(row) {
   if (!canDislike(row)) return
   if (!userStore.isLogin) {
-    ElMessage.warning('请先登录后再设置不喜欢')
+    dislikeStatus.value = '请先登录后再设置不喜欢'
+    ElMessage.warning(dislikeStatus.value)
     router.push('/login')
     return
   }
   try {
     if (dislikeStore.hasSong(row.id)) {
       await dislikeStore.removeSong(row.id)
-      ElMessage.success(`已取消不喜欢《${row.title}》`)
+      dislikeStatus.value = `已取消不喜欢《${row.title}》`
     } else {
       await dislikeStore.addSong(row)
-      ElMessage.success(`已不喜欢《${row.title}》，自动切歌和推荐会跳过`)
+      dislikeStatus.value = `已不喜欢《${row.title}》，自动切歌和推荐会跳过`
     }
-  } catch { /* 拦截器已提示 */ }
+    ElMessage.success(dislikeStatus.value)
+  } catch (err) {
+    dislikeStatus.value = err?.msg || err?.message || '不喜欢设置失败'
+  }
 }
 
 function playNext(song) {
@@ -366,6 +368,38 @@ const onRowClick = (row) => emit('play', row, props.songs.indexOf(row))
   font-size: 12px;
   color: var(--text-sub);
   margin-top: 2px;
+}
+.dislike-link {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 2px 8px;
+  border: 1px solid var(--el-border-color);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-sub);
+  font: inherit;
+  font-size: 12px;
+  line-height: 20px;
+  cursor: pointer;
+}
+.dislike-link[data-disliked='true'] {
+  color: var(--el-color-danger);
+  border-color: var(--el-color-danger-light-5);
+}
+.dislike-link:focus-visible {
+  outline: 2px solid var(--holo-primary);
+  outline-offset: 2px;
+}
+.dislike-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 .album-link {
   max-width: 100%;
