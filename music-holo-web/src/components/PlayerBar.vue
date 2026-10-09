@@ -35,6 +35,19 @@
           <el-icon><Headset /></el-icon>
         </el-button>
       </el-tooltip>
+      <el-tooltip content="快速换源：为当前曲目换一个可用音源" placement="top">
+        <el-button
+          v-if="currentSong"
+          class="pb-switch"
+          circle
+          size="small"
+          aria-label="为当前曲目换源"
+          data-testid="switch-source-current"
+          @click="switchDialogVisible = true"
+        >
+          <el-icon><Switch /></el-icon>
+        </el-button>
+      </el-tooltip>
     </div>
 
     <!-- 中间：播放控制 + 进度 -->
@@ -183,6 +196,7 @@
 
     <!-- 原声播放器始终保留；空间音效使用独立媒体元素，确保跨域音源可安全回退原声。 -->
     <audio ref="audioRef" preload="auto"></audio>
+    <SourceSwitchDialog v-model="switchDialogVisible" :song="currentSong" />
     <audio ref="spatialAudioRef" preload="none"></audio>
   </div>
 
@@ -291,7 +305,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { SLEEP_TIMER_MINUTES, usePlayerStore } from '@/store/player'
@@ -300,6 +314,7 @@ import * as favoriteApi from '@/api/favorite'
 import { fmtDuration } from '@/utils/format'
 import { createMediaSessionController } from '@/utils/mediaSession'
 import { createSpatialAudioGraph, isSpatialAudioUrl } from '@/utils/spatialAudio'
+const SourceSwitchDialog = defineAsyncComponent(() => import('./SourceSwitchDialog.vue'))
 import {
   filesFromGrantedHandles,
   forgetRememberedHandle,
@@ -323,6 +338,7 @@ const userStore = useUserStore()
 const router = useRouter()
 
 const audioRef = ref(null)
+const switchDialogVisible = ref(false)
 const spatialAudioRef = ref(null)
 const spatialEnabled = ref(false)
 const trackRef = ref(null)

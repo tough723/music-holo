@@ -9,6 +9,8 @@ import { createCatalogRequest } from './transport'
 
 export { createCatalogRequest }
 
+export { CATALOG_ADAPTERS } from './adapters'
+
 export function getCatalogAdapter(platformKey) {
   return CATALOG_ADAPTERS[String(platformKey || '')] || null
 }
@@ -20,7 +22,9 @@ export function listCatalogPlatforms() {
     verified: adapter.verified,
     supportsSearch: typeof adapter.search === 'function',
     supportsCharts: Boolean(adapter.charts),
-    supportsExtras: typeof adapter.extras === 'function'
+    supportsExtras: typeof adapter.extras === 'function',
+    supportsResolveUrl: typeof adapter.resolveUrl === 'function',
+    supportsPlaylist: typeof adapter.playlist === 'function'
   }))
 }
 
@@ -57,6 +61,32 @@ export async function fetchPlatformChartTracks(platformKey, chartId, options = {
   return adapter.charts.tracks(id, {
     request: resolveRequest(options),
     limit: Math.max(1, Math.min(100, Number(options.limit) || 50)),
+    signal: options.signal
+  })
+}
+
+export async function resolvePlatformTrackUrl(platformKey, track, options = {}) {
+  const adapter = getCatalogAdapter(platformKey)
+  if (typeof adapter?.resolveUrl !== 'function') {
+    throw new Error(`「${adapter?.name || platformKey}」没有可用的公开直链解析接口`)
+  }
+  return adapter.resolveUrl(track, {
+    request: resolveRequest(options),
+    quality: options.quality || '320k',
+    signal: options.signal
+  })
+}
+
+export async function fetchPlatformPlaylist(platformKey, playlistId, options = {}) {
+  const adapter = getCatalogAdapter(platformKey)
+  if (typeof adapter?.playlist !== 'function') {
+    throw new Error(`「${adapter?.name || platformKey}」的歌单导入尚未接入`)
+  }
+  const id = String(playlistId ?? '').trim()
+  if (!id) throw new Error('请提供歌单 ID 或分享链接')
+  return adapter.playlist(id, {
+    request: resolveRequest(options),
+    limit: Math.max(1, Math.min(200, Number(options.limit) || 100)),
     signal: options.signal
   })
 }

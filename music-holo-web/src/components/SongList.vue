@@ -151,6 +151,11 @@
             <el-icon><Plus /></el-icon>
           </el-button>
         </el-tooltip>
+        <el-tooltip content="快速换源：换一个可用的音源播放" placement="top">
+          <el-button circle size="small" :aria-label="`换源播放《${row.title}》`" @click.stop="switchSource(row)">
+            <el-icon><Switch /></el-icon>
+          </el-button>
+        </el-tooltip>
         <el-tooltip :content="downloadTooltip(row)" placement="top">
           <el-button
             circle
@@ -186,6 +191,7 @@
     v-model="customSourceDialogVisible"
     :song="customSourceSong"
   />
+  <SourceSwitchDialog v-model="switchDialogVisible" :song="switchDialogSong" />
   </div>
 </template>
 
@@ -204,6 +210,7 @@ import { customSourceStorageKeyForOwner, readCustomSources } from '@/utils/custo
 import Cover from './Cover.vue'
 
 const CustomSourcePlaybackDialog = defineAsyncComponent(() => import('./CustomSourcePlaybackDialog.vue'))
+const SourceSwitchDialog = defineAsyncComponent(() => import('./SourceSwitchDialog.vue'))
 
 const props = defineProps({
   songs: { type: Array, default: () => [] },
@@ -275,6 +282,15 @@ function openCustomSourcePlayback(song) {
   if (!hasCustomSources.value) return
   customSourceSong.value = song
   customSourceDialogVisible.value = true
+}
+
+const switchDialogVisible = ref(false)
+const switchDialogSong = ref(null)
+
+/** 换源不要求已有地址：即使当前曲目失效，也可以重新找可用音源。 */
+function switchSource(row) {
+  switchDialogSong.value = row
+  switchDialogVisible.value = true
 }
 
 /** 下载必须先有可播放地址：优先自定义源解析结果，其次曲库音频地址。 */

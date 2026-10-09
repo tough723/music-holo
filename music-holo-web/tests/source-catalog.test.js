@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   fetchPlatformChartTracks,
+  fetchPlatformPlaylist,
   fetchPlatformTrackExtras,
   getCatalogAdapter,
   listCatalogPlatforms,
@@ -167,8 +168,35 @@ describe('平台曲目适配器（搜索 / 榜单 / 附加信息）', () => {
   })
 
   it('qs 平台搜索明确未接入，不猜 ID', async () => {
-    await expect(searchPlatformTracks('qs', '海阔天空', { request: fixtureRequest([]) })).rejects.toThrow('尚未接入')
-    await expect(listPlatformCharts('kw', { request: fixtureRequest([]) })).rejects.toThrow('榜单尚未接入')
+    // 汽水音乐没有公开免凭据检索接口，第三方解析都要求自备 token，因此不内置密钥。
+    await expect(searchPlatformTracks('qs', '海阔天空', { request: fixtureRequest([]) })).rejects.toThrow('没有公开免凭据的搜索接口')
+    await expect(searchPlatformTracks('unknown-platform', 'x', { request: fixtureRequest([]) })).rejects.toThrow('未接入')
+    // 卡片里如实标注每个平台的实测状态，避免把文档当成可用性证明。
+    const platforms = listCatalogPlatforms()
+    expect(platforms.find((item) => item.key === 'wy')?.verified).toBe('2026-10-10')
+    expect(platforms.find((item) => item.key === 'qs')?.verified).toBe(null)
+    expect(platforms.find((item) => item.key === 'wy')?.supportsResolveUrl).toBe(true)
+    expect(platforms.find((item) => item.key === 'kw')?.supportsPlaylist).toBe(true)
+    expect(platforms.find((item) => item.key === 'qs')?.supportsPlaylist).toBe(false)
+  })
+
+  it('酷我榜单已接入，咪咕/汽水榜单仍明确未接入', async () => {
+    const request = fixtureRequest([['rank/list', ok({ data: [{ id: '93', label: '酷我飙升榜', pic: 'https://img.kuwo.cn/x.png' }] })]])
+    await expect(listPlatformCharts('kw', { request })).resolves.toEqual([{ id: '93', name: '酷我飙升榜', updateFrequency: '', coverUrl: 'https://img.kuwo.cn/x.png' }])
+    await expect(listPlatformCharts('mg', { request: fixtureRequest([]) })).rejects.toThrow('榜单尚未接入')
+    await expect(listPlatformCharts('qs', { request: fixtureRequest([]) })).rejects.toThrow('榜单尚未接入')
+  })
+
+  it('歌单导入只走公开端点，未接入平台明确报错', async () => {
+    const request = fixtureRequest([['/api/playlist/detail', ok({
+      result: { name: '测试歌单', coverImgUrl: 'https://p1.music.126.net/a.jpg', tracks: [{ id: 1, name: 'A', artists: [{ name: 'S' }], album: { name: 'Al' }, duration: 200000 }] }
+    })]])
+    const playlist = await fetchPlatformPlaylist('wy', '123', { request })
+    expect(playlist).toMatchObject({ name: '测试歌单', verified: true })
+    expect(playlist.tracks[0]).toMatchObject({ platform: 'wy', name: 'A', singer: 'S', album: 'Al' })
+    expect(playlist.tracks[0].musicInfo.id).toBe('1')
+    await expect(fetchPlatformPlaylist('qs', '1', { request: fixtureRequest([]) })).rejects.toThrow('歌单导入尚未接入')
+    await expect(fetchPlatformPlaylist('wy', '', { request })).rejects.toThrow('歌单 ID')
   })
 
   it('宽松 JSON 解析器兼容单引号响应并拒绝空响应', () => {

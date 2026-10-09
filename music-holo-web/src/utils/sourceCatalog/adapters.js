@@ -104,6 +104,131 @@ function parseKuwoRid(musicRid) {
   return clean(String(musicRid ?? '').replace(/^MUSIC_/i, ''), 64)
 }
 
+// ---------------------------------------------------------------------------
+// 歌单导入（公开无凭据端点）
+// - wy：music.163.com/api/playlist/detail —— 2026-10-10 实测可用；
+// - kw：m.kuwo.cn/newh5app/api/mobile/v1/music/playlist/{id} —— 公开文档记录，本环境未实测；
+// - mg：app.c.nf.migu.cn MIGUM3.0 歌单歌曲接口 —— 公开文档记录，本环境未实测。
+// 每个适配器都把 verified 状态回传，界面会如实标注。
+// ---------------------------------------------------------------------------
+async function fetchWyPlaylist(playlistId, { request, limit = 100, signal }) {
+  const data = await requestJson(request, `https://music.163.com/api/playlist/detail?id=${encodeURIComponent(playlistId)}`, { signal })
+  const tracks = Array.isArray(data?.result?.tracks) ? data.result.tracks : []
+  return {
+    id: String(playlistId),
+    name: clean(data?.result?.name, 120),
+    coverUrl: clean(data?.result?.coverImgUrl, 400),
+    verified: true,
+    tracks: tracks.slice(0, limit).map((item) => ({
+      platform: 'wy',
+      name: clean(item.name),
+      singer: firstText(item.artists),
+      album: clean(item.album?.name),
+      duration: durationSeconds(Number(item.duration) / 1000),
+      musicInfo: {
+        id: String(item.id ?? ''),
+        name: clean(item.name),
+        singer: firstText(item.artists),
+        albumName: clean(item.album?.name),
+        interval: durationSeconds(Number(item.duration) / 1000)
+      }
+    })).filter((track) => track.name && track.musicInfo.id)
+  }
+}
+
+async function fetchKwPlaylist(playlistId, { request, limit = 100, signal }) {
+  const data = await requestJson(request, `https://m.kuwo.cn/newh5app/api/mobile/v1/music/playlist/${encodeURIComponent(playlistId)}?pn=1&rn=${Math.min(200, limit)}`, { signal })
+  const list = Array.isArray(data?.data?.musicList) ? data.data.musicList : []
+  return {
+    id: String(playlistId),
+    name: clean(data?.data?.name, 120),
+    coverUrl: clean(data?.data?.pic, 400),
+    verified: false,
+    tracks: list.slice(0, limit).map((item) => {
+      const rid = clean(String(item?.id ?? item?.rid ?? ''), 64)
+      return {
+        platform: 'kw',
+        name: clean(item?.name),
+        singer: clean(item?.artist_name || item?.artist),
+        album: clean(item?.album_name || item?.album),
+        duration: 0,
+        musicInfo: {
+          songmid: rid,
+          id: rid,
+          name: clean(item?.name),
+          singer: clean(item?.artist_name || item?.artist),
+          albumName: clean(item?.album_name || item?.album)
+        }
+      }
+    }).filter((track) => track.name && track.musicInfo.songmid)
+  }
+}
+
+async function fetchMgPlaylist(playlistId, { request, limit = 100, signal }) {
+  const data = await requestJson(request, `https://app.c.nf.migu.cn/MIGUM3.0/resource/playlist/song/v2.0?playlistId=${encodeURIComponent(playlistId)}&pageNo=1&pageSize=${Math.min(50, limit)}`, { signal })
+  const list = Array.isArray(data?.songList) ? data.songList : Array.isArray(data?.data?.songList) ? data.data.songList : []
+  return {
+    id: String(playlistId),
+    name: clean(data?.playlistName || data?.data?.playlistName, 120),
+    coverUrl: clean(data?.playlistImg || data?.data?.playlistImg, 400),
+    verified: false,
+    tracks: list.slice(0, limit).map((item) => {
+      const songmid = clean(item?.songId || item?.id || item?.contentId, 64)
+      return {
+        platform: 'mg',
+        name: clean(item?.songName || item?.name),
+        singer: firstText(item?.singerName || item?.singers),
+        album: clean(item?.albumName || item?.album),
+        duration: 0,
+        musicInfo: {
+          songmid,
+          id: songmid,
+          name: clean(item?.songName || item?.name),
+          singer: firstText(item?.singerName || item?.singers),
+          albumName: clean(item?.albumName || item?.album)
+        }
+      }
+    }).filter((track) => track.name && track.musicInfo.songmid)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 酷我榜单（公开端点，文档记录，本环境未实测）
+// ---------------------------------------------------------------------------
+async function listKwCharts(options) {
+  const { request, signal } = options
+  const data = await requestJson(request, 'https://m.kuwo.cn/newh5app/api/mobile/v1/music/rank/list?pn=1&rn=20', { signal })
+  const list = Array.isArray(data?.data) ? data.data : []
+  return list.slice(0, 12).map((item) => ({
+    id: String(item?.id ?? item?.typeId ?? ''),
+    name: clean(item?.label || item?.name, 80),
+    updateFrequency: clean(item?.publish, 40),
+    coverUrl: clean(item?.pic, 400) || ''
+  })).filter((entry) => entry.id && entry.name)
+}
+
+async function fetchKwChartTracks(chartId, { request, limit = 50, signal }) {
+  const data = await requestJson(request, `https://m.kuwo.cn/newh5app/api/mobile/v1/music/rank/${encodeURIComponent(chartId)}?pn=1&rn=${limit}`, { signal })
+  const list = Array.isArray(data?.data?.list) ? data.data.list : []
+  return list.slice(0, limit).map((item) => {
+    const rid = clean(String(item?.id ?? item?.rid ?? ''), 64)
+    return {
+      platform: 'kw',
+      name: clean(item?.name),
+      singer: clean(item?.artist_name || item?.artist),
+      album: clean(item?.album_name || item?.album),
+      duration: 0,
+      musicInfo: {
+        songmid: rid,
+        id: rid,
+        name: clean(item?.name),
+        singer: clean(item?.artist_name || item?.artist),
+        albumName: clean(item?.album_name || item?.album)
+      }
+    }
+  }).filter((track) => track.name && track.musicInfo.songmid)
+}
+
 async function searchKw(query, { request, limit = 10, signal }) {
   const url = `https://search.kuwo.cn/r.s?all=${encodeURIComponent(query)}&ft=music&cluster=0&pn=0&rn=${limit}&rformat=json&encoding=utf8&vipver=1`
   const data = await requestJson(request, url, { loose: true, signal })
@@ -214,16 +339,16 @@ async function fetchMgExtras(track, { request, signal }) {
 // 疑似要求 Referer 热链头（受控桥按安全边界禁止发送），保留适配器但标记未实测。
 // ---------------------------------------------------------------------------
 async function searchTx(query, { request, limit = 10, signal }) {
-  const payload = JSON.stringify({
-    comm: { ct: 24, cv: 0 },
-    req: {
-      method: 'DoSearchForQQMusicDesktop',
-      module: 'music.search.SearchCgiService',
-      param: { query, page_num: 1, num_per_page: limit }
-    }
+  // c.y.qq.com/soso/fcgi-bin/client_search_cp 是 QQ 音乐公开检索端点（多份公开文档记录）：
+  // format=json 返回 JSON，个别情况下返回 JSONP，因此按松散 JSON 解析。
+  const params = new URLSearchParams({
+    ct: '24', qqmusic_ver: '1298', new_json: '1', remoteplace: 'txt.yqq.song',
+    t: '0', aggr: '1', cr: '1', catZhida: '1', lossless: '0', flag_qc: '0',
+    p: '1', n: String(limit), w: query, format: 'json', inCharset: 'utf8', outCharset: 'utf-8',
+    notice: '0', platform: 'yqq.json', needNewCode: '0'
   })
-  const data = await requestJson(request, `https://u.y.qq.com/cgi-bin/musicu.fcg?data=${encodeURIComponent(payload)}`, { signal })
-  const list = Array.isArray(data?.req?.data?.body?.song?.list) ? data.req.data.body.song.list : []
+  const data = await requestJson(request, `https://c.y.qq.com/soso/fcgi-bin/client_search_cp?${params.toString()}`, { loose: true, signal })
+  const list = Array.isArray(data?.data?.song?.list) ? data.data.song.list : []
   return list.map((item) => {
     const songmid = clean(item?.mid, 64)
     return {
@@ -248,8 +373,34 @@ async function searchTx(query, { request, limit = 10, signal }) {
 // 汽水音乐（qs）：暂无可用公开搜索接口；解析仍可由音源脚本完成后端聚合。
 // ---------------------------------------------------------------------------
 async function searchQs() {
-  throw new Error('汽水音乐的平台搜索尚未接入，请手动填写音源所需的平台曲目 ID')
+  // 汽水音乐没有公开、免凭据的检索接口；网络上的解析服务都要求自备 token/密钥，
+  // 因此不内置任何第三方密钥。曲目 ID 由用户在试听台的「平台专属字段」中填写。
+  throw new Error('汽水音乐没有公开免凭据的搜索接口（第三方解析需自备密钥，本项目不内置）。请在试听台手动填写该平台的曲目 ID')
 }
+
+// ---------------------------------------------------------------------------
+// 直链解析（供「快速换源」使用）：只使用公开、无凭据端点。
+// ---------------------------------------------------------------------------
+async function resolveWyUrl(track, { request, quality = '320k', signal }) {
+  const id = String(track?.musicInfo?.id ?? track?.id ?? '')
+  if (!id) throw new Error('缺少网易云曲目 ID')
+  const br = { '128k': '128', '320k': '320', flac: '740', flac24bit: '999' }[String(quality)] || '320'
+  const data = await requestJson(request, gdUrl('url', { id, br }), { signal })
+  const url = String(data?.url || data?.data?.url || '')
+  if (!/^https?:\/\//i.test(url)) throw new Error('该曲目在公开接口中没有可用直链（可能需要会员或已下架）')
+  return url
+}
+
+async function resolveKwUrl(track, { request, quality = '320k', signal }) {
+  const rid = String(track?.musicInfo?.songmid ?? track?.musicInfo?.id ?? '')
+  if (!rid) throw new Error('缺少酷我曲目 ID')
+  const br = { '128k': '128kmp3', '320k': '320kmp3', flac: '2000kflac' }[String(quality)] || '320kmp3'
+  const data = await requestText(request, `https://antiserver.kuwo.cn/anti.s?format=${encodeURIComponent(br)}&rid=MUSIC_${encodeURIComponent(rid)}&response=url&type=convert_url`, { signal })
+  const url = String(data || '').trim()
+  if (!/^https?:\/\//i.test(url)) throw new Error('酷我未返回可用直链')
+  return url
+}
+
 
 export const CATALOG_ADAPTERS = {
   wy: {
@@ -258,15 +409,19 @@ export const CATALOG_ADAPTERS = {
     verified: '2026-10-10',
     search: searchWy,
     charts: { list: listWyCharts, tracks: fetchWyChartTracks },
-    extras: fetchWyExtras
+    extras: fetchWyExtras,
+    resolveUrl: resolveWyUrl,
+    playlist: fetchWyPlaylist
   },
   kw: {
     key: 'kw',
     name: '酷我音乐',
     verified: '2026-10-10',
     search: searchKw,
-    charts: null,
-    extras: null
+    charts: { list: listKwCharts, tracks: fetchKwChartTracks },
+    extras: null,
+    resolveUrl: resolveKwUrl,
+    playlist: fetchKwPlaylist
   },
   kg: {
     key: 'kg',
@@ -282,7 +437,8 @@ export const CATALOG_ADAPTERS = {
     verified: '2026-10-10',
     search: searchMg,
     charts: null,
-    extras: fetchMgExtras
+    extras: fetchMgExtras,
+    playlist: fetchMgPlaylist
   },
   tx: {
     key: 'tx',
@@ -290,7 +446,8 @@ export const CATALOG_ADAPTERS = {
     verified: null,
     search: searchTx,
     charts: null,
-    extras: null
+    extras: null,
+    playlist: null
   },
   qs: {
     key: 'qs',
@@ -298,6 +455,7 @@ export const CATALOG_ADAPTERS = {
     verified: null,
     search: searchQs,
     charts: null,
-    extras: null
+    extras: null,
+    playlist: null
   }
 }

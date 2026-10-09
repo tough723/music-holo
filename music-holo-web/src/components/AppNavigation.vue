@@ -30,6 +30,7 @@
       <el-menu-item v-if="userStore.isLogin" index="/recent"><el-icon><Clock /></el-icon><template #title>最近播放</template></el-menu-item>
       <el-menu-item index="/favorites"><el-icon><Star /></el-icon><template #title>我的收藏</template></el-menu-item>
       <el-menu-item index="/queue"><el-icon><List /></el-icon><template #title>播放列表</template></el-menu-item>
+      <el-menu-item index="/import"><el-icon><Upload /></el-icon><template #title>歌单导入</template></el-menu-item>
       <el-menu-item index="/downloads"><el-icon><Download /></el-icon><template #title>下载中心</template><el-badge v-if="downloadStore.activeCount" :value="downloadStore.activeCount" class="nav-badge" /></el-menu-item>
     </el-menu-item-group>
 
