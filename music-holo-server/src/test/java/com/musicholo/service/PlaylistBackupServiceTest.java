@@ -1,6 +1,8 @@
 package com.musicholo.service;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.musicholo.common.exception.BusinessException;
 import com.musicholo.dto.PlaylistBackupDTO;
@@ -17,6 +19,8 @@ import com.musicholo.mapper.PlaylistSongMapper;
 import com.musicholo.mapper.SongMapper;
 import com.musicholo.vo.PlaylistVO;
 import com.musicholo.vo.SongVO;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -45,6 +49,19 @@ class PlaylistBackupServiceTest {
     @Mock private PlaylistService playlistService;
 
     private PlaylistBackupService service;
+
+    @BeforeAll
+    static void registerMybatisLambdaMetadata() {
+        registerMybatisEntity(Playlist.class);
+        registerMybatisEntity(PlaylistSong.class);
+        registerMybatisEntity(Song.class);
+    }
+
+    private static void registerMybatisEntity(Class<?> entityType) {
+        MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), entityType.getName());
+        assistant.setCurrentNamespace(entityType.getName() + "Mapper");
+        TableInfoHelper.initTableInfo(assistant, entityType);
+    }
 
     @BeforeEach
     void setUp() {

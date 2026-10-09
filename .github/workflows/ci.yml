@@ -170,15 +170,21 @@ jobs:
           token=$(printf '%s' "$login" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200; print(d["data"]["token"])')
           curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/playlist/backup" -o /tmp/music-holo-playlists-backup.json
           python3 - <<'PY'
-          import json
+          import json,sys
+          def require(condition, message):
+              if not condition:
+                  print(f'::error title=Playlist backup export smoke failed::{message}')
+                  sys.exit(1)
           backup=json.load(open('/tmp/music-holo-playlists-backup.json'))
-          assert backup['code'] == 200
-          data=backup['data']
-          assert data['format'] == 'music-holo-playlists' and data['version'] == 1
-          assert [item['name'] for item in data['playlists']] == ['华语精选']
+          require(backup.get('code') == 200, 'export endpoint did not return code 200')
+          data=backup.get('data')
+          require(isinstance(data, dict), 'export response data is not an object')
+          require(data.get('format') == 'music-holo-playlists' and data.get('version') == 1, 'format/version mismatch')
+          require([item.get('name') for item in data.get('playlists', [])] == ['华语精选'], 'account export did not return the expected owned playlist')
           encoded=json.dumps(data, ensure_ascii=False)
-          assert all(key not in encoded for key in ('audioUrl','lyric','lyricTranslation','token','password','script'))
+          require(all(key not in encoded for key in ('audioUrl','lyric','lyricTranslation','token','password','script')), 'export contains a forbidden property')
           source=data['playlists'][0]
+          require(bool(source.get('songs')), 'seed playlist has no songs to exercise import matching')
           source['songs']=[source['songs'][0], {'id':'9223372036854775807','title':'CI 缺失曲目','singerName':'未知','album':'','duration':10}]
           json.dump(data, open('/tmp/music-holo-playlists-import.json','w'), ensure_ascii=False)
           request={'backup':data,'selectedPlaylistIndexes':[0],'publicPlaylistIndexes':[],'trackChoices':[]}

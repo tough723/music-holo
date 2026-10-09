@@ -18,8 +18,11 @@ test('账号歌单可导出并预览导入；重名创建私密副本且跳过�
   await loginAs(page, 'demo')
   await openPlaylistPage(page)
 
+  const exportButton = page.getByRole('button', { name: '导出我的歌单' })
+  await expect(exportButton).toBeVisible()
   const downloadPromise = page.waitForEvent('download')
-  await page.getByRole('button', { name: '导出我的歌单' }).click()
+  await exportButton.click()
+  await expect(page.getByText('已导出 1 张自己的歌单', { exact: true })).toBeVisible()
   const download = await downloadPromise
   expect(download.suggestedFilename()).toMatch(/^music-holo-playlists-.*\.json$/)
   const exported = JSON.parse(await readFile(await download.path(), 'utf8'))
