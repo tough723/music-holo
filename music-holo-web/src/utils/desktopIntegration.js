@@ -56,19 +56,31 @@ export function runDesktopCommand(playerStore, command, payload = {}) {
   }
 }
 
-/** 托盘显示与歌词窗所需的播放状态（不含任何凭据或后端数据）。 */
+/**
+ * 过桥数据必须是可结构化克隆的纯数据。
+ * Chromium（以及 Electron 的 contextBridge）会直接拒绝 Vue 的响应式 Proxy，
+ * 抛 DataCloneError: An object could not be cloned，所以这里统一先转成纯 JSON。
+ */
+export function toBridgeData(value, fallback = null) {
+  try {
+    const plain = JSON.parse(JSON.stringify(value ?? null))
+    return plain === null || plain === undefined ? fallback : plain
+  } catch { return fallback }
+}
+
+/** 托盘显示与歌词窗所需的播放状态（不含任何凭据或后端数据，且保证可结构化克隆）。 */
 export function collectDesktopState(playerStore) {
   const song = playerStore?.currentSong || null
   return {
-    title: song?.title || '',
-    singer: song?.singerName || '',
-    album: song?.album || '',
-    cover: song?.cover || '',
+    title: String(song?.title || ''),
+    singer: String(song?.singerName || ''),
+    album: String(song?.album || ''),
+    cover: String(song?.cover || ''),
     playing: Boolean(playerStore?.playing),
     currentTime: Number(playerStore?.currentTime) || 0,
     duration: Number(playerStore?.duration) || 0,
-    lyrics: Array.isArray(playerStore?.lyrics) ? playerStore.lyrics : [],
-    translations: Array.isArray(playerStore?.lyricTranslations) ? playerStore.lyricTranslations : []
+    lyrics: toBridgeData(Array.isArray(playerStore?.lyrics) ? playerStore.lyrics : [], []),
+    translations: toBridgeData(Array.isArray(playerStore?.lyricTranslations) ? playerStore.lyricTranslations : [], [])
   }
 }
 
@@ -99,7 +111,7 @@ export function bindDesktopIntegration({ playerStore, router, integration = desk
   unbinds.push(integration.onApi(async ({ id, command, payload } = {}) => {
     try {
       const result = await runApiCommand(command, payload, { playerStore, router })
-      integration.respondApi({ id, result })
+      integration.respondApi({ id, result: toBridgeData(result) })
     } catch (error) {
       integration.respondApi({ id, error: String(error?.message || error) })
     }
@@ -191,9 +203,9 @@ export async function runApiCommand(command, payload = {}, { playerStore, router
     }
     case 'lyrics':
       return {
-        lines: playerStore?.lyrics || [],
-        translations: playerStore?.lyricTranslations || [],
-        romaji: playerStore?.lyricRomaji || []
+        lines: toBridgeData(playerStore?.lyrics || [], []),
+        translations: toBridgeData(playerStore?.lyricTranslations || [], []),
+        romaji: toBridgeData(playerStore?.lyricRomaji || [], [])
       }
     case 'search': {
       const keyword = String(payload?.keyword || payload?.q || '').trim().slice(0, 80)

@@ -81,6 +81,22 @@ describe('桌面系统集成', () => {
     expect(JSON.stringify(state)).not.toContain('audioUrl')
   })
 
+  it('过桥数据先转成可结构化克隆的纯数据（响应式 Proxy 会被 contextBridge 拒绝）', async () => {
+    const store = createPlayerStore()
+    // 模拟 Vue 响应式：state 里的数组是 Proxy，Chromium 结构化克隆会直接抛
+    // DataCloneError: An object could not be cloned，进而让主进程/渲染进程桥调用失败。
+    store.lyrics = new Proxy([{ time: 1, text: '今天我' }], {})
+    store.lyricTranslations = new Proxy([{ time: 1, text: 'today I' }], {})
+    store.lyricRomaji = new Proxy([], {})
+
+    const state = collectDesktopState(store)
+    expect(state.lyrics).toEqual([{ time: 1, text: '今天我' }])
+    expect(() => structuredClone(state)).not.toThrow()
+
+    const lyrics = await runApiCommand('lyrics', {}, { playerStore: store })
+    expect(() => structuredClone(lyrics)).not.toThrow()
+  })
+
   it('启动参数只翻译成站内路由，非法路径被丢弃', () => {
     expect(deepLinkToRoute({ action: 'search', params: { q: '海阔天空' } })).toEqual({ path: '/search', query: { q: '海阔天空' } })
     expect(deepLinkToRoute({ action: 'import', params: { url: 'https://music.163.com/#/playlist?id=1' } })).toEqual({ path: '/import', query: { link: 'https://music.163.com/#/playlist?id=1' } })
