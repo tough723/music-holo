@@ -1,53 +1,54 @@
 <template>
   <div class="home">
     <!-- Hero：大全息投影器 -->
-    <section class="hero glass-panel">
+    <section class="hero glass-panel" aria-label="开始收听">
       <div class="hero-visual">
         <HoloProjector
-          :cover="playerStore.currentSong?.cover"
-          :anonymous-cover="Boolean(playerStore.currentSong?.isCustomSource)"
-          :title="playerStore.currentSong?.title || '3D 全息音乐'"
-          :singer="playerStore.currentSong?.singerName || 'Music Holo'"
-          :playing="playerStore.playing"
-          :size="260"
+          :cover="stageSong?.cover"
+          :anonymous-cover="Boolean(stageSong?.isCustomSource)"
+          :title="stageSong?.title || '3D 全息音乐'"
+          :singer="stageSong?.singerName || 'Music Holo'"
+          :playing="playerStore.playing && playerStore.currentSong?.id === stageSong?.id"
+          :size="220"
           show-caption
         />
       </div>
       <div class="hero-text">
         <div class="hero-badge">
-          <el-icon><Headset /></el-icon> 3D HOLOGRAPHIC MUSIC PLATFORM
+          <el-icon><Headset /></el-icon> {{ playerStore.currentSong ? '正在这台声场里' : '从本站曲库开始' }}
         </div>
         <h1 class="hero-title">
-          让音乐<br />
-          <span class="holo-text">全息投影</span>
+          {{ stageSong?.title || '选一首，直接听' }}
         </h1>
         <p class="hero-desc">
-          前后端分离的沉浸式音乐平台，旋转的全息碟片、实时同步的歌词、
-          多彩的全息主题，把每一首歌都唱成一场视觉盛宴。
+          {{ stageSong?.singerName || 'Music Holo' }} · 搜索、排行榜和推荐都只覆盖这里的歌曲，点一首就进入底部播放器。
         </p>
         <div class="hero-actions">
-          <el-button type="primary" size="large" round :disabled="hotSongs.length === 0" @click="playHot">
-            <el-icon><VideoPlay /></el-icon> 随便听听
+          <el-button type="primary" size="large" round :disabled="!stageSong" @click="playStage">
+            <el-icon><VideoPlay /></el-icon> {{ playerStore.currentSong ? '继续播放' : '播放热门第一首' }}
           </el-button>
-          <el-button size="large" round @click="$router.push('/songs')">
-            <el-icon><Search /></el-icon> 去发现
+          <el-button size="large" round @click="$router.push('/charts')">
+            <el-icon><TrendCharts /></el-icon> 看热歌榜
           </el-button>
         </div>
-        <div class="hero-stats">
-          <div class="stat-item">
-            <div class="stat-num holo-text">{{ hotSongs.length }}</div>
-            <div class="stat-label">热门歌曲</div>
-          </div>
-          <div class="stat-item">
-            <div class="stat-num holo-text">{{ singers.length }}</div>
-            <div class="stat-label">入驻歌手</div>
-          </div>
-          <div class="stat-item">
-            <div class="stat-num holo-text">{{ playlists.length }}</div>
-            <div class="stat-label">精选歌单</div>
-          </div>
+        <div class="desk-jumps">
+          <button type="button" @click="$router.push('/daily')">每日推荐</button>
+          <button type="button" @click="$router.push('/songs')">全部歌曲</button>
+          <button type="button" @click="$router.push('/playlists')">歌单</button>
+          <button type="button" @click="$router.push('/radio')">相似电台</button>
         </div>
       </div>
+      <ol class="spotlight" aria-label="热门前三">
+        <li v-for="(song, index) in spotlightSongs" :key="song.id">
+          <button type="button" :aria-label="`播放热门第${index + 1}首《${song.title}》`" @click="playSpotlight(song)">
+            <span class="spotlight-rank">{{ index + 1 }}</span>
+            <span class="spotlight-copy">
+              <strong>{{ song.title }}</strong>
+              <small>{{ song.singerName || '未知歌手' }}</small>
+            </span>
+          </button>
+        </li>
+      </ol>
     </section>
 
     <div v-if="loadError" class="home-load-warning glass-panel" role="alert">
@@ -292,9 +293,18 @@ const loadData = async () => {
   }
 }
 
-const playHot = () => {
+const spotlightSongs = computed(() => hotSongs.value.slice(0, 3))
+const stageSong = computed(() => playerStore.currentSong || hotSongs.value[0] || null)
+const playStage = () => {
+  if (playerStore.currentSong) {
+    playerStore.playing = true
+    return
+  }
   if (hotSongs.value.length === 0) return
   playerStore.playAll(hotSongs.value, hotSongs.value[0].id)
+}
+const playSpotlight = (song) => {
+  playerStore.playAll(hotSongs.value, song.id)
 }
 
 const goSongs = (categoryId) => {
@@ -431,10 +441,11 @@ onMounted(loadData)
 
 /* Hero */
 .hero {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(220px, 280px);
   align-items: center;
-  gap: 30px;
-  padding: 36px 44px;
+  gap: 28px;
+  padding: 28px 32px;
   overflow: hidden;
   position: relative;
 }
@@ -464,7 +475,7 @@ onMounted(loadData)
   padding: 5px 14px;
 }
 .hero-title {
-  font-size: 46px;
+  font-size: clamp(28px, 4vw, 42px);
   line-height: 1.25;
   margin: 16px 0 12px;
   font-weight: 700;
@@ -477,8 +488,68 @@ onMounted(loadData)
 }
 .hero-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 14px;
   margin-top: 22px;
+}
+.desk-jumps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+.desk-jumps button,
+.spotlight button {
+  border: 1px solid var(--el-border-color);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.desk-jumps button {
+  border-radius: 999px;
+  color: var(--text-sub);
+  font-size: 12px;
+  padding: 5px 10px;
+}
+.spotlight {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.spotlight button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px;
+  border-radius: 14px;
+  text-align: left;
+}
+.spotlight-rank {
+  width: 28px;
+  color: var(--holo-primary);
+  font-size: 18px;
+  font-weight: 700;
+}
+.spotlight-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.spotlight-copy strong,
+.spotlight-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.spotlight-copy small {
+  color: var(--text-sub);
 }
 .hero-stats {
   display: flex;
@@ -645,6 +716,11 @@ onMounted(loadData)
   gap: 6px;
 }
 
+@media (max-width: 980px) {
+  .hero {
+    grid-template-columns: 1fr;
+  }
+}
 @media (max-width: 900px) {
   .hero {
     flex-direction: column;

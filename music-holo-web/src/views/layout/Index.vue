@@ -25,15 +25,25 @@
       <AppNavigation :collapsed="sidebarIsCollapsed" />
 
       <div class="sidebar-footer">
-        <div class="mini-holo">
+        <button
+          type="button"
+          class="now-playing"
+          :disabled="!playerStore.currentSong"
+          :aria-label="playerStore.currentSong ? `正在播放《${playerStore.currentSong.title}》，打开歌词` : '还没有正在播放的歌曲'"
+          @click="openNowPlaying"
+        >
           <HoloProjector
             :cover="playerStore.currentSong?.cover"
             :anonymous-cover="Boolean(playerStore.currentSong?.isCustomSource)"
             :title="playerStore.currentSong?.title"
             :playing="playerStore.playing"
-            :size="72"
+            :size="52"
           />
-        </div>
+          <span class="now-playing-copy">
+            <strong>{{ playerStore.currentSong?.title || '还没有在播' }}</strong>
+            <small>{{ playerStore.playing ? '正在播放' : '已暂停' }} · {{ playerStore.currentSong?.singerName || '从曲库选一首' }}</small>
+          </span>
+        </button>
       </div>
     </aside>
 
@@ -177,6 +187,11 @@ watch(() => userStore.token, (token) => {
   if (token) dislikeStore.load().catch(() => {})
   else dislikeStore.clear()
 }, { immediate: true })
+
+const openNowPlaying = () => {
+  if (!playerStore.currentSong) return
+  playerStore.toggleLyric()
+}
 
 const toggleSidebar = () => {
   if (viewportWidth.value > 900) preferencesStore.setSidebarCollapsed(!sidebarCollapsed.value)
@@ -334,9 +349,44 @@ const onCommand = async (command) => {
 }
 
 .sidebar-footer {
+  padding: 4px 10px 12px;
+}
+.now-playing {
   display: flex;
-  justify-content: center;
-  padding: 8px 0 14px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--holo-primary) 22%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--holo-primary) 7%, transparent);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.now-playing:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+.now-playing-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.now-playing-copy strong,
+.now-playing-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.now-playing-copy strong {
+  font-size: 13px;
+}
+.now-playing-copy small {
+  color: var(--text-sub);
+  font-size: 11px;
 }
 
 /* 主区域 */

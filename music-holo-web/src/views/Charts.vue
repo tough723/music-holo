@@ -4,7 +4,7 @@
       <div>
         <div class="eyebrow"><el-icon><TrendCharts /></el-icon> HOLO CHARTS</div>
         <h1>此刻，大家正在听</h1>
-        <p>按平台累计播放量整理的热歌榜，切换分类，找到同频的声音。</p>
+        <p>这是本站曲库的播放量榜，不是第三方平台的实时榜。点前三名或下面的列表都会从这一榜开始播放。</p>
       </div>
       <div class="hero-mark"><el-icon><Headset /></el-icon></div>
     </section>
@@ -28,6 +28,15 @@
           </el-button>
         </div>
       </div>
+      <ol v-if="songs.length" class="podium" aria-label="榜单前三">
+        <li v-for="(song, index) in songs.slice(0, 3)" :key="song.id" :class="`place-${index + 1}`">
+          <button type="button" :aria-label="`从第${index + 1}名播放《${song.title}》`" @click="onPlay(song)">
+            <span>{{ index + 1 }}</span>
+            <strong>{{ song.title }}</strong>
+            <small>{{ song.singerName || '未知歌手' }} · {{ song.playCount || 0 }} 次</small>
+          </button>
+        </li>
+      </ol>
       <SongList
         :songs="songs"
         :loading="loading"
@@ -184,6 +193,42 @@ h1 {
 .chart-tabs .el-button + .el-button {
   margin-left: 0;
 }
+.podium {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0 0 18px;
+  padding: 0;
+  list-style: none;
+}
+.podium button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  min-height: 108px;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--holo-primary) 24%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--holo-primary) 8%, transparent);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.podium .place-1 button {
+  min-height: 128px;
+  background: color-mix(in srgb, var(--holo-primary) 16%, transparent);
+}
+.podium button span {
+  color: var(--holo-primary);
+  font-size: 22px;
+  font-weight: 700;
+}
+.podium small {
+  color: var(--text-sub);
+}
 @media (max-width: 700px) {
   .charts-hero,
   .chart-panel {
@@ -199,6 +244,9 @@ h1 {
   }
   .chart-tabs {
     justify-content: flex-start;
+  }
+  .podium {
+    grid-template-columns: 1fr;
   }
 }
 </style>
