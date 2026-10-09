@@ -12,14 +12,21 @@ async function main() {
   try {
     application = await electron.launch({
       executablePath: require('electron'),
+      chromiumSandbox: true, // Playwright otherwise injects --no-sandbox on Linux.
       args: [path.resolve(__dirname, '..'), `--user-data-dir=${profile}`],
       timeout: 30000,
     })
-    await application.evaluate(({ BrowserWindow, dialog }) => {
+    await application.evaluate(({ app, BrowserWindow, dialog, net }) => {
+      if (app.commandLine.hasSwitch('no-sandbox')) throw new Error('Chromium sandbox must not be disabled by the test runner')
       const require = process.mainModule.require.bind(process.mainModule)
       const { EventEmitter } = require('node:events')
       const { Readable } = require('node:stream')
-      globalThis.smokeRequests = []; globalThis.smokeApprovals = []
+      globalThis.smokeRequests = []; globalThis.smokeApprovals = []; globalThis.smokeBackendRequests = []
+      const originalFetch = net.fetch.bind(net)
+      net.fetch = (url, options) => {
+        if (/^https?:/.test(String(url))) { globalThis.smokeBackendRequests.push(String(url)); throw new Error('Guest smoke must not need a backend') }
+        return originalFetch(url, options)
+      }
       globalThis.smokeDeny = false
       dialog.showMessageBox = async (_window, options) => {
         globalThis.smokeApprovals.push(options.message)
@@ -61,16 +68,11 @@ async function main() {
     page.on('console', (message) => { if (['error', 'warning'].includes(message.type())) console.log(`[renderer ${message.type()}] ${message.text()}`) })
     const errors = []
     page.on('pageerror', (error) => errors.push(error.message))
-    await page.waitForURL('**/#/home')
+    await page.waitForURL('**/#/sources')
     expect(await page.evaluate(() => typeof require)).toBe('undefined')
     expect(await page.evaluate(() => musicHoloDesktop.version)).toBe('0.1.0')
-    await page.goto('app://music-holo/#/login')
-    await page.getByPlaceholder('用户名').fill('demo')
-    await page.getByPlaceholder('密码').fill('123456')
-    await page.getByRole('button', { name: /登\s*录/ }).click()
-    await page.waitForURL('**/#/home')
-    await page.locator('.sidebar .app-nav-menu').getByRole('menuitem', { name: '设置' }).click()
-    await page.getByRole('tab', { name: '自定义源' }).click()
+    expect(await page.evaluate(() => localStorage.getItem('mh_token'))).toBeNull()
+    await expect(page.getByRole('heading', { name: '本机音源工作台' })).toBeVisible()
     await expect(page.getByText('桌面隔离模式')).toBeVisible()
     const script = `/**\n * @name 桌面测试源\n * @version 1.0\n */
 const lx = globalThis.lx
@@ -80,7 +82,7 @@ lx.on(lx.EVENT_NAMES.request, async ({ action }) => {
   return { lyric: '[00:00.00]桌面测试歌词' }
 })
 lx.request('https://api.example.com/ping', { headers: { Cookie: 'secret', Authorization: 'secret', 'music-holo-token': 'secret' } }, (error, response) => {
-  if (error || response.statusCode !== 200) throw new Error('网络桥失败')
+  if (error || response.statusCode !== 200 || response.body.ready !== true) throw new Error('网络桥或 JSON 适配失败')
   lx.send(lx.EVENT_NAMES.inited, { sources: { local: { name: '测试直链', type: 'music', qualitys: [], actions: ['musicUrl', 'lyric'] } } })
 })`
     await page.getByTestId('custom-source-file').setInputFiles({ name: 'desktop.js', mimeType: 'text/javascript', buffer: Buffer.from(script) })
@@ -91,6 +93,7 @@ lx.request('https://api.example.com/ping', { headers: { Cookie: 'secret', Author
     await expect(result).toContainText('初始化声明 1 个平台', { timeout: 20000 })
     await result.getByRole('button', { name: '打开试听台 桌面测试源' }).click()
     const audition = page.getByRole('dialog', { name: '隔离试听台 · 桌面测试源' })
+    await expect(audition.getByLabel('试听曲库搜索')).toHaveCount(0)
     await audition.getByRole('textbox', { name: 'musicInfo JSON' }).fill(JSON.stringify({ title: '桌面测试曲目' }))
     await audition.getByRole('button', { name: '解析音频' }).click()
     await page.getByRole('button', { name: '我信任并解析' }).click()
@@ -127,10 +130,12 @@ lx.request('https://api.example.com/ping', { headers: { Cookie: 'secret', Author
       document.body.appendChild(iframe)
       return await new Promise((resolve) => { iframe.onload = () => { try { resolve(typeof iframe.contentWindow.musicHoloDesktop === 'undefined') } catch { resolve(true) } finally { iframe.remove() } } })
     })).toBe(true)
-    await page.reload(); await page.waitForURL('**/#/settings')
+    await page.reload(); await page.waitForURL('**/#/sources')
     expect(await page.evaluate(async (url) => (await fetch(url)).status, ticket)).toBe(404)
+    await expect(page.locator('.source-card h3')).toHaveText(['桌面测试源'])
+    expect(await application.evaluate(() => globalThis.smokeBackendRequests)).toEqual([])
     expect(errors).toEqual([])
-    console.log('Desktop smoke passed: sandbox, import, native bridge, media range, deny, reload revocation')
+    console.log('Desktop smoke passed: enforced Chromium sandbox, guest/no-backend, import, native bridge, media range, deny, reload revocation')
   } catch (error) {
     console.error('Desktop smoke failed at:', page?.url())
     await page?.screenshot({ path: path.join(artifacts, 'failure.png') }).catch(() => {})

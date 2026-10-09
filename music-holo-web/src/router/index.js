@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory, createWebHashHistory } from 'vue-router'
 import { useUserStore } from '@/store/user'
+import { desktopSourceBridge } from '@/utils/desktopSource'
 
 const routes = [
   {
@@ -17,8 +18,9 @@ const routes = [
   {
     path: '/',
     component: () => import('@/views/layout/Index.vue'),
-    redirect: '/home',
+    redirect: () => desktopSourceBridge() ? '/sources' : '/home',
     children: [
+      { path: 'sources', name: 'DesktopSources', component: () => import('@/views/DesktopSources.vue'), meta: { title: '本机音源', desktopOnly: true } },
       { path: 'home', name: 'Home', component: () => import('@/views/Home.vue'), meta: { title: '首页' } },
       { path: 'daily', name: 'DailyRecommendation', component: () => import('@/views/DailyRecommendation.vue'), meta: { title: '每日推荐' } },
       { path: 'singers', name: 'Singers', component: () => import('@/views/Singers.vue'), meta: { title: '歌手' } },
@@ -58,6 +60,7 @@ router.beforeEach((to) => {
   const title = to.meta.title ? `${to.meta.title} · 3D全息音乐` : '3D全息音乐'
   document.title = title
 
+  if (to.meta.desktopOnly && !desktopSourceBridge()) return { path: '/home' }
   if (to.meta.guest && userStore.isLogin) {
     return { path: '/home' }
   }

@@ -9,6 +9,7 @@
   >
     <el-menu-item-group>
       <template #title><span>发现</span></template>
+      <el-menu-item v-if="isDesktop" index="/sources"><el-icon><Connection /></el-icon><template #title>本机音源</template></el-menu-item>
       <el-menu-item index="/home"><el-icon><HomeFilled /></el-icon><template #title>首页</template></el-menu-item>
       <el-menu-item index="/daily"><el-icon><Calendar /></el-icon><template #title>每日推荐</template></el-menu-item>
       <el-menu-item index="/search"><el-icon><Search /></el-icon><template #title>全局搜索</template></el-menu-item>
@@ -55,6 +56,9 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useUserStore } from '@/store/user'
+import { desktopSourceBridge } from '@/utils/desktopSource'
+
+const isDesktop = !!desktopSourceBridge()
 
 const props = defineProps({
   collapsed: { type: Boolean, default: false }

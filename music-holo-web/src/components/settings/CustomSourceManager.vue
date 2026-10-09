@@ -182,7 +182,7 @@
         <el-alert type="warning" :closable="false" show-icon>
           <template #title>LX 自定义源负责解析，不负责搜索</template>
           <template #default>
-            试听会重新运行此脚本并调用其 musicUrl。先选 Music Holo 曲库歌曲可自动填入通用信息；若源要求 songmid、musicmid 等平台 ID，请自行补充到 JSON。
+            试听会重新运行此脚本并调用其 musicUrl。<span v-if="props.catalogAvailable">先选 Music Holo 曲库歌曲可自动填入通用信息；</span>请在 JSON 中填写音源所需的 songmid、musicmid 等真实平台 ID。
             <span v-if="isDesktop">桌面支持公网 HTTP(S) 媒体，通过原生授权与 DNS 校验后匿名流式加载；HTTP 明文传输，重定向会拒绝。</span>
             <span v-else>音频仅接受 HTTPS，并通过播放器以匿名 CORS 模式加载；常见本地/私网主机名会拦截，但浏览器无法验证任意域名最终解析的 IP。目标音频站未开放 CORS 时浏览器会阻止播放。</span>
           </template>
@@ -203,7 +203,7 @@
           </label>
         </div>
 
-        <div class="source-audition-catalog">
+        <div v-if="props.catalogAvailable" class="source-audition-catalog">
           <label>从 Music Holo 曲库选择歌曲（可选）</label>
           <div class="source-audition-search">
             <el-input v-model="auditionSearchKeyword" clearable placeholder="输入歌名或歌手" aria-label="试听曲库搜索" @keyup.enter="searchAuditionCatalog" />
@@ -271,6 +271,7 @@ import {
 } from '@/utils/customSourceRuntime'
 import { createCustomSourceRequestBridge } from '@/utils/customSourceConsent'
 
+const props = defineProps({ catalogAvailable: { type: Boolean, default: true } })
 const isDesktop = !!desktopSourceBridge()
 
 const userStore = useUserStore()
