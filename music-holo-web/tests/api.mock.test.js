@@ -21,7 +21,7 @@ import { buildPublicPlaylistShareUrl, shareOrCopy } from '@/utils/share'
 
 // API 错误仍由 Mock 层抛出；只屏蔽 UI 通知，避免测试输出污染。
 vi.mock('element-plus', () => ({
-  ElMessage: { error: vi.fn(), success: vi.fn(), warning: vi.fn() }
+  ElMessage: { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn() }
 }))
 
 async function loginAs(username = 'demo') {
@@ -198,6 +198,99 @@ describe('本地音乐播放', () => {
     await player.playAll([{ id: 8, title: '替换曲目', audioUrl: '/audio/replacement.wav' }])
     await Promise.resolve()
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:music/replace.wav')
+  })
+})
+
+describe('播放器队列优先级与排序', () => {
+  it('将选中歌曲安排为下一首，移动队列时保持当前歌曲并持久化新顺序', () => {
+    const current = { id: 31, title: '当前歌曲' }
+    const queuedNext = { id: 32, title: '原下一首' }
+    const selected = { id: 33, title: '选择的下一首' }
+    const player = usePlayerStore()
+    player.queue = [current, queuedNext, selected]
+    player.currentIndex = 0
+
+    expect(player.playNext(selected)).toBe('moved')
+    expect(player.queue.map((song) => song.id)).toEqual([31, 33, 32])
+    expect(player.currentSong).toMatchObject({ id: current.id, title: current.title })
+    expect(player.playNext(selected)).toBe('already-next')
+    expect(player.playNext(current)).toBe('current')
+
+    expect(player.moveQueueItem(1, 0)).toBe(true)
+    expect(player.queue.map((song) => song.id)).toEqual([33, 31, 32])
+    expect(player.currentIndex).toBe(1)
+    expect(player.currentSong).toMatchObject({ id: current.id, title: current.title })
+    expect(JSON.parse(localStorage.getItem('mh_player'))).toMatchObject({
+      queue: [{ id: 33 }, { id: 31 }, { id: 32 }],
+      currentIndex: 1
+    })
+  })
+
+  it('将当前歌曲之前的已入队歌曲移到其后作为下一首', () => {
+    const before = { id: 34, title: '原本在当前曲目前' }
+    const current = { id: 35, title: '当前歌曲' }
+    const after = { id: 36, title: '原下一首' }
+    const player = usePlayerStore()
+    player.queue = [before, current, after]
+    player.currentIndex = 1
+
+    expect(player.playNext(before)).toBe('moved')
+    expect(player.queue.map((song) => song.id)).toEqual([35, 34, 36])
+    expect(player.currentIndex).toBe(0)
+    expect(player.currentSong).toMatchObject({ id: current.id })
+  })
+
+  it('指定下一首优先于随机模式一次，并能随曲库队列恢复', async () => {
+    vi.spyOn(lyricApi, 'parse').mockResolvedValue({ lines: [] })
+    vi.spyOn(songApi, 'play').mockResolvedValue(undefined)
+    const current = { id: 35, title: '随机模式当前曲目' }
+    const randomPick = { id: 36, title: '随机候选' }
+    const selected = { id: 37, title: '优先下一首' }
+    const player = usePlayerStore()
+    player.queue = [current, randomPick, selected]
+    player.currentIndex = 0
+    player.mode = 'random'
+
+    expect(player.playNext(selected)).toBe('moved')
+    expect(JSON.parse(localStorage.getItem('mh_player')).priorityNextSongId).toBe(selected.id)
+
+    setActivePinia(createPinia())
+    const restored = usePlayerStore()
+    expect(restored.priorityNextSongId).toBe(selected.id)
+    await restored.next()
+    expect(restored.currentSong).toMatchObject({ id: selected.id })
+    expect(restored.priorityNextSongId).toBe(null)
+  })
+
+  it('没有当前歌曲时将目标放在队首，并拒绝越界排序', () => {
+    const first = { id: 41, title: '原队首' }
+    const later = { id: 42, title: '稍后播放' }
+    const player = usePlayerStore()
+    player.queue = [first, later]
+    player.currentIndex = -1
+
+    expect(player.playNext(later)).toBe('moved')
+    expect(player.queue.map((song) => song.id)).toEqual([42, 41])
+    expect(player.currentIndex).toBe(-1)
+    expect(player.moveQueueItem(0, 2)).toBe(false)
+    expect(player.moveQueueItem(1, 1)).toBe(false)
+    expect(player.playNext({ title: '没有 ID 的曲目' })).toBe('invalid')
+  })
+
+  it('下一首插入仍不把本地 Blob 或自定义源签名链接写入持久队列', () => {
+    const player = usePlayerStore()
+    const current = { id: 51, title: '当前曲库歌曲' }
+    player.queue = [current]
+    player.currentIndex = 0
+    const local = { id: 'local-session-52', title: '本地歌曲', audioUrl: 'blob:private/local', isLocal: true }
+    const custom = { id: 'custom-session-53', title: '自定义源歌曲', audioUrl: 'https://media.example.test/signed/secret', isCustomSource: true }
+
+    expect(player.playNext(local)).toBe('added')
+    expect(player.playNext(custom)).toBe('added')
+    const persisted = localStorage.getItem('mh_player')
+    expect(persisted).not.toContain('blob:private/local')
+    expect(persisted).not.toContain('signed/secret')
+    expect(JSON.parse(persisted)).toMatchObject({ queue: [current], currentIndex: 0 })
   })
 })
 

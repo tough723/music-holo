@@ -70,13 +70,23 @@ function persist(state) {
   // Local blobs and custom-source signed URLs are session-only; never persist them.
   const persistentQueue = state.queue.filter((song) => !song?.isLocal && !song?.isCustomSource)
   const currentSong = state.currentIndex >= 0 ? state.queue[state.currentIndex] : null
-  const currentIndex = currentSong && !currentSong.isLocal && !currentSong.isCustomSource
+  const hasTransientCurrent = Boolean(currentSong?.isLocal || currentSong?.isCustomSource)
+  const currentIndex = currentSong && !hasTransientCurrent
     ? persistentQueue.findIndex((song) => song.id === currentSong.id)
     : -1
+  const priorityNextIndex = state.currentIndex >= 0 ? state.currentIndex + 1 : 0
+  const priorityNextSong = state.queue[priorityNextIndex]
+  const priorityNextSongId = !hasTransientCurrent &&
+    priorityNextSong?.id === state.priorityNextSongId &&
+    !priorityNextSong?.isLocal &&
+    !priorityNextSong?.isCustomSource
+    ? state.priorityNextSongId
+    : null
 
   localStorage.setItem(PLAYER_KEY, JSON.stringify({
     queue: persistentQueue,
     currentIndex,
+    priorityNextSongId,
     mode: state.mode,
     volume: state.volume
   }))
@@ -91,10 +101,20 @@ export const usePlayerStore = defineStore('player', {
     const currentIndex = persistedCurrentSong && !persistedCurrentSong.isLocal && !persistedCurrentSong.isCustomSource
       ? queue.findIndex((song) => song.id === persistedCurrentSong.id)
       : -1
+    const priorityNextIndex = currentIndex >= 0 ? currentIndex + 1 : 0
+    const savedPriorityNextSongId = saved.priorityNextSongId ?? null
+    const priorityNextSongId = savedPriorityNextSongId !== null &&
+      (persistedCurrentSong
+        ? queue[priorityNextIndex]?.id === savedPriorityNextSongId
+        : queue[0]?.id === savedPriorityNextSongId)
+      ? savedPriorityNextSongId
+      : null
     return {
       /** 本地播放队列（持久化） */
       queue,
       currentIndex,
+      /** 用户指定的单次下一首优先项 */
+      priorityNextSongId,
       playing: false,
       volume: typeof saved.volume === 'number' && Number.isFinite(saved.volume) ? Math.max(0, Math.min(1, saved.volume)) : 0.8,
       mode: MODES.some((mode) => mode.key === saved.mode) ? saved.mode : 'order',
@@ -208,6 +228,7 @@ export const usePlayerStore = defineStore('player', {
       if (this.sleepTimerMode === 'track' && nextSong?.id !== this.sleepTimerSongId) {
         this.cancelSleepTimer()
       }
+      this.priorityNextSongId = null
       this.currentIndex = index
       this.playing = true
       this.currentTime = 0
@@ -240,8 +261,45 @@ export const usePlayerStore = defineStore('player', {
         const found = this.queue.findIndex((s) => s.id === startSongId)
         if (found >= 0) index = found
       }
+      this.priorityNextSongId = null
       persist(this)
       return this.playAt(index)
+    },
+    /** 把播放队列中的曲目移到目标位置，并保持正在播放的曲目不变。 */
+    moveQueueItem(fromIndex, toIndex) {
+      if (!Number.isInteger(fromIndex) || !Number.isInteger(toIndex)) return false
+      if (fromIndex < 0 || fromIndex >= this.queue.length || toIndex < 0 || toIndex >= this.queue.length) return false
+      if (fromIndex === toIndex) return false
+
+      const activeSong = this.currentSong
+      const [song] = this.queue.splice(fromIndex, 1)
+      this.queue.splice(toIndex, 0, song)
+      this.currentIndex = activeSong ? this.queue.indexOf(activeSong) : -1
+      const priorityNextIndex = this.currentIndex >= 0 ? this.currentIndex + 1 : 0
+      if (this.queue[priorityNextIndex]?.id !== this.priorityNextSongId) this.priorityNextSongId = null
+      persist(this)
+      return true
+    },
+    /** 安排为下一首；随机/单曲模式也会优先播放一次。 */
+    playNext(song) {
+      if (!song || song.id === undefined || song.id === null) return 'invalid'
+      const existingIndex = this.queue.findIndex((item) => item.id === song.id)
+      if (existingIndex === this.currentIndex && this.currentSong) return 'current'
+
+      const nextIndex = this.currentIndex >= 0 ? this.currentIndex + 1 : 0
+      this.priorityNextSongId = song.id
+      if (existingIndex >= 0) {
+        if (existingIndex === nextIndex) {
+          persist(this)
+          return 'already-next'
+        }
+        const adjustedNextIndex = existingIndex < nextIndex ? nextIndex - 1 : nextIndex
+        return this.moveQueueItem(existingIndex, adjustedNextIndex) ? 'moved' : 'already-next'
+      }
+
+      this.queue.splice(nextIndex, 0, song)
+      persist(this)
+      return 'added'
     },
     /** 追加一首歌曲到播放队列（去重） */
     addToQueue(song) {
@@ -257,6 +315,7 @@ export const usePlayerStore = defineStore('player', {
       if (index === this.currentIndex && this.sleepTimerMode === 'track') this.cancelSleepTimer()
       const wasPlaying = this.playing
       const removedSong = this.queue[index]
+      if (index === this.currentIndex || removedSong?.id === this.priorityNextSongId) this.priorityNextSongId = null
       this.queue.splice(index, 1)
       revokeLocalAudio(removedSong)
       if (this.queue.length === 0) {
@@ -293,6 +352,7 @@ export const usePlayerStore = defineStore('player', {
       const previousQueue = this.queue
       this.queue = []
       this.currentIndex = -1
+      this.priorityNextSongId = null
       this.playing = false
       this.lyricLoadRequestId++
       this.lyrics = []
@@ -300,9 +360,15 @@ export const usePlayerStore = defineStore('player', {
       persist(this)
       releaseLocalSongs(previousQueue)
     },
-    /** 下一首 */
+    /** 下一首：优先消费用户指定曲目一次，再应用循环/随机模式。 */
     next() {
       if (this.queue.length === 0) return
+      if (this.priorityNextSongId !== null) {
+        const priorityIndex = this.queue.findIndex((song) => song.id === this.priorityNextSongId)
+        this.priorityNextSongId = null
+        if (priorityIndex >= 0 && priorityIndex !== this.currentIndex) return this.playAt(priorityIndex)
+        persist(this)
+      }
       if (this.mode === 'random') {
         if (this.queue.length === 1) return this.playAt(0)
         let idx = this.currentIndex

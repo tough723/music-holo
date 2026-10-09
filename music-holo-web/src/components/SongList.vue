@@ -69,7 +69,7 @@
       </template>
     </el-table-column>
 
-    <el-table-column label="操作" :width="(showHistory ? 224 : 190) + (hasCustomSources ? 40 : 0)" align="center" fixed="right">
+    <el-table-column label="操作" :width="(showHistory ? 224 : 190) + (hasCustomSources ? 40 : 0) + 40" align="center" fixed="right">
       <template #default="{ row, $index }">
         <el-tooltip content="播放" placement="top">
           <el-button circle size="small" :aria-label="`播放《${row.title}》`" @click.stop="emit('play', row, $index)">
@@ -105,6 +105,11 @@
             <el-icon><Connection /></el-icon>
           </el-button>
         </el-tooltip>
+        <el-tooltip content="下一首播放（排在当前曲目之后）" placement="top">
+          <el-button circle size="small" :aria-label="`下一首播放《${row.title}》`" @click.stop="playNext(row)">
+            <el-icon><DArrowRight /></el-icon>
+          </el-button>
+        </el-tooltip>
         <el-tooltip content="加入播放队列" placement="top">
           <el-button circle size="small" :aria-label="`加入播放队列《${row.title}》`" @click.stop="emit('add-queue', row)">
             <el-icon><Plus /></el-icon>
@@ -138,6 +143,7 @@
 
 <script setup>
 import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
 import { useRouter } from 'vue-router'
 import { usePlayerStore } from '@/store/player'
 import { useUserStore } from '@/store/user'
@@ -210,6 +216,22 @@ function openCustomSourcePlayback(song) {
   if (!hasCustomSources.value) return
   customSourceSong.value = song
   customSourceDialogVisible.value = true
+}
+
+function playNext(song) {
+  const status = playerStore.playNext(song)
+  const title = song?.title || '这首歌曲'
+  if (status === 'invalid') {
+    ElMessage.warning('无法安排这首歌曲，请重试')
+  } else if (status === 'current') {
+    ElMessage.info(`《${title}》已经正在播放`)
+  } else if (status === 'already-next') {
+    ElMessage.info(`《${title}》已经排在下一首`)
+  } else if (status === 'moved') {
+    ElMessage.success(`已将《${title}》调整为下一首播放`)
+  } else {
+    ElMessage.success(`已将《${title}》排为下一首播放`)
+  }
 }
 
 const favSet = computed(() => new Set(props.favoriteIds))

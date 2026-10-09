@@ -229,9 +229,37 @@
           </el-tag>
         </div>
       </div>
-      <el-button circle size="small" text @click.stop="playerStore.removeAt(index)">
-        <el-icon><Close /></el-icon>
-      </el-button>
+      <div class="queue-item-actions">
+        <el-tooltip content="上移一位" placement="top">
+          <el-button
+            circle
+            size="small"
+            text
+            :disabled="index === 0"
+            :aria-label="`上移《${song.title}》`"
+            @click.stop="playerStore.moveQueueItem(index, index - 1)"
+          >
+            <el-icon><ArrowUp /></el-icon>
+          </el-button>
+        </el-tooltip>
+        <el-tooltip content="下移一位" placement="top">
+          <el-button
+            circle
+            size="small"
+            text
+            :disabled="index === playerStore.queue.length - 1"
+            :aria-label="`下移《${song.title}》`"
+            @click.stop="playerStore.moveQueueItem(index, index + 1)"
+          >
+            <el-icon><ArrowDown /></el-icon>
+          </el-button>
+        </el-tooltip>
+        <el-tooltip content="从队列移除" placement="top">
+          <el-button circle size="small" text :aria-label="`从播放队列移除《${song.title}》`" @click.stop="playerStore.removeAt(index)">
+            <el-icon><Close /></el-icon>
+          </el-button>
+        </el-tooltip>
+      </div>
     </div>
   </el-drawer>
 </template>
@@ -760,7 +788,7 @@ function onAudioEnded(event) {
   if (audio !== activeAudioElement()) return
   if (playerStore.checkSleepTimer()) return
   if (playerStore.handleSleepTimerTrackEnd(currentSong.value?.id)) return
-  if (playerStore.mode === 'single') {
+  if (playerStore.mode === 'single' && playerStore.priorityNextSongId === null) {
     audio.currentTime = 0
     audio.play().catch(() => {})
     return
@@ -1158,6 +1186,15 @@ watch(() => userStore.isLogin, (loggedIn) => {
   gap: 6px;
   font-size: 12px;
   color: var(--text-sub);
+}
+.queue-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex-shrink: 0;
+}
+.queue-item-actions :deep(.el-button) {
+  margin-left: 0;
 }
 .queue-local-tag {
   flex: 0 0 auto;
