@@ -178,6 +178,8 @@ watch(() => route.query.categoryId, (val) => {
 onMounted(() => {
   loadFilters()
   loadFavorites()
+  // 带分类参数时由上面的监听加载，避免同一时刻请求两次。
+  if (!route.query.categoryId) loadData()
 })
 </script>
 
