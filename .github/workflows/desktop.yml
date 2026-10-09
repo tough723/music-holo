@@ -27,7 +27,19 @@ jobs:
       - run: node --test examples/lx-custom-source/music-holo-local.test.cjs
       - run: npm run build:web --prefix music-holo-desktop
       - name: Electron smoke (real Chromium sandbox, mocked third-party network)
-        run: xvfb-run -a npm run test:smoke --prefix music-holo-desktop
+        shell: bash
+        run: |
+          set +e
+          xvfb-run -a npm run test:smoke --prefix music-holo-desktop > /tmp/desktop-smoke.log 2>&1
+          status=$?
+          cat /tmp/desktop-smoke.log
+          if [ "$status" -ne 0 ]; then
+            tail -n 80 /tmp/desktop-smoke.log >> "$GITHUB_STEP_SUMMARY"
+            # CI 日志体积很大，GitHub 无法直接下载时，用注解把失败原因带回检查结果里。
+            summary=$(tail -n 80 /tmp/desktop-smoke.log | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            echo "::error title=Desktop smoke failed::$summary"
+          fi
+          exit "$status"
       - name: Production desktop directory packaging
         run: npm run pack --prefix music-holo-desktop
       - name: Preserve desktop smoke diagnostics

@@ -14,7 +14,8 @@ async function loginAs(page, username) {
 }
 
 async function openMenu(page, label) {
-  await page.locator('.sidebar .app-nav-menu').getByRole('menuitem', { name: label }).click()
+  // 精确匹配：导航里同时存在“歌单 / 歌单导入 / 歌单管理”这类前缀相同的条目。
+  await page.locator('.sidebar .app-nav-menu').getByRole('menuitem', { name: label, exact: true }).click()
 }
 
 test('游客可以搜索歌曲并从结果启动播放', async ({ page }) => {
