@@ -568,7 +568,8 @@ test('登录用户可屏蔽歌曲和歌手，自动播放与推荐跳过但手�
   const neonRow = page.locator('.el-table__row').filter({ hasText: '霓虹海' }).first()
   await expect(neonRow).toBeVisible()
   await neonRow.getByRole('button', { name: '不喜欢《霓虹海》' }).click()
-  await expect(neonRow.getByRole('button', { name: '取消不喜欢《霓虹海》' })).toBeVisible()
+  await expect(page.getByText('已不喜欢《霓虹海》，自动切歌和推荐会跳过')).toBeVisible()
+  await expect(neonRow.getByTestId('dislike-song-1')).toHaveAttribute('data-disliked', 'true')
 
   await page.getByRole('button', { name: '播放全部' }).click()
   await expect(page.locator('.player-bar .pb-title')).toHaveText('极光列车')
@@ -587,6 +588,7 @@ test('登录用户可屏蔽歌曲和歌手，自动播放与推荐跳过但手�
   const messengerRow = page.locator('.daily-list .el-table__row').filter({ hasText: '云端信使' })
   await expect(messengerRow).toBeVisible()
   await messengerRow.getByRole('button', { name: '不喜欢《云端信使》' }).click()
+  await expect(page.getByText('已不喜欢《云端信使》，自动切歌和推荐会跳过')).toBeVisible()
   await expect(messengerRow).toHaveCount(0)
 
   await openMenu(page, '歌手')
@@ -595,7 +597,8 @@ test('登录用户可屏蔽歌曲和歌手，自动播放与推荐跳过但手�
   const confirm = page.locator('.el-message-box')
   await expect(confirm).toContainText('不喜欢这位歌手')
   await confirm.getByRole('button', { name: '确认屏蔽' }).click()
-  await expect(page.getByRole('button', { name: '取消不喜欢歌手陆呼吸' })).toBeVisible()
+  await expect(page.getByText('已不喜欢歌手陆呼吸，自动切歌和推荐会跳过')).toBeVisible()
+  await expect(page.getByTestId('dislike-singer')).toHaveAttribute('data-disliked', 'true')
 
   await openMenu(page, '每日推荐')
   await expect(page.locator('.daily-list .el-table__row').first()).toBeVisible()
@@ -608,9 +611,9 @@ test('登录用户可屏蔽歌曲和歌手，自动播放与推荐跳过但手�
   await expect(panel).toContainText('霓虹海')
   await expect(panel).toContainText('云端信使')
   await expect(panel).toContainText('陆呼吸')
-  await panel.getByRole('button', { name: '取消不喜欢《霓虹海》' }).click()
-  await panel.getByRole('button', { name: '取消不喜欢《云端信使》' }).click()
-  await panel.getByRole('button', { name: '取消不喜欢歌手陆呼吸' }).click()
+  await panel.getByTestId('revoke-dislike-song-1').click()
+  await panel.getByTestId('revoke-dislike-song-2').click()
+  await panel.getByTestId('revoke-dislike-singer-5').click()
   await expect(panel.getByText('还没有不喜欢的歌曲或歌手')).toBeVisible()
 
   await openMenu(page, '每日推荐')

@@ -26,6 +26,8 @@
             round
             :type="singerDisliked ? 'danger' : 'default'"
             :aria-label="singerDisliked ? `取消不喜欢歌手${singer.name}` : `不喜欢歌手${singer.name}`"
+            data-testid="dislike-singer"
+            :data-disliked="singerDisliked ? 'true' : 'false'"
             @click="toggleSingerDislike"
           >
             {{ singerDisliked ? '已不喜欢这位歌手' : '不喜欢这位歌手' }}

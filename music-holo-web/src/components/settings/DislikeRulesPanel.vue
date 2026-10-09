@@ -31,7 +31,7 @@
             <strong>{{ song.title }}</strong>
             <span>{{ song.singerName || '未知歌手' }}</span>
           </div>
-          <el-button size="small" :aria-label="`取消不喜欢《${song.title}》`" @click="removeSong(song)">撤销</el-button>
+          <el-button size="small" :aria-label="`取消不喜欢《${song.title}》`" :data-testid="`revoke-dislike-song-${song.id}`" @click="removeSong(song)">撤销</el-button>
         </li>
       </ul>
       <p v-else class="empty-copy">还没有不喜欢的歌曲。</p>
@@ -50,7 +50,7 @@
             <strong>{{ singer.name }}</strong>
             <span>{{ singer.region || '歌手' }}</span>
           </div>
-          <el-button size="small" :aria-label="`取消不喜欢歌手${singer.name}`" @click="removeSinger(singer)">撤销</el-button>
+          <el-button size="small" :aria-label="`取消不喜欢歌手${singer.name}`" :data-testid="`revoke-dislike-singer-${singer.id}`" @click="removeSinger(singer)">撤销</el-button>
         </li>
       </ul>
       <p v-else class="empty-copy">还没有不喜欢的歌手。</p>

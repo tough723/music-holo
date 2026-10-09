@@ -117,6 +117,8 @@
             :type="dislikeStore.hasSong(row.id) ? 'danger' : 'default'"
             :plain="!dislikeStore.hasSong(row.id)"
             :aria-label="dislikeStore.hasSong(row.id) ? `取消不喜欢《${row.title}》` : `不喜欢《${row.title}》`"
+            :data-testid="`dislike-song-${row.id}`"
+            :data-disliked="dislikeStore.hasSong(row.id) ? 'true' : 'false'"
             @click.stop="toggleDislike(row)"
           >
             <el-icon><CircleClose /></el-icon>
