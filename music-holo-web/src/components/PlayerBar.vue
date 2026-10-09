@@ -230,35 +230,35 @@
         </div>
       </div>
       <div class="queue-item-actions">
-        <el-tooltip content="上移一位" placement="top">
-          <el-button
-            circle
-            size="small"
-            text
-            :disabled="index === 0"
-            :aria-label="`上移《${song.title}》`"
-            @click.stop="playerStore.moveQueueItem(index, index - 1)"
-          >
-            <el-icon><ArrowUp /></el-icon>
-          </el-button>
-        </el-tooltip>
-        <el-tooltip content="下移一位" placement="top">
-          <el-button
-            circle
-            size="small"
-            text
-            :disabled="index === playerStore.queue.length - 1"
-            :aria-label="`下移《${song.title}》`"
-            @click.stop="playerStore.moveQueueItem(index, index + 1)"
-          >
-            <el-icon><ArrowDown /></el-icon>
-          </el-button>
-        </el-tooltip>
-        <el-tooltip content="从队列移除" placement="top">
-          <el-button circle size="small" text :aria-label="`从播放队列移除《${song.title}》`" @click.stop="playerStore.removeAt(index)">
-            <el-icon><Close /></el-icon>
-          </el-button>
-        </el-tooltip>
+        <button
+          type="button"
+          class="queue-action-button"
+          title="上移一位"
+          :disabled="index === 0"
+          :aria-label="`上移《${song.title}》`"
+          @click.stop="playerStore.moveQueueItem(index, index - 1)"
+        >
+          <el-icon><ArrowUp /></el-icon>
+        </button>
+        <button
+          type="button"
+          class="queue-action-button"
+          title="下移一位"
+          :disabled="index === playerStore.queue.length - 1"
+          :aria-label="`下移《${song.title}》`"
+          @click.stop="playerStore.moveQueueItem(index, index + 1)"
+        >
+          <el-icon><ArrowDown /></el-icon>
+        </button>
+        <button
+          type="button"
+          class="queue-action-button"
+          title="从队列移除"
+          :aria-label="`从播放队列移除《${song.title}》`"
+          @click.stop="playerStore.removeAt(index)"
+        >
+          <el-icon><Close /></el-icon>
+        </button>
       </div>
     </div>
   </el-drawer>
@@ -1193,8 +1193,25 @@ watch(() => userStore.isLogin, (loggedIn) => {
   gap: 1px;
   flex-shrink: 0;
 }
-.queue-item-actions :deep(.el-button) {
-  margin-left: 0;
+.queue-action-button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--text-sub);
+  background: transparent;
+  cursor: pointer;
+}
+.queue-action-button:hover:not(:disabled) {
+  color: var(--holo-primary);
+  background: color-mix(in srgb, var(--holo-primary) 12%, transparent);
+}
+.queue-action-button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 .queue-local-tag {
   flex: 0 0 auto;
