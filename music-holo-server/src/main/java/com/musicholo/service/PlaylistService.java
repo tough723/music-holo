@@ -253,11 +253,11 @@ public class PlaylistService {
         if (userId == null || !userId.equals(playlist.getCreatorId())) {
             throw new BusinessException(403, "只能调整自己创建的歌单顺序");
         }
-        List<PlaylistSong> relations = playlistSongMapper.selectList(
+        List<PlaylistSong> relations = new ArrayList<>(playlistSongMapper.selectList(
                 new LambdaQueryWrapper<PlaylistSong>()
                         .eq(PlaylistSong::getPlaylistId, playlistId)
                         .orderByAsc(PlaylistSong::getSort)
-                        .orderByAsc(PlaylistSong::getId));
+                        .orderByAsc(PlaylistSong::getId)));
         List<Long> current = relations.stream().map(PlaylistSong::getSongId).collect(Collectors.toList());
         final List<Long> next;
         try {
