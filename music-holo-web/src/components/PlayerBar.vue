@@ -46,6 +46,24 @@
           <el-icon><Switch /></el-icon>
         </el-button>
       </el-tooltip>
+      <el-tooltip v-if="canDownloadCurrent" content="下载当前歌曲到本地" placement="top">
+        <el-button class="pb-download" circle size="small" aria-label="下载当前歌曲" @click="downloadCurrent">
+          <el-icon><Download /></el-icon>
+        </el-button>
+      </el-tooltip>
+      <el-tooltip v-if="canDislikeCurrent" :content="currentDisliked ? '取消不喜欢当前歌曲' : '不喜欢当前歌曲（之后自动跳过）'" placement="top">
+        <el-button
+          class="pb-dislike"
+          circle
+          size="small"
+          :type="currentDisliked ? 'danger' : 'default'"
+          :plain="!currentDisliked"
+          :aria-label="currentDisliked ? '取消不喜欢当前歌曲' : '不喜欢当前歌曲'"
+          @click="toggleDislikeCurrent"
+        >
+          <el-icon><CircleClose /></el-icon>
+        </el-button>
+      </el-tooltip>
     </div>
 
     <!-- 中间：播放控制 + 进度 -->
@@ -56,9 +74,18 @@
             <el-icon><DArrowLeft /></el-icon>
           </el-button>
         </el-tooltip>
-        <el-tooltip content="播放 / 暂停 · 空格" placement="top">
-          <el-button class="pb-play" circle :disabled="!hasSong" @click="togglePlay">
-            <el-icon v-if="playing"><VideoPause /></el-icon>
+        <el-tooltip :content="buffering ? '正在缓冲…' : '播放 / 暂停 · 空格'" placement="top">
+          <el-button
+            class="pb-play"
+            circle
+            :class="{ 'is-buffering': buffering }"
+            :disabled="!hasSong"
+            :aria-label="playing ? '暂停' : '播放'"
+            :aria-busy="buffering ? 'true' : 'false'"
+            @click="togglePlay"
+          >
+            <el-icon v-if="buffering" class="spin"><Loading /></el-icon>
+            <el-icon v-else-if="playing"><VideoPause /></el-icon>
             <el-icon v-else><VideoPlay /></el-icon>
           </el-button>
         </el-tooltip>
@@ -75,9 +102,14 @@
             <el-icon v-else><Histogram /></el-icon>
           </el-button>
         </el-tooltip>
+        <el-tooltip v-if="audioError" content="重新加载当前音频" placement="top">
+          <el-button class="pb-retry" circle text aria-label="重新加载当前音频" @click="retryAudio">
+            <el-icon><RefreshRight /></el-icon>
+          </el-button>
+        </el-tooltip>
       </div>
       <div class="pb-progress">
-        <span class="pb-time">{{ fmtDuration(playerStore.currentTime) }}</span>
+        <span class="pb-time">{{ fmtDuration(displayTime) }}</span>
         <div
           class="progress-track"
           ref="trackRef"
@@ -86,17 +118,34 @@
           aria-label="播放进度"
           :aria-valuemin="0"
           :aria-valuemax="Math.round(playerStore.duration || 0)"
-          :aria-valuenow="Math.round(playerStore.currentTime || 0)"
-          :aria-valuetext="`${fmtDuration(playerStore.currentTime)} / ${fmtDuration(playerStore.duration)}`"
+          :aria-valuenow="Math.round(displayTime || 0)"
+          :aria-valuetext="`${fmtDuration(displayTime)} / ${fmtDuration(playerStore.duration)}`"
+          :aria-busy="buffering ? 'true' : 'false'"
+          :class="{ 'is-dragging': dragging, 'is-buffering': buffering, 'is-disabled': !playerStore.duration }"
+          @pointerdown="onProgressPointerDown"
+          @pointermove="onProgressPointerMove"
+          @pointerup="onProgressPointerUp"
+          @pointercancel="onProgressPointerCancel"
+          @pointerleave="onProgressPointerLeave"
           @click="onSeek"
           @keydown.left.prevent="onProgressKeydown"
           @keydown.right.prevent="onProgressKeydown"
+          @keydown.up.prevent="onProgressKeydown"
+          @keydown.down.prevent="onProgressKeydown"
+          @keydown.page-up.prevent="seekByKeyboard(-30)"
+          @keydown.page-down.prevent="seekByKeyboard(30)"
           @keydown.home.prevent="seekTo(0)"
           @keydown.end.prevent="seekTo(playerStore.duration)"
         >
-          <div class="progress-inner" :style="{ width: progressPercent + '%' }">
+          <div class="progress-buffered" :style="{ width: bufferedPercent + '%' }"></div>
+          <div class="progress-inner" :style="{ width: displayPercent + '%' }">
             <div class="progress-dot"></div>
           </div>
+          <div
+            v-if="hoverRatio !== null && playerStore.duration"
+            class="progress-bubble"
+            :style="{ left: (hoverRatio * 100) + '%' }"
+          >{{ fmtDuration(hoverRatio * playerStore.duration) }}</div>
         </div>
         <span class="pb-time">{{ fmtDuration(playerStore.duration) }}</span>
       </div>
@@ -165,12 +214,58 @@
           <el-icon><Headset /></el-icon>
         </el-button>
       </el-tooltip>
-      <el-tooltip content="音量" placement="top">
-        <div class="pb-volume">
-          <el-icon><Mic /></el-icon>
-          <el-slider v-model="volume" :min="0" :max="100" :show-tooltip="false" @input="onVolume" />
+      <div class="pb-volume-group">
+        <el-tooltip :content="muted ? '取消静音 · M' : '静音 · M'" placement="top">
+          <el-button circle text class="pb-mute" :aria-label="muted ? '取消静音' : '静音'" :aria-pressed="muted" @click="toggleMute">
+            <el-icon><Mute v-if="muted || volumePercent === 0" /><Mic v-else /></el-icon>
+          </el-button>
+        </el-tooltip>
+        <div class="pb-volume" :title="`音量 ${volumePercent}%`" @wheel.prevent="onVolumeWheel">
+          <el-slider
+            v-model="volumeSlider"
+            :min="0"
+            :max="100"
+            :show-tooltip="false"
+            :disabled="muted"
+            aria-label="音量"
+            @input="onVolume"
+          />
         </div>
+        <span class="pb-volume-value" aria-hidden="true">{{ volumePercent }}</span>
+      </div>
+      <el-tooltip :content="`播放速度 · 当前 ${playbackRateLabel}`" placement="top">
+        <el-button
+          class="pb-rate"
+          circle
+          text
+          :aria-label="`播放速度：${playbackRateLabel}，点击切换`"
+          :title="`播放速度：${playbackRateLabel}`"
+          @click="cycleRate"
+        >{{ playbackRateLabel }}</el-button>
       </el-tooltip>
+      <el-popover v-model:visible="shortcutsVisible" placement="top" trigger="click" :width="280">
+        <template #reference>
+          <el-button
+            circle
+            text
+            class="pb-shortcuts"
+            aria-label="快捷键说明"
+            :aria-expanded="shortcutsVisible ? 'true' : 'false'"
+          >
+            <el-icon><InfoFilled /></el-icon>
+          </el-button>
+        </template>
+        <div class="shortcut-panel">
+          <div class="shortcut-title">播放器快捷键</div>
+          <ul class="shortcut-list">
+            <li v-for="item in SHORTCUT_HELP" :key="item.keys">
+              <kbd>{{ item.keys }}</kbd>
+              <span>{{ item.desc }}</span>
+            </li>
+          </ul>
+          <p class="shortcut-note">在输入框里输入时以上快捷键不生效。</p>
+        </div>
+      </el-popover>
       <el-tooltip content="歌词 · L" placement="top">
         <el-button circle text :class="{ active: playerStore.lyricVisible }" :aria-label="playerStore.lyricVisible ? '关闭歌词' : '显示歌词'" @click="toggleLyric">
           <el-icon><ChatLineSquare /></el-icon>
@@ -201,8 +296,20 @@
   <!-- 播放队列抽屉 -->
   <el-drawer v-model="queueVisible" title="播放队列" :size="queueDrawerSize" append-to-body>
     <div class="queue-toolbar">
-      <span class="queue-count">共 {{ playerStore.queue.length }} 首</span>
+      <span class="queue-count">
+        共 {{ playerStore.queue.length }} 首<template v-if="playerStore.queueDuration"> · {{ fmtDuration(playerStore.queueDuration) }}</template>
+      </span>
       <div class="queue-tools">
+        <el-tooltip content="随机重排队列，正在播放的曲目保持不动" placement="top">
+          <el-button size="small" plain :disabled="playerStore.queue.length < 2" aria-label="随机打乱播放队列" @click="shuffleQueue">
+            <el-icon><Refresh /></el-icon>
+          </el-button>
+        </el-tooltip>
+        <el-tooltip content="移除队列里重复的曲目" placement="top">
+          <el-button size="small" plain :disabled="playerStore.queue.length < 2" aria-label="移除队列中的重复歌曲" @click="dedupeQueue">
+            <el-icon><CircleClose /></el-icon>
+          </el-button>
+        </el-tooltip>
         <input
           ref="localFileInput"
           class="local-file-input"
@@ -248,22 +355,33 @@
         </li>
       </ul>
     </section>
+    <el-input
+      v-if="playerStore.queue.length > 0"
+      v-model="queueKeyword"
+      class="queue-search"
+      size="small"
+      clearable
+      placeholder="在队列里搜索歌名或歌手"
+      aria-label="在播放队列里搜索"
+    />
     <div v-if="playerStore.queue.length === 0" class="queue-empty">队列空空如也，点上方“导入本地音乐”选择文件，或去曲库挑几首歌吧～</div>
+    <div v-else-if="filteredQueue.length === 0" class="queue-empty">没有匹配「{{ queueKeyword }}」的曲目</div>
     <div
-      v-for="(song, index) in playerStore.queue"
-      :key="song.id"
+      v-for="entry in filteredQueue"
+      :key="`${entry.index}-${entry.song.id}`"
       class="queue-item"
-      :class="{ active: index === playerStore.currentIndex }"
-      @click="playerStore.playAt(index)"
+      :ref="(element) => setQueueItemRef(element, entry.index === playerStore.currentIndex)"
+      :class="{ active: entry.index === playerStore.currentIndex }"
+      @click="playerStore.playAt(entry.index)"
     >
-      <div class="queue-cover"><Cover :src="song.cover" :text="song.title" :size="36" :anonymous="Boolean(song.isCustomSource)" /></div>
+      <div class="queue-cover"><Cover :src="entry.song.cover" :text="entry.song.title" :size="36" :anonymous="Boolean(entry.song.isCustomSource)" /></div>
       <div class="queue-meta">
-        <div class="queue-title">{{ song.title }}</div>
+        <div class="queue-title">{{ entry.song.title }}</div>
         <div class="queue-artist">
-          {{ song.singerName }}
-          <el-tag v-if="song.isLocal" size="small" effect="plain" class="queue-local-tag">本地</el-tag>
-          <el-tag v-else-if="song.isCustomSource" size="small" effect="plain" class="queue-local-tag">
-            {{ song.sourceName ? `${song.sourceName} · ${song.sourcePlatform || '自定义源'}` : song.sourcePlatform || '自定义源' }}
+          {{ entry.song.singerName }}
+          <el-tag v-if="entry.song.isLocal" size="small" effect="plain" class="queue-local-tag">本地</el-tag>
+          <el-tag v-else-if="entry.song.isCustomSource" size="small" effect="plain" class="queue-local-tag">
+            {{ entry.song.sourceName ? `${entry.song.sourceName} · ${entry.song.sourcePlatform || '自定义源'}` : entry.song.sourcePlatform || '自定义源' }}
           </el-tag>
         </div>
       </div>
@@ -272,9 +390,9 @@
           type="button"
           class="queue-action-button"
           title="上移一位"
-          :disabled="index === 0"
-          :aria-label="`上移《${song.title}》`"
-          @click.stop="playerStore.moveQueueItem(index, index - 1)"
+          :disabled="entry.index === 0"
+          :aria-label="`上移《${entry.song.title}》`"
+          @click.stop="playerStore.moveQueueItem(entry.index, entry.index - 1)"
         >
           <el-icon><ArrowUp /></el-icon>
         </button>
@@ -282,9 +400,9 @@
           type="button"
           class="queue-action-button"
           title="下移一位"
-          :disabled="index === playerStore.queue.length - 1"
-          :aria-label="`下移《${song.title}》`"
-          @click.stop="playerStore.moveQueueItem(index, index + 1)"
+          :disabled="entry.index === playerStore.queue.length - 1"
+          :aria-label="`下移《${entry.song.title}》`"
+          @click.stop="playerStore.moveQueueItem(entry.index, entry.index + 1)"
         >
           <el-icon><ArrowDown /></el-icon>
         </button>
@@ -292,8 +410,8 @@
           type="button"
           class="queue-action-button"
           title="从队列移除"
-          :aria-label="`从播放队列移除《${song.title}》`"
-          @click.stop="playerStore.removeAt(index)"
+          :aria-label="`从播放队列移除《${entry.song.title}》`"
+          @click.stop="playerStore.removeAt(entry.index)"
         >
           <el-icon><Close /></el-icon>
         </button>
@@ -303,11 +421,13 @@
 </template>
 
 <script setup>
-import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { SLEEP_TIMER_MINUTES, usePlayerStore } from '@/store/player'
 import { useUserStore } from '@/store/user'
+import { useDislikeStore } from '@/store/dislike'
+import { useDownloadStore } from '@/store/downloads'
 import * as favoriteApi from '@/api/favorite'
 import { fmtDuration } from '@/utils/format'
 import { createMediaSessionController } from '@/utils/mediaSession'
@@ -333,6 +453,8 @@ import Cover from './Cover.vue'
 
 const playerStore = usePlayerStore()
 const userStore = useUserStore()
+const dislikeStore = useDislikeStore()
+const downloadStore = useDownloadStore()
 const router = useRouter()
 
 const audioRef = ref(null)
@@ -351,12 +473,38 @@ const demoCached = ref(false)
 const offlineFallbackAttempted = ref(null)
 const queueVisible = ref(false)
 const sleepTimerVisible = ref(false)
+const shortcutsVisible = ref(false)
+/** 播放器快捷键说明：与 onPlayerShortcut 里真正实现的按键保持一致。 */
+const SHORTCUT_HELP = Object.freeze([
+  { keys: '空格', desc: '播放 / 暂停' },
+  { keys: '←  →', desc: '快退 / 快进 5 秒' },
+  { keys: '↑  ↓', desc: '进度条聚焦时快退 / 快进 10 秒' },
+  { keys: '↑  ↓', desc: '其他区域调整音量 ±5%' },
+  { keys: 'Shift + ← / →', desc: '上一首 / 下一首' },
+  { keys: 'Home / End', desc: '跳到开头 / 结尾' },
+  { keys: 'PageUp / PageDown', desc: '快退 / 快进 30 秒' },
+  { keys: 'M', desc: '静音 / 取消静音' },
+  { keys: 'L', desc: '打开 / 关闭歌词' },
+  { keys: 'Q', desc: '打开 / 关闭播放队列' }
+])
 const sleepClockNow = ref(Date.now())
 let sleepClockInterval = null
 const viewportWidth = ref(typeof window === 'undefined' ? 1280 : window.innerWidth)
 const queueDrawerSize = computed(() => viewportWidth.value <= 420 ? '100%' : '380px')
-const volume = ref(Math.round(playerStore.volume * 100))
 const favoriteIds = ref([])
+
+// ---- 进度条交互：拖动 / 悬停预览 / 缓冲 ----
+const dragging = ref(false)
+const dragTime = ref(0)
+const hoverRatio = ref(null)
+const bufferedPercent = ref(0)
+const buffering = ref(false)
+const audioError = ref(false)
+const queueKeyword = ref('')
+const queueCurrentItemRef = ref(null)
+let dragPointerId = null
+let suppressClickSeek = false
+let resumeSavedAt = 0
 
 const currentSong = computed(() => playerStore.currentSong)
 const playing = computed(() => playerStore.playing)
@@ -375,9 +523,37 @@ const sleepTimerSummary = computed(() => playerStore.sleepTimerMode === 'track'
   ? '播完当前歌曲后停止'
   : `剩余 ${sleepTimerRemainingLabel.value}`)
 const isFav = computed(() => currentSong.value ? favoriteIds.value.includes(currentSong.value.id) : false)
-const progressPercent = computed(() => {
+/** 拖动时显示拖动位置，否则显示真实播放进度。 */
+const displayTime = computed(() => (dragging.value ? dragTime.value : playerStore.currentTime))
+const displayPercent = computed(() => {
   if (!playerStore.duration) return 0
-  return Math.min(100, (playerStore.currentTime / playerStore.duration) * 100)
+  return Math.min(100, Math.max(0, (displayTime.value / playerStore.duration) * 100))
+})
+
+// ---- 音量 / 静音 / 倍速 ----
+const volumePercent = computed(() => Math.round(playerStore.volume * 100))
+const muted = computed(() => playerStore.muted)
+const volumeSlider = computed({
+  get: () => (playerStore.muted ? 0 : Math.round(playerStore.volume * 100)),
+  set: (value) => { playerStore.setVolume(Math.max(0, Math.min(100, Number(value) || 0)) / 100) }
+})
+const playbackRateLabel = computed(() => `${Number(playerStore.playbackRate) || 1}×`)
+
+// ---- 当前曲目的扩展操作 ----
+const canDislikeCurrent = computed(() => {
+  const song = currentSong.value
+  return Boolean(song && !song.isLocal && song.id != null && song.id !== '')
+})
+const currentDisliked = computed(() => Boolean(canDislikeCurrent.value && dislikeStore.hasSong(currentSong.value.id)))
+const canDownloadCurrent = computed(() => Boolean(currentSong.value?.audioUrl && !currentSong.value.isLocal))
+
+// ---- 队列搜索 ----
+const filteredQueue = computed(() => {
+  const entries = playerStore.queue.map((song, index) => ({ song, index }))
+  const keyword = queueKeyword.value.trim().toLowerCase()
+  if (!keyword) return entries
+  return entries.filter(({ song }) => [song?.title, song?.singerName, song?.album]
+    .some((field) => String(field || '').toLowerCase().includes(keyword)))
 })
 
 function activeAudioElement() {
@@ -524,7 +700,86 @@ function seekTo(time) {
   }
 }
 
+/** 进度条几何换算；拿不到宽度时返回 null，调用方直接放弃这次交互。 */
+function ratioFromEvent(event) {
+  const track = trackRef.value
+  if (!track) return null
+  const rect = track.getBoundingClientRect()
+  if (!rect.width) return null
+  return Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width))
+}
+
+function timeFromEvent(event) {
+  const ratio = ratioFromEvent(event)
+  return ratio === null || !playerStore.duration ? null : ratio * playerStore.duration
+}
+
+function onProgressPointerDown(event) {
+  if (!playerStore.duration || (event.button !== undefined && event.button > 0)) return
+  const time = timeFromEvent(event)
+  if (time === null) return
+  dragging.value = true
+  dragTime.value = time
+  dragPointerId = event.pointerId
+  try { trackRef.value?.setPointerCapture?.(event.pointerId) } catch { /* 旧浏览器没有指针捕获 */ }
+  event.preventDefault()
+}
+
+function onProgressPointerMove(event) {
+  const ratio = ratioFromEvent(event)
+  if (ratio === null) return
+  if (dragging.value) {
+    dragTime.value = ratio * playerStore.duration
+    return
+  }
+  hoverRatio.value = playerStore.duration ? ratio : null
+}
+
+function onProgressPointerUp(event) {
+  if (!dragging.value) return
+  const time = timeFromEvent(event)
+  dragging.value = false
+  // 拖动结束后浏览器还会补一个 click，避免它把进度再设一次。
+  suppressClickSeek = true
+  window.setTimeout(() => { suppressClickSeek = false }, 0)
+  if (dragPointerId !== null) {
+    try { trackRef.value?.releasePointerCapture?.(dragPointerId) } catch { /* 已自动释放 */ }
+    dragPointerId = null
+  }
+  if (time !== null) seekTo(time)
+}
+
+function onProgressPointerCancel() {
+  if (!dragging.value) return
+  dragging.value = false
+  if (dragPointerId !== null) {
+    try { trackRef.value?.releasePointerCapture?.(dragPointerId) } catch { /* 已自动释放 */ }
+    dragPointerId = null
+  }
+}
+
+function onProgressPointerLeave() {
+  if (!dragging.value) hoverRatio.value = null
+}
+
+/** 已经缓冲到的比例，拖动时给用户一个“能跳到哪”的参考。 */
+function updateBuffered() {
+  const audio = activeAudioElement()
+  const duration = Number(playerStore.duration) || Number(audio?.duration) || 0
+  if (!audio || !duration || !audio.buffered || audio.buffered.length === 0) {
+    bufferedPercent.value = 0
+    return
+  }
+  const current = Number.isFinite(audio.currentTime) ? audio.currentTime : playerStore.currentTime
+  let end = 0
+  for (let i = 0; i < audio.buffered.length; i++) {
+    if (audio.buffered.start(i) <= current + 0.5 && audio.buffered.end(i) > end) end = audio.buffered.end(i)
+  }
+  bufferedPercent.value = Math.min(100, Math.max(0, (end / duration) * 100))
+}
+
 function onSeek(e) {
+  if (suppressClickSeek) return
   const track = trackRef.value
   if (!track || !playerStore.duration) return
   const rect = track.getBoundingClientRect()
@@ -586,10 +841,15 @@ function installMediaSession() {
 
 function onProgressKeydown(event) {
   if (event.shiftKey) {
-    event.key === 'ArrowLeft' ? prev() : next()
+    if (event.key === 'ArrowLeft') prev()
+    else if (event.key === 'ArrowRight') next()
     return
   }
-  seekByKeyboard(event.key === 'ArrowLeft' ? -5 : 5)
+  // 左右 5 秒，上下 10 秒；Home/End 与 PageUp/PageDown 已在模板里单独绑定。
+  const step = event.key === 'ArrowUp' || event.key === 'ArrowDown' ? 10 : 5
+  const backward = event.key === 'ArrowLeft' || event.key === 'ArrowDown'
+  if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return
+  seekByKeyboard(backward ? -step : step)
 }
 
 /** 全局播放器快捷键；跳过输入框、按钮和滑块，避免干扰正常编辑操作 */
@@ -616,6 +876,16 @@ function onPlayerShortcut(event) {
     return
   }
   if (event.shiftKey) return
+  if (event.key.toLowerCase() === 'm') {
+    event.preventDefault()
+    toggleMute()
+    return
+  }
+  if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && event.altKey === false) {
+    event.preventDefault()
+    playerStore.setVolume(Math.max(0, Math.min(1, playerStore.volume + (event.key === 'ArrowUp' ? 0.05 : -0.05))))
+    return
+  }
   if (event.key.toLowerCase() === 'l' && hasSong.value) {
     event.preventDefault()
     toggleLyric()
@@ -627,6 +897,127 @@ function onPlayerShortcut(event) {
 
 function onVolume(val) {
   playerStore.setVolume(val / 100)
+}
+
+/** 音量区滚轮调节；静音时不动音量，先取消静音再说。 */
+function onVolumeWheel(event) {
+  if (playerStore.muted) return
+  const step = event.deltaY > 0 ? -0.05 : 0.05
+  playerStore.setVolume(Math.max(0, Math.min(1, playerStore.volume + step)))
+}
+
+function toggleMute() {
+  if (playerStore.toggleMuted()) {
+    ElMessage.info(playerStore.muted ? '已静音' : `已取消静音，音量 ${volumePercent.value}%`)
+  }
+}
+
+/** 音量/静音/倍速统一下发到两个媒体元素与空间音效图。 */
+function syncAudioOutput() {
+  const volume = playerStore.volume
+  const rate = Number(playerStore.playbackRate) || 1
+  const nativeAudio = audioRef.value
+  const spatialAudio = spatialAudioRef.value
+  if (nativeAudio) {
+    nativeAudio.volume = volume
+    nativeAudio.muted = playerStore.muted
+    nativeAudio.playbackRate = rate
+  }
+  if (spatialAudio) {
+    // 空间音效的音量由 WebAudio 图控制，媒体元素本身保持 1。
+    spatialAudio.volume = 1
+    spatialAudio.muted = false
+    spatialAudio.playbackRate = rate
+  }
+  spatialAudioGraph?.setVolume(playerStore.muted ? 0 : volume)
+}
+
+function cycleRate() {
+  const next = playerStore.cyclePlaybackRate()
+  syncAudioOutput()
+  syncMediaSessionPosition(true)
+  ElMessage.info(`播放速度 ${next}×`)
+}
+
+/** 部分实现（含 jsdom 与老旧内核）的 play() 不返回 Promise，统一包一层再链式处理。 */
+function safePlay(audio) {
+  try {
+    return Promise.resolve(audio?.play())
+  } catch (error) {
+    return Promise.reject(error)
+  }
+}
+
+function handlePlayFailure(audio, error) {
+  if (audio !== activeAudioElement()) return
+  playerStore.playing = false
+  if (error?.name === 'NotAllowedError') {
+    ElMessage.warning('浏览器拦截了自动播放，请再点一次播放按钮')
+  }
+}
+
+/** 统一的 play()：区分“浏览器拦截自动播放”和真正的加载失败。 */
+function playActiveAudio(audio) {
+  if (!audio) return
+  safePlay(audio).catch((error) => handlePlayFailure(audio, error))
+}
+
+function retryAudio() {
+  const song = currentSong.value
+  const audio = activeAudioElement()
+  if (!song?.audioUrl || !audio) return
+  audioError.value = false
+  offlineFallbackAttempted.value = null
+  setAudioSource(audio, song.audioUrl, { anonymous: Boolean(song.isCustomSource) })
+  seekAudioWhenReady(audio, playerStore.currentTime)
+  if (playerStore.playing) playActiveAudio(audio)
+}
+
+function downloadCurrent() {
+  const song = currentSong.value
+  if (!song?.audioUrl) return
+  const created = downloadStore.enqueue({ song, title: song.title, url: song.audioUrl })
+  if (created?.length) ElMessage.success(`《${song.title}》已加入下载队列`)
+  else ElMessage.warning(downloadStore.statusMessage || '这首歌暂时无法下载')
+}
+
+async function toggleDislikeCurrent() {
+  const song = currentSong.value
+  if (!canDislikeCurrent.value) return
+  if (!userStore.isLogin) {
+    ElMessage.warning('请先登录后再设置不喜欢')
+    return
+  }
+  const wasDisliked = currentDisliked.value
+  try {
+    if (wasDisliked) {
+      await dislikeStore.removeSong(song.id)
+      ElMessage.success('已移出不喜欢，之后不再跳过')
+    } else {
+      await dislikeStore.addSong({ id: song.id, title: song.title, singerId: song.singerId, singerName: song.singerName, cover: song.cover })
+      ElMessage.success('已加入不喜欢，播放时会自动跳过')
+    }
+  } catch {
+    // 错误提示由拦截器统一处理
+  }
+}
+
+function shuffleQueue() {
+  if (playerStore.shuffleQueue()) ElMessage.success('已随机重排，正在播放的曲目保持不变')
+}
+
+function dedupeQueue() {
+  const removed = playerStore.dedupeQueue()
+  if (removed > 0) ElMessage.success(`已移除 ${removed} 首重复曲目`)
+  else ElMessage.info('队列里没有重复曲目')
+}
+
+function setQueueItemRef(element, isCurrent) {
+  if (isCurrent) queueCurrentItemRef.value = element
+}
+
+function scrollQueueToCurrent() {
+  queueCurrentItemRef.value?.scrollIntoView?.({ block: 'center' })
 }
 
 async function toggleSpatialAudio() {
@@ -647,7 +1038,7 @@ async function toggleSpatialAudio() {
     spatialAudioGraph?.setEnabled(false)
     spatialEnabled.value = false
     if (playerStore.playing) {
-      nativeAudio.play().catch(() => { playerStore.playing = false })
+      safePlay(nativeAudio).catch(() => { playerStore.playing = false })
     }
     ElMessage.info('已关闭 3D 空间音效，切回原声播放')
     return
@@ -672,13 +1063,13 @@ async function toggleSpatialAudio() {
     nativeAudio.pause()
     if (playerStore.playing) {
       try {
-        await spatialAudio.play()
+        await safePlay(spatialAudio)
       } catch (error) {
         spatialEnabled.value = false
         graph.setEnabled(false)
         setAudioSource(nativeAudio, song.audioUrl)
         seekAudioWhenReady(nativeAudio, resumeAt)
-        await nativeAudio.play().catch(() => { playerStore.playing = false })
+        await safePlay(nativeAudio).catch(() => { playerStore.playing = false })
         throw error
       }
     }
@@ -888,13 +1279,23 @@ function clearQueue() {
 }
 
 // ---------- audio 元素与 store 双向同步 ----------
-watch(queueVisible, (open) => {
-  if (open) refreshLocalPanels()
+watch(queueVisible, async (open) => {
+  if (!open) return
+  queueKeyword.value = ''
+  await refreshLocalPanels()
+  // 打开抽屉时把正在播放的曲目滚到视野里。
+  await nextTick()
+  scrollQueueToCurrent()
 })
 
 watch(currentSong, (song) => {
   offlineFallbackAttempted.value = null
   demoCached.value = false
+  audioError.value = false
+  buffering.value = Boolean(song) && playerStore.playing
+  bufferedPercent.value = 0
+  hoverRatio.value = null
+  dragging.value = false
   if (song && isOwnDemoAudioUrl(song.audioUrl, window.location.href)) {
     hasCachedDemoAudio(song.audioUrl, window.location.href).then((cached) => {
       if (currentSong.value?.id === song.id) demoCached.value = cached
@@ -947,13 +1348,18 @@ watch(currentSong, (song) => {
     setAudioSource(nativeAudio, song.audioUrl, { anonymous: Boolean(song.isCustomSource) })
     seekAudioWhenReady(nativeAudio, playerStore.currentTime)
   }
+  syncAudioOutput()
 
+  // 断点续播：同一首歌上次听到一半，从记录处继续（过于靠近开头/结尾则不续播）。
   const audio = activeAudioElement()
-  if (playerStore.playing && audio) {
-    audio.play().catch(() => {
-      if (audio === activeAudioElement()) playerStore.playing = false
-    })
+  const resumeAt = playerStore.consumeResumePosition(song.id, playerStore.duration || song.duration || 0)
+  if (resumeAt > 0) {
+    playerStore.currentTime = resumeAt
+    seekAudioWhenReady(audio, resumeAt)
+    ElMessage.info(`已从上一次的 ${fmtDuration(resumeAt)} 继续播放`)
   }
+
+  if (playerStore.playing && audio) playActiveAudio(audio)
 })
 
 watch(playing, (isPlaying) => {
@@ -962,19 +1368,17 @@ watch(playing, (isPlaying) => {
   const audio = activeAudioElement()
   if (!audio || !currentSong.value) return
   if (isPlaying) {
-    audio.play().catch(() => {
-      if (audio === activeAudioElement()) playerStore.playing = false
-    })
+    playActiveAudio(audio)
   } else {
     audio.pause()
+    buffering.value = false
   }
 })
 
-watch(() => playerStore.volume, (value) => {
-  if (audioRef.value) audioRef.value.volume = value
-  if (spatialAudioRef.value) spatialAudioRef.value.volume = 1
-  spatialAudioGraph?.setVolume(value)
-})
+watch(
+  () => [playerStore.volume, playerStore.muted, playerStore.playbackRate],
+  () => syncAudioOutput()
+)
 
 function onAudioTimeUpdate(event) {
   const audio = event.currentTarget
@@ -982,6 +1386,36 @@ function onAudioTimeUpdate(event) {
   playerStore.currentTime = audio.currentTime
   playerStore.checkSleepTimer()
   syncMediaSessionPosition()
+  updateBuffered()
+  // 断点续播：每 5 秒记一次进度，避免频繁写 localStorage。
+  const song = currentSong.value
+  const now = Date.now()
+  if (song && !song.isLocal && !song.isCustomSource && now - resumeSavedAt > 5000) {
+    resumeSavedAt = now
+    playerStore.saveResumePosition(song.id, audio.currentTime)
+  }
+}
+
+function onAudioWaiting(event) {
+  if (event.currentTarget !== activeAudioElement()) return
+  if (playerStore.playing) buffering.value = true
+}
+
+function onAudioPlaying(event) {
+  if (event.currentTarget !== activeAudioElement()) return
+  buffering.value = false
+  audioError.value = false
+}
+
+function onAudioCanPlay(event) {
+  if (event.currentTarget !== activeAudioElement()) return
+  buffering.value = false
+  updateBuffered()
+}
+
+function onAudioProgress(event) {
+  if (event.currentTarget !== activeAudioElement()) return
+  updateBuffered()
 }
 
 function onAudioLoadedMetadata(event) {
@@ -998,7 +1432,7 @@ function onAudioEnded(event) {
   if (playerStore.handleSleepTimerTrackEnd(currentSong.value?.id)) return
   if (playerStore.mode === 'single' && playerStore.priorityNextSongId === null) {
     audio.currentTime = 0
-    audio.play().catch(() => {})
+    safePlay(audio).catch(() => {})
     return
   }
   next()
@@ -1006,6 +1440,7 @@ function onAudioEnded(event) {
 
 function onAudioError(event) {
   if (event.currentTarget !== activeAudioElement()) return
+  buffering.value = false
   if (event.currentTarget === spatialAudioRef.value && spatialEnabled.value) {
     const nativeAudio = audioRef.value
     const spatialAudio = spatialAudioRef.value
@@ -1018,7 +1453,7 @@ function onAudioError(event) {
       setAudioSource(nativeAudio, currentSong.value.audioUrl, { anonymous: Boolean(currentSong.value.isCustomSource) })
       seekAudioWhenReady(nativeAudio, resumeAt)
       if (playerStore.playing) {
-        nativeAudio.play().catch(() => { playerStore.playing = false })
+        safePlay(nativeAudio).catch(() => { playerStore.playing = false })
       }
       ElMessage.warning('空间音效遇到播放问题，已自动切回原声')
       return
@@ -1035,7 +1470,7 @@ function onAudioError(event) {
         return
       }
       setAudioSource(audio, cachedUrl)
-      if (playerStore.playing) audio.play().catch(() => { playerStore.playing = false })
+      if (playerStore.playing) safePlay(audio).catch(() => { playerStore.playing = false })
       ElMessage.info('网络音频不可用，已改用本机保存的演示副本')
     }).catch(() => reportAudioLoadFailure(song))
     return
@@ -1044,10 +1479,11 @@ function onAudioError(event) {
 }
 
 function reportAudioLoadFailure(song) {
+  audioError.value = true
   if (song?.isCustomSource) {
     ElMessage.error(`《${song.title}》加载失败：链接可能已过期，或音频站未开放匿名 CORS`)
   } else if (song) {
-    ElMessage.error(`《${song.title}》音频加载失败`)
+    ElMessage.error(`《${song.title}》音频加载失败，可点播放器上的重试按钮再试一次`)
   }
   playerStore.playing = false
 }
@@ -1073,6 +1509,11 @@ onMounted(() => {
     nativeAudio.addEventListener('loadedmetadata', onAudioLoadedMetadata)
     nativeAudio.addEventListener('ended', onAudioEnded)
     nativeAudio.addEventListener('error', onAudioError)
+    nativeAudio.addEventListener('waiting', onAudioWaiting)
+    nativeAudio.addEventListener('stalled', onAudioWaiting)
+    nativeAudio.addEventListener('playing', onAudioPlaying)
+    nativeAudio.addEventListener('canplay', onAudioCanPlay)
+    nativeAudio.addEventListener('progress', onAudioProgress)
     if (currentSong.value?.audioUrl) {
       setAudioSource(nativeAudio, currentSong.value.audioUrl, { anonymous: Boolean(currentSong.value.isCustomSource) })
       playerStore.duration = currentSong.value.duration || 0
@@ -1084,7 +1525,13 @@ onMounted(() => {
     spatialAudio.addEventListener('loadedmetadata', onAudioLoadedMetadata)
     spatialAudio.addEventListener('ended', onAudioEnded)
     spatialAudio.addEventListener('error', onAudioError)
+    spatialAudio.addEventListener('waiting', onAudioWaiting)
+    spatialAudio.addEventListener('stalled', onAudioWaiting)
+    spatialAudio.addEventListener('playing', onAudioPlaying)
+    spatialAudio.addEventListener('canplay', onAudioCanPlay)
+    spatialAudio.addEventListener('progress', onAudioProgress)
   }
+  syncAudioOutput()
   installMediaSession()
   window.addEventListener('mh-seek', onLyricSeek)
   window.addEventListener('keydown', onPlayerShortcut)
@@ -1101,6 +1548,11 @@ onUnmounted(() => {
     audio.removeEventListener('loadedmetadata', onAudioLoadedMetadata)
     audio.removeEventListener('ended', onAudioEnded)
     audio.removeEventListener('error', onAudioError)
+    audio.removeEventListener('waiting', onAudioWaiting)
+    audio.removeEventListener('stalled', onAudioWaiting)
+    audio.removeEventListener('playing', onAudioPlaying)
+    audio.removeEventListener('canplay', onAudioCanPlay)
+    audio.removeEventListener('progress', onAudioProgress)
   }
   mediaSessionController?.close()
   mediaSessionController = null
@@ -1159,9 +1611,12 @@ watch(() => userStore.isLogin, (loggedIn) => {
 .pb-left {
   display: flex;
   align-items: center;
-  gap: 12px;
-  width: 300px;
+  gap: 10px;
+  width: 330px;
   min-width: 220px;
+}
+.pb-left :deep(.el-button) {
+  flex-shrink: 0;
 }
 .pb-holo {
   cursor: pointer;
@@ -1245,6 +1700,58 @@ watch(() => userStore.isLogin, (loggedIn) => {
   position: relative;
   transform: translateZ(7px);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35) inset, 0 0 10px -7px var(--holo-glow);
+  /* 拖动优先：让指针事件落在轨道上而不是被浏览器手势吃掉。 */
+  touch-action: none;
+}
+/* 触摸与大屏都好按：撑出一条透明的扩大点击区。 */
+.progress-track::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -9px;
+  bottom: -9px;
+}
+.progress-track.is-disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.progress-track.is-dragging .progress-inner,
+.progress-track.is-dragging {
+  transition: none;
+}
+.progress-track.is-buffering::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 3px;
+  background: linear-gradient(90deg, transparent, rgba(148, 226, 255, 0.35), transparent);
+  animation: progress-shimmer 1.1s linear infinite;
+}
+@keyframes progress-shimmer {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+.progress-buffered {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  border-radius: 3px;
+  background: rgba(148, 163, 184, 0.35);
+}
+.progress-bubble {
+  position: absolute;
+  bottom: 14px;
+  transform: translateX(-50%);
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  white-space: nowrap;
+  color: #041022;
+  background: var(--holo-primary);
+  pointer-events: none;
+  z-index: 2;
 }
 .progress-inner {
   height: 100%;
@@ -1278,20 +1785,96 @@ watch(() => userStore.isLogin, (loggedIn) => {
 .pb-right {
   display: flex;
   align-items: center;
-  gap: 8px;
-  width: 280px;
-  min-width: 200px;
+  gap: 6px;
+  width: 384px;
+  min-width: 300px;
   justify-content: flex-end;
+}
+.pb-right > * {
+  flex-shrink: 0;
+}
+.pb-volume-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 .pb-volume {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 130px;
+  width: 96px;
   color: var(--text-sub);
 }
 .pb-volume :deep(.el-slider) {
   flex: 1;
+}
+.pb-volume-value {
+  font-size: 11px;
+  color: var(--text-sub);
+  width: 20px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.pb-rate {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  min-width: 34px;
+}
+.shortcut-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.shortcut-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.shortcut-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-sub, #94a3b8);
+}
+.shortcut-list kbd {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: inherit;
+  color: #0b1220;
+  background: rgba(124, 214, 255, 0.85);
+}
+.shortcut-note {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--text-sub, #94a3b8);
+}
+.pb-rate :deep(span) {
+  display: inline-block;
+}
+.pb-retry {
+  color: #ffb4a2;
+}
+.pb-play.is-buffering {
+  color: var(--holo-primary);
+}
+.spin {
+  animation: pb-spin 0.9s linear infinite;
+}
+@keyframes pb-spin {
+  to { transform: rotate(360deg); }
+}
+.pb-download,
+.pb-dislike {
+  flex-shrink: 0;
+}
+.queue-search {
+  margin: 0 0 10px;
 }
 .pb-right .active {
   color: var(--holo-primary);
@@ -1497,12 +2080,16 @@ watch(() => userStore.isLogin, (loggedIn) => {
     display: none;
   }
   .pb-right {
-    width: 230px;
-    min-width: 158px;
+    width: 320px;
+    min-width: 250px;
     gap: 4px;
   }
   .pb-volume {
-    width: 105px;
+    width: 80px;
+  }
+  .pb-volume-value,
+  .pb-shortcuts {
+    display: none;
   }
   .pb-controls {
     gap: 8px;
@@ -1541,6 +2128,10 @@ watch(() => userStore.isLogin, (loggedIn) => {
     width: 28px;
     height: 28px;
     padding: 0;
+  }
+  .pb-download,
+  .pb-dislike {
+    display: none;
   }
   .pb-center {
     grid-column: 1 / -1;
@@ -1597,6 +2188,11 @@ watch(() => userStore.isLogin, (loggedIn) => {
     height: 28px;
     padding: 6px;
   }
+  .pb-rate {
+    min-width: 28px;
+    padding: 0;
+    font-size: 10px;
+  }
 }
 
 @media (max-width: 380px) {
@@ -1610,6 +2206,10 @@ watch(() => userStore.isLogin, (loggedIn) => {
   }
   .pb-volume {
     width: 68px;
+  }
+  .pb-rate,
+  .pb-mute {
+    display: none;
   }
   .pb-volume :deep(.el-slider) {
     width: 42px;

@@ -15,8 +15,27 @@ export const MODES = [
 ]
 
 export const SLEEP_TIMER_MINUTES = [15, 30, 45, 60]
+
+/** 可选播放速度；只接受这些档位，避免异常倍速把音频解码器拖垮。 */
+export const PLAYBACK_RATES = Object.freeze([0.5, 0.75, 1, 1.25, 1.5, 1.75, 2])
+/** 短于这个进度不值得续播（大概率只听了片头）。 */
+export const RESUME_MIN_SECONDS = 5
+/** 距离结尾这么近就从头开始，避免续播后立刻切歌。 */
+export const RESUME_TAIL_GUARD_SECONDS = 15
+
 const AUDIO_FILE_EXTENSION = /\.(aac|aif|aiff|flac|m4a|mp3|oga|ogg|opus|wav|weba|webm)$/i
 const sleepTimerHandles = new WeakMap()
+
+/** 把任意输入收敛到受支持的倍速档位。 */
+export function normalizePlaybackRate(rate) {
+  const value = Number(rate)
+  if (!Number.isFinite(value) || value <= 0) return 1
+  let closest = PLAYBACK_RATES[0]
+  for (const candidate of PLAYBACK_RATES) {
+    if (Math.abs(candidate - value) < Math.abs(closest - value)) closest = candidate
+  }
+  return closest
+}
 
 function clearSleepTimerTimeout(store) {
   const handle = sleepTimerHandles.get(store)
@@ -99,7 +118,12 @@ function persist(state) {
     currentIndex,
     priorityNextSongId,
     mode: state.mode,
-    volume: state.volume
+    volume: state.volume,
+    muted: Boolean(state.muted),
+    playbackRate: normalizePlaybackRate(state.playbackRate),
+    // 断点续播只记曲库歌曲：播放器只在曲目非本地、非自定义源时才写入这两个字段。
+    resumeSongId: state.resumeSongId ?? null,
+    resumeTime: Math.max(0, Number(state.resumeTime) || 0)
   }))
 }
 
@@ -128,6 +152,13 @@ export const usePlayerStore = defineStore('player', {
       priorityNextSongId,
       playing: false,
       volume: typeof saved.volume === 'number' && Number.isFinite(saved.volume) ? Math.max(0, Math.min(1, saved.volume)) : 0.8,
+      /** 静音时保留静音前的音量，取消静音可原样恢复。 */
+      muted: saved.muted === true,
+      /** 播放速度：只取受支持的档位。 */
+      playbackRate: normalizePlaybackRate(saved.playbackRate ?? 1),
+      /** 断点续播：歌曲 id + 上次进度（秒）。 */
+      resumeSongId: saved.resumeSongId ?? null,
+      resumeTime: Number.isFinite(Number(saved.resumeTime)) ? Math.max(0, Number(saved.resumeTime)) : 0,
       mode: MODES.some((mode) => mode.key === saved.mode) ? saved.mode : 'order',
       /** 原歌词与可选译文歌词 */
       lyrics: [],
@@ -150,7 +181,9 @@ export const usePlayerStore = defineStore('player', {
     currentSong: (state) => (state.currentIndex >= 0 && state.currentIndex < state.queue.length
       ? state.queue[state.currentIndex]
       : null),
-    modeLabel: (state) => MODES.find((m) => m.key === state.mode)?.label || '顺序播放'
+    modeLabel: (state) => MODES.find((m) => m.key === state.mode)?.label || '顺序播放',
+    /** 队列总时长（秒）；本地文件未读到元数据时按 0 计。 */
+    queueDuration: (state) => (state.queue || []).reduce((total, song) => total + Math.max(0, Number(song?.duration) || 0), 0)
   },
   actions: {
     /** 将用户选择的音频文件加入本地队列；文件只留在浏览器内，不上传服务器。 */
@@ -472,8 +505,103 @@ export const usePlayerStore = defineStore('player', {
       const value = Number(volume)
       if (!Number.isFinite(value)) return false
       this.volume = Math.max(0, Math.min(1, value))
+      // 拖动音量即视为要出声：音量大于 0 时自动解除静音。
+      if (this.volume > 0) this.muted = false
       persist(this)
       return true
+    },
+    /** 静音/取消静音。取消静音时若当前音量为 0，恢复到默认音量而不是“无声的取消静音”。 */
+    setMuted(muted) {
+      const next = Boolean(muted)
+      if (next === this.muted) return false
+      if (!next && this.volume <= 0) this.volume = 0.8
+      this.muted = next
+      persist(this)
+      return true
+    },
+    toggleMuted() {
+      return this.setMuted(!this.muted)
+    },
+    setPlaybackRate(rate) {
+      const next = normalizePlaybackRate(rate)
+      if (next === this.playbackRate) return false
+      this.playbackRate = next
+      persist(this)
+      return true
+    },
+    /** 在受支持的档位里循环切换倍速。 */
+    cyclePlaybackRate() {
+      const index = PLAYBACK_RATES.indexOf(this.playbackRate)
+      const next = PLAYBACK_RATES[(index + 1) % PLAYBACK_RATES.length]
+      return this.setPlaybackRate(next) ? next : this.playbackRate
+    },
+    /** 记录续播位置；由播放器节流调用，避免频繁写 localStorage。 */
+    saveResumePosition(songId, time) {
+      const seconds = Number(time)
+      if (songId === undefined || songId === null || !Number.isFinite(seconds)) return false
+      if (this.resumeSongId === songId && Math.abs((this.resumeTime || 0) - seconds) < 1) return false
+      this.resumeSongId = songId
+      this.resumeTime = Math.max(0, seconds)
+      persist(this)
+      return true
+    },
+    /** 取出某首歌的续播位置（秒）；太靠近开头或结尾都返回 0。取出后即清除。 */
+    consumeResumePosition(songId, duration = 0) {
+      if (songId === undefined || songId === null || this.resumeSongId !== songId) return 0
+      const saved = Math.max(0, Number(this.resumeTime) || 0)
+      const total = Number(duration) || 0
+      this.clearResumePosition()
+      if (saved < RESUME_MIN_SECONDS) return 0
+      if (total > 0 && saved > total - RESUME_TAIL_GUARD_SECONDS) return 0
+      return saved
+    },
+    clearResumePosition() {
+      const changed = this.resumeSongId !== null || this.resumeTime !== 0
+      this.resumeSongId = null
+      this.resumeTime = 0
+      if (changed) persist(this)
+      return changed
+    },
+    /** 打乱播放队列：正在播放的曲目移到队首并继续播放，其余随机重排。 */
+    shuffleQueue() {
+      if (this.queue.length < 2) return false
+      const activeSong = this.currentSong
+      const rest = this.queue.filter((song) => song !== activeSong)
+      for (let i = rest.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1))
+        ;[rest[i], rest[j]] = [rest[j], rest[i]]
+      }
+      this.queue = activeSong ? [activeSong, ...rest] : rest
+      this.currentIndex = activeSong ? 0 : -1
+      this.priorityNextSongId = null
+      persist(this)
+      return true
+    },
+    /** 去掉队列中重复的曲目（同一 id 只保留第一次出现），保持当前曲目不变。 */
+    dedupeQueue() {
+      if (this.queue.length === 0) return 0
+      const seen = new Set()
+      const removed = []
+      const next = []
+      for (const song of this.queue) {
+        const key = song?.id
+        if (key !== undefined && key !== null) {
+          if (seen.has(key)) {
+            removed.push(song)
+            continue
+          }
+          seen.add(key)
+        }
+        next.push(song)
+      }
+      if (removed.length === 0) return 0
+      const activeSong = this.currentSong
+      this.queue = next
+      this.currentIndex = activeSong ? this.queue.indexOf(activeSong) : -1
+      this.priorityNextSongId = null
+      persist(this)
+      releaseLocalSongs(removed)
+      return removed.length
     },
     /** 加载当前歌曲的原歌词与时间对齐译文 */
     async loadLyrics(song) {
