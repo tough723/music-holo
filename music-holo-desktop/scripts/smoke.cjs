@@ -26,6 +26,8 @@ function reportFailure(error, url, pageErrors = []) {
 
 async function main() {
   const profile = await mkdtemp(path.join(tmpdir(), 'music-holo-desktop-'))
+  // 提前声明：catch 里引用它时不会因为暂时性死区把真正的失败原因掩盖成 ReferenceError。
+  const errors = []
   let application, page
   const artifacts = path.resolve(__dirname, '../test-results')
   await mkdir(artifacts, { recursive: true })
@@ -86,7 +88,6 @@ async function main() {
     page = await application.firstWindow()
     await application.context().tracing.start({ screenshots: true, snapshots: true })
     page.on('console', (message) => { if (['error', 'warning'].includes(message.type())) console.log(`[renderer ${message.type()}] ${message.text()}`) })
-    const errors = []
     page.on('pageerror', (error) => errors.push(error.message))
     await page.waitForURL('**/#/sources')
     expect(await page.evaluate(() => typeof require)).toBe('undefined')
@@ -158,10 +159,19 @@ lx.request('https://api.example.com/ping', { headers: { Cookie: 'secret', Author
     console.log('Desktop smoke passed: enforced Chromium sandbox, guest/no-backend, import, native bridge, media range, deny, reload revocation')
   } catch (error) {
     const url = page?.url() || '(no page)'
+    // 先原样打印真实错误，任何后续上报失败都不能把它盖掉。
     console.error('Desktop smoke failed at:', url)
+    console.error(error?.stack || String(error))
     await page?.screenshot({ path: path.join(artifacts, 'failure.png') }).catch(() => {})
+    // 页面是否渲染、桥是否可用，是定位桌面启动失败最有用的两条信息。
+    const context = await Promise.resolve(page?.evaluate(() => ({
+      bridge: typeof globalThis.musicHoloDesktop,
+      readyState: document.readyState,
+      text: (document.body?.innerText || '').slice(0, 400)
+    })).catch((probeError) => ({ probe: String(probeError?.message || probeError) })))
+    console.error('页面上下文：', JSON.stringify(context))
     // 把失败详情写进步骤摘要与注解：CI 日志体积大，定位时优先看这里。
-    reportFailure(error, url, errors)
+    try { reportFailure(error, url, errors) } catch (reportError) { console.error('失败详情上报失败：', reportError) }
     throw error
   } finally {
     await application?.context().tracing.stop({ path: path.join(artifacts, 'trace.zip') }).catch(() => {})
