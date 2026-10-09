@@ -106,7 +106,7 @@
           </el-button>
         </el-tooltip>
         <el-tooltip content="下一首播放（排在当前曲目之后）" placement="top">
-          <el-button circle size="small" :aria-label="`下一首播放《${row.title}》`" @click.stop="playNext(row)">
+          <el-button circle size="small" :aria-label="`排到下一首：《${row.title}》`" @click.stop="playNext(row)">
             <el-icon><DArrowRight /></el-icon>
           </el-button>
         </el-tooltip>

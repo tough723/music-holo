@@ -14,9 +14,9 @@ test('歌曲可排在下一首，队列排序后仍保持当前播放曲目', as
   await expect(page.locator('.player-bar .pb-title')).toHaveText(currentSong)
 
   await openSongSearch(firstNextSong)
-  await page.getByRole('button', { name: `下一首播放《${firstNextSong}》` }).click()
+  await page.getByRole('button', { name: `排到下一首：《${firstNextSong}》` }).click()
   await openSongSearch(secondNextSong)
-  await page.getByRole('button', { name: `下一首播放《${secondNextSong}》` }).click()
+  await page.getByRole('button', { name: `排到下一首：《${secondNextSong}》` }).click()
 
   const queueButton = page.locator('.player-bar button[aria-label="播放队列"]')
   await queueButton.click()
