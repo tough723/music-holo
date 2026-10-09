@@ -38,7 +38,13 @@ function registerProtocol(app, { onLink }) {
     // 开发环境：node main.cjs music-holo://...
     for (const argument of process.argv.slice(2)) deliver(argument)
   }
-  const registered = app.setAsDefaultProtocolClient?.(SCHEME) ?? false
+  // 无桌面环境（CI / 无 XDG 注册能力）时注册协议会抛错，不能因此阻断启动。
+  let registered = false
+  try {
+    registered = app.setAsDefaultProtocolClient?.(SCHEME) ?? false
+  } catch (error) {
+    console.warn('注册 music-holo:// 默认协议失败：', String(error?.message || error))
+  }
   app.on('second-instance', (_event, argv) => {
     for (const argument of argv) deliver(argument)
   })
