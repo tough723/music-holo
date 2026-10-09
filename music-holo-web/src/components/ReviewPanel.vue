@@ -2,7 +2,7 @@
   <section class="review-panel glass-panel" aria-label="歌曲与歌单短评">
     <div class="review-heading">
       <div>
-        <div class="section-title">听众短评 <span class="review-total">{{ total }}</span></div>
+        <div class="section-title">听众短评 <span v-if="!loading && !loadError" class="review-total">{{ total }}</span></div>
         <div class="review-subtitle">分享听感与发现，保持友善；被举报内容由管理员审核。</div>
       </div>
       <el-button v-if="!userStore.isLogin" size="small" type="primary" plain @click="goLogin">
@@ -30,6 +30,10 @@
     </form>
 
     <div v-if="loading" class="review-loading" role="status">正在加载短评…</div>
+    <div v-else-if="loadError" class="review-load-error" role="alert">
+      <span>短评暂时无法加载；这不代表当前没有短评，请检查网络后重试。</span>
+      <el-button text type="primary" @click="loadReviews">重试</el-button>
+    </div>
     <el-empty v-else-if="reviews.length === 0" description="还没有短评，来分享你的第一感受。" :image-size="76" />
     <div v-else class="review-list" aria-live="polite">
       <article v-for="review in reviews" :key="review.id" class="review-card" :data-review-id="review.id">
@@ -124,6 +128,8 @@ const pageNum = ref(1)
 const reviews = ref([])
 const total = ref(0)
 const loading = ref(false)
+const loadError = ref(false)
+let latestReviewRequest = 0
 const publishing = ref(false)
 const content = ref('')
 const reportVisible = ref(false)
@@ -134,12 +140,16 @@ const reportForm = ref({ reason: 'spam', details: '' })
 const validTarget = computed(() => Number(props.targetId) > 0)
 
 async function loadReviews() {
+  const requestId = ++latestReviewRequest
   if (!validTarget.value) {
     reviews.value = []
     total.value = 0
+    loadError.value = false
+    loading.value = false
     return
   }
   loading.value = true
+  loadError.value = false
   try {
     const result = await reviewApi.page({
       targetType: props.targetType,
@@ -147,13 +157,16 @@ async function loadReviews() {
       pageNum: pageNum.value,
       pageSize
     })
+    if (requestId !== latestReviewRequest) return
     reviews.value = result?.records || []
     total.value = result?.total || 0
   } catch {
+    if (requestId !== latestReviewRequest) return
     reviews.value = []
     total.value = 0
+    loadError.value = true
   } finally {
-    loading.value = false
+    if (requestId === latestReviewRequest) loading.value = false
   }
 }
 
@@ -349,6 +362,19 @@ onMounted(loadReviews)
   padding: 26px 0;
   color: var(--text-sub);
   text-align: center;
+}
+.review-load-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--el-color-danger) 32%, var(--border-color));
+  border-radius: 10px;
+  color: var(--text-sub);
+  font-size: 12px;
+  line-height: 1.6;
 }
 .review-pagination {
   display: flex;

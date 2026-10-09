@@ -23,9 +23,17 @@
               <el-option label="已驳回" :value="2" />
             </el-select>
             <el-button @click="loadReports"><el-icon><Refresh /></el-icon>刷新</el-button>
-            <span class="total-label">{{ reportTotal }} 条</span>
+            <span v-if="reportsLoading" class="total-label" role="status">正在加载…</span>
+            <span v-else-if="!reportsError" class="total-label">{{ reportTotal }} 条</span>
           </div>
-          <el-table v-loading="reportsLoading" :data="reports" row-key="id" class="moderation-table">
+          <div v-if="reportsError" class="queue-load-error" role="alert">
+            <div>
+              <strong>举报队列暂不可用</strong>
+              <p>当前不能确认队列是否为空，请恢复连接后重试。</p>
+            </div>
+            <el-button size="small" type="primary" plain @click="loadReports">重试</el-button>
+          </div>
+          <el-table v-else v-loading="reportsLoading" :data="reports" row-key="id" class="moderation-table">
             <el-table-column label="短评 / 对象" min-width="250">
               <template #default="{ row }">
                 <div class="content-cell">
@@ -58,7 +66,7 @@
               </template>
             </el-table-column>
           </el-table>
-          <div class="pagination-wrap">
+          <div v-if="!reportsError" class="pagination-wrap">
             <el-pagination
               v-model:current-page="reportPageNum"
               v-model:page-size="pageSize"
@@ -86,9 +94,17 @@
               <el-option label="歌单短评" value="playlist" />
             </el-select>
             <el-button @click="loadReviews"><el-icon><Refresh /></el-icon>刷新</el-button>
-            <span class="total-label">{{ reviewTotal }} 条</span>
+            <span v-if="reviewsLoading" class="total-label" role="status">正在加载…</span>
+            <span v-else-if="!reviewsError" class="total-label">{{ reviewTotal }} 条</span>
           </div>
-          <el-table v-loading="reviewsLoading" :data="reviewRows" row-key="id" class="moderation-table">
+          <div v-if="reviewsError" class="queue-load-error" role="alert">
+            <div>
+              <strong>短评列表暂不可用</strong>
+              <p>当前列表无法读取，请恢复连接后重试。</p>
+            </div>
+            <el-button size="small" type="primary" plain @click="loadReviews">重试</el-button>
+          </div>
+          <el-table v-else v-loading="reviewsLoading" :data="reviewRows" row-key="id" class="moderation-table">
             <el-table-column label="对象" min-width="190">
               <template #default="{ row }">
                 {{ row.targetType === 'song' ? '歌曲' : '歌单' }} · {{ row.targetTitle }}
@@ -112,7 +128,7 @@
               </template>
             </el-table-column>
           </el-table>
-          <div class="pagination-wrap">
+          <div v-if="!reviewsError" class="pagination-wrap">
             <el-pagination
               v-model:current-page="reviewPageNum"
               v-model:page-size="pageSize"
@@ -142,12 +158,16 @@ const reportStatus = ref(0)
 const reports = ref([])
 const reportTotal = ref(0)
 const reportsLoading = ref(false)
+const reportsError = ref(false)
+let reportsRequestId = 0
 const reviewPageNum = ref(1)
 const reviewStatus = ref('all')
 const targetType = ref('all')
 const reviewRows = ref([])
 const reviewTotal = ref(0)
 const reviewsLoading = ref(false)
+const reviewsError = ref(false)
+let reviewsRequestId = 0
 
 const reasonLabel = (reason) => ({
   spam: '垃圾信息 / 广告',
@@ -161,22 +181,32 @@ const reviewStatusLabel = (status) => ({ 0: '已隐藏', 1: '公开', 2: '作者
 const reviewStatusType = (status) => ({ 0: 'warning', 1: 'success', 2: 'info' })[status] || 'info'
 
 async function loadReports() {
+  const requestId = ++reportsRequestId
   reportsLoading.value = true
+  reportsError.value = false
   try {
     const result = await reviewApi.adminReportsPage({
       pageNum: reportPageNum.value,
       pageSize: pageSize.value,
       status: reportStatus.value
     })
+    if (requestId !== reportsRequestId) return
     reports.value = result?.records || []
     reportTotal.value = result?.total || 0
+  } catch {
+    if (requestId !== reportsRequestId) return
+    reports.value = []
+    reportTotal.value = 0
+    reportsError.value = true
   } finally {
-    reportsLoading.value = false
+    if (requestId === reportsRequestId) reportsLoading.value = false
   }
 }
 
 async function loadReviews() {
+  const requestId = ++reviewsRequestId
   reviewsLoading.value = true
+  reviewsError.value = false
   try {
     const params = {
       pageNum: reviewPageNum.value,
@@ -185,10 +215,16 @@ async function loadReviews() {
       ...(targetType.value === 'all' ? {} : { targetType: targetType.value })
     }
     const result = await reviewApi.adminPage(params)
+    if (requestId !== reviewsRequestId) return
     reviewRows.value = result?.records || []
     reviewTotal.value = result?.total || 0
+  } catch {
+    if (requestId !== reviewsRequestId) return
+    reviewRows.value = []
+    reviewTotal.value = 0
+    reviewsError.value = true
   } finally {
-    reviewsLoading.value = false
+    if (requestId === reviewsRequestId) reviewsLoading.value = false
   }
 }
 
@@ -254,6 +290,26 @@ onMounted(loadReports)
 .moderation-note :deep(.el-icon) {
   color: var(--holo-primary);
   flex: 0 0 auto;
+}
+.queue-load-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--el-color-danger) 32%, var(--border-color));
+  border-radius: 10px;
+  color: var(--text-sub);
+}
+.queue-load-error strong {
+  color: var(--text-main);
+  font-size: 13px;
+}
+.queue-load-error p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
 }
 .moderation-panel {
   min-width: 0;
