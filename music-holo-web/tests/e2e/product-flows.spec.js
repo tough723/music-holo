@@ -565,11 +565,13 @@ test('登录用户可屏蔽歌曲和歌手，自动播放与推荐跳过但手�
   await loginAs(page, 'demo')
   await expect(page.locator('.user-name')).toHaveText('演示用户')
   await openMenu(page, '歌曲')
+  await expect(page).toHaveURL(/\/songs$/)
 
-  const neonRow = page.locator('.el-table__row').filter({ hasText: '霓虹海' }).first()
+  const songPage = page.locator('.page').filter({ hasText: '发现好音乐，随时随地全息播放' })
+  const neonRow = songPage.locator('.el-table__row').filter({ hasText: '霓虹海' }).first()
   await expect(neonRow).toBeVisible()
   await neonRow.getByTestId('dislike-song-1').click()
-  await expect(page.getByTestId('dislike-status')).toHaveText('已不喜欢《霓虹海》，自动切歌和推荐会跳过')
+  await expect(songPage.getByTestId('dislike-status')).toHaveText('已不喜欢《霓虹海》，自动切歌和推荐会跳过')
   await expect(neonRow.getByTestId('dislike-song-1')).toHaveAttribute('data-disliked', 'true')
 
   await page.getByRole('button', { name: '播放全部' }).click()
@@ -586,10 +588,12 @@ test('登录用户可屏蔽歌曲和歌手，自动播放与推荐跳过但手�
   await expect(page.locator('.player-bar .pb-title')).toHaveText('霓虹海')
 
   await openMenu(page, '每日推荐')
-  const messengerRow = page.locator('.daily-list .el-table__row').filter({ hasText: '云端信使' })
+  await expect(page).toHaveURL(/\/daily$/)
+  const dailyPage = page.locator('.daily-page')
+  const messengerRow = dailyPage.locator('.daily-list .el-table__row').filter({ hasText: '云端信使' })
   await expect(messengerRow).toBeVisible()
   await messengerRow.getByTestId('dislike-song-2').click()
-  await expect(page.getByTestId('dislike-status')).toHaveText('已不喜欢《云端信使》，自动切歌和推荐会跳过')
+  await expect(dailyPage.getByTestId('dislike-status')).toHaveText('已不喜欢《云端信使》，自动切歌和推荐会跳过')
   await expect(messengerRow).toHaveCount(0)
 
   await openMenu(page, '歌手')
