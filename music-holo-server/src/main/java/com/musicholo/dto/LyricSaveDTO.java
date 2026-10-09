@@ -16,4 +16,7 @@ public class LyricSaveDTO implements Serializable {
 
     /** 歌词内容（LRC 格式文本） */
     private String lyric;
+
+    /** 可选译文歌词（LRC 格式文本） */
+    private String lyricTranslation;
 }

@@ -134,6 +134,24 @@ describe('本地音乐播放', () => {
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:music/night.wav')
   })
 
+  it('曲库歌曲独立加载译文，并在切换到无译文曲目时清空旧内容', async () => {
+    vi.spyOn(songApi, 'play').mockResolvedValue(undefined)
+    vi.spyOn(lyricApi, 'parse')
+      .mockResolvedValueOnce({
+        lines: [{ time: 0.5, text: '原歌词' }],
+        translationLines: [{ time: 0.5, text: 'translated lyric' }]
+      })
+      .mockResolvedValueOnce({ lines: [{ time: 1, text: '下一首' }], translationLines: [] })
+    const player = usePlayerStore()
+
+    await player.playSong({ id: 501, title: '双语测试' })
+    expect(player.lyrics).toEqual([{ time: 0.5, text: '原歌词' }])
+    expect(player.lyricTranslations).toEqual([{ time: 0.5, text: 'translated lyric' }])
+
+    await player.playSong({ id: 502, title: '无译文测试' })
+    expect(player.lyricTranslations).toEqual([])
+  })
+
   it('自定义源曲目只在内存播放，不写入持久队列或调用后端 API', async () => {
     const playRequest = vi.spyOn(songApi, 'play').mockResolvedValue(undefined)
     const lyricRequest = vi.spyOn(lyricApi, 'parse').mockResolvedValue({ lines: [] })
@@ -300,12 +318,38 @@ describe('内置 Mock API 集成测试', () => {
     expect(await queueApi.getQueue()).toEqual([])
   })
 
-  it('歌词解析按时间排序并返回可用于播放器的行结构', async () => {
+  it('歌词解析按时间排序并返回可同步显示的译文行', async () => {
     const result = await lyricApi.parse(1)
     expect(result).toMatchObject({ songId: 1, title: '霓虹海' })
     expect(result.lines.length).toBeGreaterThan(0)
     expect(result.lines[0]).toMatchObject({ time: 0.5, text: '霓虹亮起 城市开始呼吸' })
     expect(result.lines.every((line) => typeof line.time === 'number' && typeof line.text === 'string')).toBe(true)
+    expect(result.translationLines[0]).toMatchObject({ time: 0.5, text: 'Neon wakes, the city starts to breathe' })
+    expect(result.translationLines).toHaveLength(result.lines.length)
+  })
+
+  it('译文可独立编辑或上传；旧客户端省略字段不清除已有译文', async () => {
+    await loginAs('admin')
+    const original = await songApi.detail(1)
+    const uploadedTranslation = '[00:00.50]Uploaded translation\n[00:02.00]Second translated line'
+
+    try {
+      const { lyricTranslation, ...legacyUpdate } = original
+      await songApi.save(legacyUpdate)
+      expect((await songApi.detail(1)).lyricTranslation).toBe(lyricTranslation)
+
+      await lyricApi.save({ songId: 1, lyricTranslation: uploadedTranslation })
+      await lyricApi.save({ songId: 1, lyric: original.lyric })
+      expect((await songApi.detail(1)).lyricTranslation).toBe(uploadedTranslation)
+
+      await lyricApi.upload(1, new File([uploadedTranslation], 'translated.lrc', { type: 'text/plain' }), 'translation')
+      expect((await lyricApi.parse(1)).translationLines[0].text).toBe('Uploaded translation')
+
+      await lyricApi.save({ songId: 1, lyricTranslation: '' })
+      expect((await lyricApi.parse(1)).translationLines).toEqual([])
+    } finally {
+      await lyricApi.save({ songId: 1, lyric: original.lyric, lyricTranslation: original.lyricTranslation })
+    }
   })
 
   it('歌单支持创建、批量加歌、删歌和删除', async () => {
@@ -321,12 +365,17 @@ describe('内置 Mock API 集成测试', () => {
     await expect(playlistApi.detail(created.id)).rejects.toMatchObject({ code: 500 })
   })
 
-  it('全局搜索支持歌曲/歌词/歌手和公开歌单，并隐藏完整歌词正文', async () => {
+  it('全局搜索支持歌曲/原歌词/译文/歌手和公开歌单，并隐藏完整歌词正文', async () => {
     const result = await searchApi.search('霓虹', 12)
     expect(result.keyword).toBe('霓虹')
     expect(result.songs.some((song) => song.id === 1)).toBe(true)
     expect(result.playlists.some((playlist) => playlist.name === '深夜霓虹')).toBe(true)
     expect(result.songs[0]).not.toHaveProperty('lyric')
+    expect(result.songs[0]).not.toHaveProperty('lyricTranslation')
+
+    const translationMatch = await searchApi.search('Neon wakes', 12)
+    expect(translationMatch.songs.map((song) => song.id)).toContain(1)
+    expect(translationMatch.songs[0]).not.toHaveProperty('lyricTranslation')
   })
 
   it('专辑从现有歌曲聚合，可按歌手筛选并查询曲目', async () => {

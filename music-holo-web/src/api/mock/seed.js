@@ -41,6 +41,11 @@ export function createSeed() {
     '[00:00.50]戴上耳机 世界换了频道\n[00:02.00]全息投影 演一场独角戏\n[00:03.50]我在光里 你也在光里\n[00:05.00]音乐是通用的 语言\n[00:06.50]闭上眼 就能看见你\n[00:08.00]漫游到 梦的尽头'
   ]
 
+  const LYRIC_TRANSLATIONS = [
+    '[00:00.50]Neon wakes, the city starts to breathe\n[00:02.00]The sea breeze carries every worry away\n[00:03.50]Inside the hologram, I think of you\n[00:05.00]The image sways like the shape of longing\n[00:06.50]When the signal lights, I will say hello\n[00:08.00]Our next stop is a gentle universe',
+    null, null, null, null, null, null, null
+  ]
+
   const songMeta = [
     { title: '霓虹海', singerId: 1, categoryId: 1, album: '《霓虹海》', playCount: 12580 },
     { title: '云端信使', singerId: 2, categoryId: 1, album: '《云端信使》', playCount: 9860 },
@@ -59,6 +64,7 @@ export function createSeed() {
     cover: '',
     audioUrl: `/audio/song${i + 1}.wav`,
     lyric: LYRICS[i],
+    lyricTranslation: LYRIC_TRANSLATIONS[i],
     status: 1,
     createTime: '2026-01-01 10:00:00'
   }))

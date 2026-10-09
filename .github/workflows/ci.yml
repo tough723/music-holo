@@ -128,10 +128,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Exercise the additive migration against the initialized schema twice (no-op on an existing column).
+          docker compose exec -T mysql mysql -uroot -proot music_holo < sql/migration_20261009_lyric_translation.sql
+          docker compose exec -T mysql mysql -uroot -proot music_holo < sql/migration_20261009_lyric_translation.sql
           base=http://127.0.0.1:18088
           curl --fail --silent --show-error "$base/healthz" | grep -qx 'ok'
           curl --fail --silent --show-error "$base/api/system/theme" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 200'
           curl --fail --silent --show-error "$base/api/song/page?pageNum=1&pageSize=2" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and d["data"]["total"] > 0'
+          lyric_response=$(curl --fail --silent --show-error "$base/api/lyric/parse?songId=1")
+          if ! lyric_report=$(printf '%s' "$lyric_response" | python3 -c 'import json,sys; d=json.load(sys.stdin); data=d.get("data", {}); ok=d.get("code") == 200 and len(data.get("lines", [])) > 0 and data.get("translationLines", [{}])[0].get("text") == "Neon wakes, the city starts to breathe"; print("OK" if ok else json.dumps(d, ensure_ascii=False)); sys.exit(0 if ok else 1)' 2>&1); then
+            echo "::error title=Bilingual lyric API smoke failed::$(printf '%s' "$lyric_report" | tr '\n' ' ')"
+            exit 1
+          fi
+          translation_search=$(curl --fail --silent --show-error "$base/api/search?keyword=Neon%20wakes&limit=8")
+          if ! translation_search_report=$(printf '%s' "$translation_search" | python3 -c 'import json,sys; d=json.load(sys.stdin); songs=d.get("data", {}).get("songs", []); ok=d.get("code") == 200 and any(row.get("id") == 1 for row in songs) and all(row.get("lyricTranslation") in (None, "") for row in songs); print("OK" if ok else json.dumps(d, ensure_ascii=False)); sys.exit(0 if ok else 1)' 2>&1); then
+            echo "::error title=Translation search API smoke failed::$(printf '%s' "$translation_search_report" | tr '\n' ' ')"
+            exit 1
+          fi
           album_response=$(curl --fail --silent --show-error "$base/api/album/page?pageNum=1&pageSize=2")
           if ! album_report=$(printf '%s' "$album_response" | python3 -c 'import json,sys; d=json.load(sys.stdin); ok=d["code"] == 200 and d["data"]["total"] > 0 and all(row["album"] and row["songCount"] > 0 for row in d["data"]["records"]); print("OK" if ok else json.dumps(d, ensure_ascii=False)); sys.exit(0 if ok else 1)' 2>&1); then
             echo "::error title=Album API smoke failed::$(printf '%s' "$album_report" | tr '\n' ' ')"

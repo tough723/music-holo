@@ -26,6 +26,16 @@
             </div>
           </div>
           <div class="lyric-actions">
+            <el-button
+              v-if="hasTranslations"
+              text
+              size="small"
+              class="translation-toggle"
+              :aria-pressed="showTranslation"
+              @click="showTranslation = !showTranslation"
+            >
+              {{ showTranslation ? '隐藏译文' : '显示译文' }}
+            </el-button>
             <el-tooltip :content="immersive ? '退出沉浸模式' : '沉浸式歌词'" placement="top">
               <el-button circle text :aria-label="immersive ? '退出沉浸模式' : '进入沉浸模式'" @click="toggleImmersive">
                 <el-icon><ScaleToOriginal v-if="immersive" /><FullScreen v-else /></el-icon>
@@ -78,7 +88,12 @@
                 @click="seekTo(line.time)"
               >
                 <span class="line-time">{{ fmtDuration(line.time) }}</span>
-                <span class="line-copy">{{ line.text || '♪' }}</span>
+                <span class="line-content">
+                  <span class="line-copy">{{ line.text || '♪' }}</span>
+                  <span v-if="showTranslation && alignedTranslations[index]" class="line-translation">
+                    {{ alignedTranslations[index] }}
+                  </span>
+                </span>
                 <span class="line-rail"><i></i></span>
               </button>
             </div>
@@ -129,6 +144,7 @@ import Cover from './Cover.vue'
 const playerStore = usePlayerStore()
 const bodyRef = ref(null)
 const immersive = ref(false)
+const showTranslation = ref(true)
 const offsetY = ref(0)
 const seekPreview = ref(0)
 const scrubbing = ref(false)
@@ -144,8 +160,30 @@ const activeIndex = computed(() => {
   return index
 })
 
+const alignedTranslations = computed(() => {
+  const originals = playerStore.lyrics
+  const translations = playerStore.lyricTranslations
+  if (!originals.length || !translations.length) return []
+
+  let cursor = 0
+  return originals.map((line) => {
+    const time = Number(line.time)
+    while (cursor + 1 < translations.length) {
+      const currentDistance = Math.abs(Number(translations[cursor]?.time) - time)
+      const nextDistance = Math.abs(Number(translations[cursor + 1]?.time) - time)
+      if (nextDistance > currentDistance) break
+      cursor++
+    }
+    const match = translations[cursor]
+    return match && Math.abs(Number(match.time) - time) <= 1.25 ? (match.text || '') : ''
+  })
+})
+const hasTranslations = computed(() => alignedTranslations.value.some((text) => String(text || '').trim()))
 const viewportWidth = ref(typeof window === 'undefined' ? 1280 : window.innerWidth)
-const rowHeight = computed(() => immersive.value ? (viewportWidth.value <= 640 ? 60 : 78) : 50)
+const rowHeight = computed(() => {
+  const baseHeight = immersive.value ? (viewportWidth.value <= 640 ? 60 : 78) : 50
+  return baseHeight + (showTranslation.value && hasTranslations.value ? 20 : 0)
+})
 
 const activeProgress = computed(() => {
   const index = activeIndex.value
@@ -160,6 +198,7 @@ const lineStyle = (index) => {
   const distance = index - Math.max(0, activeIndex.value)
   const absDistance = Math.abs(distance)
   return {
+    '--row-height': `${rowHeight.value}px`,
     '--line-distance': distance,
     '--line-lift': `${Math.max(-18, Math.min(18, distance * 2.5))}px`,
     '--line-depth': `${Math.max(-150, 20 - absDistance * 27)}px`,
@@ -338,6 +377,12 @@ onUnmounted(() => {
   align-items: center;
   gap: 2px;
 }
+.translation-toggle {
+  min-width: 0;
+  padding: 5px 7px;
+  color: var(--holo-primary);
+  font-size: 10px;
+}
 .lyric-layout {
   position: relative;
   display: flex;
@@ -457,8 +502,8 @@ onUnmounted(() => {
 .lyric-line {
   position: relative;
   width: 100%;
-  height: 50px;
-  flex: 0 0 50px;
+  height: var(--row-height, 50px);
+  flex: 0 0 var(--row-height, 50px);
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr);
   align-items: center;
@@ -489,6 +534,14 @@ onUnmounted(() => {
   text-align: right;
   opacity: 0.65;
 }
+.line-content {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  overflow: hidden;
+}
 .line-copy {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -497,6 +550,21 @@ onUnmounted(() => {
   line-height: 1.45;
   letter-spacing: 0.15px;
   transition: color 0.3s ease, font-size 0.3s ease, filter 0.3s ease;
+}
+.line-translation {
+  overflow: hidden;
+  color: color-mix(in srgb, var(--holo-primary) 68%, var(--text-sub));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  line-height: 1.2;
+  letter-spacing: 0.08px;
+  opacity: 0.82;
+}
+.lyric-line.active .line-translation {
+  color: color-mix(in srgb, var(--holo-primary) 76%, #fff);
+  opacity: 0.95;
+  text-shadow: 0 0 12px var(--holo-glow);
 }
 .line-rail {
   position: absolute;
@@ -809,8 +877,8 @@ onUnmounted(() => {
   padding: 0 5%;
 }
 .lyric-panel.immersive .lyric-line {
-  height: 78px;
-  flex-basis: 78px;
+  height: var(--row-height, 78px);
+  flex-basis: var(--row-height, 78px);
   grid-template-columns: 54px minmax(0, 1fr);
   gap: 16px;
   padding: 0 14px;
@@ -818,6 +886,9 @@ onUnmounted(() => {
 .lyric-panel.immersive .line-copy {
   font-size: 19px;
   letter-spacing: 0.35px;
+}
+.lyric-panel.immersive .line-translation {
+  font-size: 14px;
 }
 .lyric-panel.immersive .lyric-line.active .line-copy {
   font-size: clamp(22px, 2.25vw, 34px);
@@ -952,14 +1023,17 @@ onUnmounted(() => {
     padding: 0 2px;
   }
   .lyric-panel.immersive .lyric-line {
-    height: 60px;
-    flex-basis: 60px;
+    height: var(--row-height, 60px);
+    flex-basis: var(--row-height, 60px);
     grid-template-columns: 34px minmax(0, 1fr);
     gap: 7px;
     padding: 0 4px;
   }
   .lyric-panel.immersive .line-copy {
     font-size: 14px;
+  }
+  .lyric-panel.immersive .line-translation {
+    font-size: 10px;
   }
   .lyric-panel.immersive .lyric-line.active .line-copy {
     font-size: clamp(17px, 5vw, 24px);

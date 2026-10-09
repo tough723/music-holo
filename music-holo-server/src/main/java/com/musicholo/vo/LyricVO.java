@@ -15,6 +15,9 @@ public class LyricVO implements Serializable {
 
     private String title;
 
-    /** 按时间升序排列的歌词行 */
+    /** 按时间升序排列的原歌词行 */
     private List<LyricLine> lines;
+
+    /** 按时间升序排列的译文歌词行；无译文时为空数组 */
+    private List<LyricLine> translationLines;
 }

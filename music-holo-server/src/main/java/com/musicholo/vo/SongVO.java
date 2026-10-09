@@ -37,6 +37,9 @@ public class SongVO implements Serializable {
     /** 歌词内容（LRC 格式文本，列表接口不返回，详情接口返回） */
     private String lyric;
 
+    /** 译文歌词（LRC 格式文本，列表接口不返回，详情接口返回） */
+    private String lyricTranslation;
+
     private Integer status;
 
     private Long playCount;

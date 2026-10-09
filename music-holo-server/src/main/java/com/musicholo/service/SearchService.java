@@ -60,7 +60,8 @@ public class SearchService {
                 .and(w -> {
                     w.like(Song::getTitle, keyword)
                             .or().like(Song::getAlbum, keyword)
-                            .or().like(Song::getLyric, keyword);
+                            .or().like(Song::getLyric, keyword)
+                            .or().like(Song::getLyricTranslation, keyword);
                     if (!singerIds.isEmpty()) {
                         w.or().in(Song::getSingerId, singerIds);
                     }

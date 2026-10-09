@@ -81,7 +81,8 @@ CREATE TABLE `song` (
   `duration`    INT          DEFAULT 0               COMMENT '时长（秒）',
   `cover`       VARCHAR(255) DEFAULT NULL            COMMENT '封面地址',
   `audio_url`   VARCHAR(500) DEFAULT NULL            COMMENT '音频地址',
-  `lyric`       TEXT                                 COMMENT '歌词内容（LRC 格式）',
+  `lyric`       TEXT                                 COMMENT '原歌词内容（LRC 格式）',
+  `lyric_translation` TEXT                           COMMENT '译文歌词内容（LRC 格式）',
   `status`      TINYINT      DEFAULT 1               COMMENT '状态：0下架 1正常',
   `play_count`  BIGINT       DEFAULT 0               COMMENT '播放量',
   `deleted`     TINYINT      DEFAULT 0               COMMENT '逻辑删除',
@@ -344,6 +345,16 @@ INSERT INTO `song` (`id`, `title`, `singer_id`, `category_id`, `album`, `duratio
 [00:05.00]音乐是通用的 语言
 [00:06.50]闭上眼 就能看见你
 [00:08.00]漫游到 梦的尽头', 1, 6210, NOW(), NOW());
+
+-- 双语歌词演示：译文时间标签与原歌词对应，便于演示播放器的同步开关。
+UPDATE `song` SET `lyric_translation` =
+'[00:00.50]Neon wakes, the city starts to breathe
+[00:02.00]The sea breeze carries every worry away
+[00:03.50]Inside the hologram, I think of you
+[00:05.00]The image sways like the shape of longing
+[00:06.50]When the signal lights, I will say hello
+[00:08.00]Our next stop is a gentle universe'
+WHERE `id` = 1;
 
 -- 歌单
 INSERT INTO `playlist` (`id`, `name`, `description`, `creator_id`, `is_public`, `play_count`, `create_time`, `update_time`) VALUES

@@ -75,6 +75,22 @@ const num = (v, def = 0) => {
   return Number.isFinite(n) ? n : def
 }
 
+function readTextFile(file) {
+  if (typeof file?.text === 'function') return file.text()
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(reader.error || new Error('文件读取失败'))
+    reader.readAsText(file)
+  })
+}
+
+function validateLrcSize(lrc) {
+  if (lrc != null && new TextEncoder().encode(String(lrc)).length > 65_535) {
+    throw mockError(500, '单份 LRC 文本不能超过 64 KB')
+  }
+}
+
 // ------------------------------------------------------------
 // VO 组装
 // ------------------------------------------------------------
@@ -92,6 +108,13 @@ function songVO(song) {
     categoryName: category?.name || '',
     favorite: false
   }
+}
+
+function songListVO(song) {
+  const vo = songVO(song)
+  delete vo.lyric
+  delete vo.lyricTranslation
+  return vo
 }
 
 function singerVO(singer) {
@@ -374,7 +397,7 @@ route('get', '/singer/:id/songs', async (ctx) => {
   return state.songs
     .filter((s) => s.singerId === id)
     .sort((a, b) => b.playCount - a.playCount)
-    .map(songVO)
+    .map(songListVO)
 })
 
 route('post', '/singer', async (ctx) => {
@@ -441,8 +464,7 @@ route('get', '/album/songs', async (ctx) => {
   const tracks = albumTracks(album, singerId)
   if (!tracks.length) throw mockError(404, '专辑不存在或已下架')
   return tracks.map((song) => {
-    const vo = songVO(song)
-    delete vo.lyric
+    const vo = songListVO(song)
     if (ctx.user) vo.favorite = state.favorites.some((favorite) => favorite.userId === ctx.user.id && favorite.songId === song.id)
     return vo
   })
@@ -459,11 +481,7 @@ route('get', '/song/page', async (ctx) => {
   if (singerId) list = list.filter((s) => s.singerId === num(singerId))
   list.sort((a, b) => b.playCount - a.playCount || b.id - a.id)
   const paged = pageOf(list, num(pageNum, 1), num(pageSize, 10))
-  paged.records = paged.records.map((s) => {
-    const vo = songVO(s)
-    delete vo.lyric // 列表不返回歌词
-    return vo
-  })
+  paged.records = paged.records.map(songListVO)
   return paged
 })
 
@@ -482,13 +500,13 @@ route('get', '/search', async (ctx) => {
       s.title.toLocaleLowerCase().includes(q) ||
       (s.album || '').toLocaleLowerCase().includes(q) ||
       (s.lyric || '').toLocaleLowerCase().includes(q) ||
+      (s.lyricTranslation || '').toLocaleLowerCase().includes(q) ||
       singerIds.has(s.singerId)
     ))
     .sort((a, b) => b.playCount - a.playCount || b.id - a.id)
     .slice(0, limit)
     .map((song) => {
-      const vo = songVO(song)
-      delete vo.lyric
+      const vo = songListVO(song)
       if (ctx.user) vo.favorite = state.favorites.some((f) => f.userId === ctx.user.id && f.songId === song.id)
       return vo
     })
@@ -524,11 +542,7 @@ route('get', '/recommend/songs', async (ctx) => {
   const score = (song) => (singerWeights.get(song.singerId) || 0) * 5 +
     (categoryWeights.get(song.categoryId) || 0) * 3 + Math.log1p(song.playCount || 0) / 20
   list.sort((a, b) => score(b) - score(a) || b.playCount - a.playCount || b.id - a.id)
-  return list.slice(0, limit).map((song) => {
-    const vo = songVO(song)
-    delete vo.lyric
-    return vo
-  })
+  return list.slice(0, limit).map(songListVO)
 })
 
 route('get', '/recommend/similar', async (ctx) => {
@@ -542,8 +556,7 @@ route('get', '/recommend/similar', async (ctx) => {
     (song.categoryId === source.categoryId ? 3 : 0) + Math.log1p(song.playCount || 0) / 20
   candidates.sort((a, b) => score(b) - score(a) || b.playCount - a.playCount || b.id - a.id)
   return candidates.slice(0, limit).map((song) => {
-    const vo = songVO(song)
-    delete vo.lyric
+    const vo = songListVO(song)
     if (ctx.user) vo.favorite = state.favorites.some((favorite) => favorite.userId === ctx.user.id && favorite.songId === song.id)
     return vo
   })
@@ -562,6 +575,8 @@ route('get', '/song/:id', async (ctx) => {
 route('post', '/song', async (ctx) => {
   requireAdmin(ctx)
   const dto = ctx.body
+  validateLrcSize(dto.lyric)
+  validateLrcSize(dto.lyricTranslation)
   const song = {
     id: state.genId(),
     title: dto.title,
@@ -572,6 +587,7 @@ route('post', '/song', async (ctx) => {
     cover: dto.cover || '',
     audioUrl: dto.audioUrl,
     lyric: dto.lyric || '',
+    lyricTranslation: dto.lyricTranslation ?? '',
     status: dto.status ?? 1,
     playCount: 0,
     createTime: new Date().toISOString().slice(0, 19).replace('T', ' ')
@@ -583,6 +599,8 @@ route('post', '/song', async (ctx) => {
 route('put', '/song', async (ctx) => {
   requireAdmin(ctx)
   const dto = ctx.body
+  validateLrcSize(dto.lyric)
+  validateLrcSize(dto.lyricTranslation)
   const song = state.songs.find((s) => s.id === num(dto.id))
   if (!song) throw mockError(500, '歌曲不存在')
   Object.assign(song, {
@@ -594,6 +612,7 @@ route('put', '/song', async (ctx) => {
     cover: dto.cover ?? song.cover,
     audioUrl: dto.audioUrl,
     lyric: dto.lyric ?? song.lyric,
+    lyricTranslation: dto.lyricTranslation ?? song.lyricTranslation,
     status: dto.status ?? song.status
   })
   return songVO(song)
@@ -705,7 +724,7 @@ route('get', '/playlist/:id/songs', async (ctx) => {
   const result = []
   for (const rel of relations) {
     const song = state.songs.find((s) => s.id === rel.songId)
-    if (song) result.push(songVO(song))
+    if (song) result.push(songListVO(song))
   }
   return result
 })
@@ -969,7 +988,7 @@ route('get', '/play/queue', async (ctx) => {
   return queueOf(user.id)
     .map((id) => state.songs.find((s) => s.id === id))
     .filter(Boolean)
-    .map(songVO)
+    .map(songListVO)
 })
 
 route('post', '/play/queue/add', async (ctx) => {
@@ -1023,8 +1042,7 @@ route('get', '/history/page', async (ctx) => {
     .map((row) => {
       const song = state.songs.find((item) => item.id === row.songId)
       if (!song || song.status !== 1) return null
-      const vo = songVO(song)
-      delete vo.lyric
+      const vo = songListVO(song)
       vo.personalPlayCount = row.playCount
       vo.lastPlayedAt = row.lastPlayedAt
       vo.favorite = state.favorites.some((f) => f.userId === user.id && f.songId === song.id)
@@ -1051,21 +1069,33 @@ route('delete', '/history/:songId', async (ctx) => {
 route('get', '/lyric/parse', async (ctx) => {
   const song = state.songs.find((s) => s.id === num(ctx.params.songId))
   if (!song) throw mockError(500, '歌曲不存在')
-  return { songId: song.id, title: song.title, lines: parseLrc(song.lyric) }
+  return {
+    songId: song.id,
+    title: song.title,
+    lines: parseLrc(song.lyric),
+    translationLines: parseLrc(song.lyricTranslation)
+  }
 })
 
 route('get', '/lyric/export', async (ctx) => {
   const song = state.songs.find((s) => s.id === num(ctx.params.songId))
   if (!song) throw mockError(500, '歌曲不存在')
-  return new Blob([toLrc(parseLrc(song.lyric))], { type: 'text/plain;charset=utf-8' })
+  const variant = String(ctx.params.variant || 'original').toLowerCase()
+  if (!['original', 'translation'].includes(variant)) throw mockError(400, '歌词类型无效')
+  const lrc = variant === 'translation' ? song.lyricTranslation : song.lyric
+  return new Blob([toLrc(parseLrc(lrc))], { type: 'text/plain;charset=utf-8' })
 })
 
 route('put', '/lyric', async (ctx) => {
   requireUser(ctx)
-  const { songId, lyric } = ctx.body
+  const { songId, lyric, lyricTranslation } = ctx.body
+  validateLrcSize(lyric)
+  validateLrcSize(lyricTranslation)
   const song = state.songs.find((s) => s.id === num(songId))
   if (!song) throw mockError(500, '歌曲不存在')
-  song.lyric = lyric || ''
+  // 未提交字段时保持原值；提交空字符串才显式清空。
+  if (lyric != null) song.lyric = lyric
+  if (lyricTranslation != null) song.lyricTranslation = lyricTranslation
   return null
 })
 
@@ -1075,7 +1105,14 @@ route('post', '/lyric/upload', async (ctx) => {
   const song = state.songs.find((s) => s.id === songId)
   if (!song) throw mockError(500, '歌曲不存在')
   if (!ctx.file) throw mockError(500, '上传文件不能为空')
-  song.lyric = await ctx.file.text()
+  const extension = String(ctx.file.name || '').split('.').pop().toLowerCase()
+  if (!['lrc', 'txt'].includes(extension)) throw mockError(500, '仅支持 .lrc / .txt 歌词文件')
+  if (ctx.file.size > 65_535) throw mockError(500, '单份 LRC 文本不能超过 64 KB')
+  const variant = String(ctx.params.variant || 'original').toLowerCase()
+  if (!['original', 'translation'].includes(variant)) throw mockError(400, '歌词类型无效')
+  const lrc = await readTextFile(ctx.file)
+  if (variant === 'translation') song.lyricTranslation = lrc
+  else song.lyric = lrc
   return null
 })
 
@@ -1106,8 +1143,7 @@ route('get', '/favorite/page', async (ctx) => {
     .filter(Boolean)
   const paged = pageOf(list, num(pageNum, 1), num(pageSize, 10))
   paged.records = paged.records.map((s) => {
-    const vo = songVO(s)
-    delete vo.lyric
+    const vo = songListVO(s)
     vo.favorite = true
     return vo
   })

@@ -121,17 +121,32 @@
               v-model="form.lyric"
               type="textarea"
               :rows="5"
+              :disabled="lyricLoading"
               placeholder="LRC 格式歌词，如 [00:01.00]第一句歌词"
             />
-            <el-upload :show-file-list="false" :http-request="onUploadLyric" accept=".lrc,.txt">
-              <el-button>上传 .lrc</el-button>
+            <el-upload :show-file-list="false" :http-request="onUploadLyric" accept=".lrc,.txt" :disabled="lyricLoading">
+              <el-button>上传原歌词 .lrc</el-button>
+            </el-upload>
+          </div>
+        </el-form-item>
+        <el-form-item label="译文歌词">
+          <div class="lyric-row">
+            <el-input
+              v-model="form.lyricTranslation"
+              type="textarea"
+              :rows="4"
+              :disabled="lyricLoading"
+              placeholder="可选 LRC 译文；建议与原歌词使用对应时间标签"
+            />
+            <el-upload :show-file-list="false" :http-request="onUploadLyricTranslation" accept=".lrc,.txt" :disabled="lyricLoading">
+              <el-button>上传译文 .lrc</el-button>
             </el-upload>
           </div>
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="onSave">保存</el-button>
+        <el-button type="primary" :loading="saving || lyricLoading" :disabled="lyricLoadFailed" @click="onSave">保存</el-button>
       </template>
     </el-dialog>
   </div>
@@ -163,6 +178,9 @@ const singers = ref([])
 
 const dialogVisible = ref(false)
 const saving = ref(false)
+const lyricLoading = ref(false)
+const lyricLoadFailed = ref(false)
+let lyricRequestId = 0
 const form = reactive({
   id: null,
   title: '',
@@ -173,6 +191,7 @@ const form = reactive({
   cover: '',
   audioUrl: '',
   lyric: '',
+  lyricTranslation: '',
   status: 1
 })
 
@@ -203,14 +222,20 @@ const loadOptions = async () => {
 }
 
 const openAdd = () => {
+  lyricRequestId++
+  lyricLoading.value = false
+  lyricLoadFailed.value = false
   Object.assign(form, {
     id: null, title: '', singerId: null, categoryId: null, album: '',
-    duration: 10, cover: '', audioUrl: '', lyric: '', status: 1
+    duration: 10, cover: '', audioUrl: '', lyric: '', lyricTranslation: '', status: 1
   })
   dialogVisible.value = true
 }
 
 const openEdit = (row) => {
+  const requestId = ++lyricRequestId
+  lyricLoading.value = true
+  lyricLoadFailed.value = false
   Object.assign(form, {
     id: row.id,
     title: row.title,
@@ -221,12 +246,21 @@ const openEdit = (row) => {
     cover: row.cover || '',
     audioUrl: row.audioUrl || '',
     lyric: '',
+    lyricTranslation: '',
     status: row.status ?? 1
   })
-  // 编辑时单独拉取歌词，避免列表接口不返回歌词
+  // 编辑时单独拉取原歌词与译文，避免列表接口返回大段 LRC 正文。
   songApi.detail(row.id).then((detail) => {
+    if (requestId !== lyricRequestId) return
     form.lyric = detail.lyric || ''
-  }).catch(() => {})
+    form.lyricTranslation = detail.lyricTranslation || ''
+  }).catch(() => {
+    if (requestId !== lyricRequestId) return
+    lyricLoadFailed.value = true
+    ElMessage.error('原歌词和译文加载失败，请关闭后重新打开以免覆盖已有内容')
+  }).finally(() => {
+    if (requestId === lyricRequestId) lyricLoading.value = false
+  })
   dialogVisible.value = true
 }
 
@@ -254,10 +288,17 @@ const onUploadCover = async ({ file }) => {
 const onUploadLyric = async ({ file }) => {
   const text = await file.text()
   form.lyric = text
-  ElMessage.success('歌词文件已读取，保存后生效')
+  ElMessage.success('原歌词文件已读取，保存后生效')
+}
+
+const onUploadLyricTranslation = async ({ file }) => {
+  const text = await file.text()
+  form.lyricTranslation = text
+  ElMessage.success('译文歌词文件已读取，保存后生效')
 }
 
 const onSave = async () => {
+  if (lyricLoading.value || lyricLoadFailed.value) return
   if (!form.title || !form.singerId || !form.categoryId || !form.audioUrl) {
     ElMessage.warning('请填写标题、歌手、分类与音频地址')
     return

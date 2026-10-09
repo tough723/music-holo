@@ -40,23 +40,27 @@ public class LyricController {
 
     @Operation(summary = "导出歌曲歌词（.lrc 文件下载）")
     @GetMapping("/export")
-    public void export(@RequestParam Long songId, HttpServletResponse response) throws IOException {
-        lyricService.export(songId, response);
+    public void export(@RequestParam Long songId,
+                       @RequestParam(defaultValue = "original") String variant,
+                       HttpServletResponse response) throws IOException {
+        lyricService.export(songId, variant, response);
     }
 
     @Operation(summary = "保存歌曲歌词（覆盖）")
     @SaCheckLogin
     @PutMapping
     public Result<Void> save(@Validated @RequestBody LyricSaveDTO dto) {
-        lyricService.save(dto.getSongId(), dto.getLyric());
+        lyricService.save(dto.getSongId(), dto.getLyric(), dto.getLyricTranslation());
         return Result.success();
     }
 
     @Operation(summary = "上传歌词文件（.lrc / .txt，覆盖歌曲歌词）")
     @SaCheckLogin
     @PostMapping("/upload")
-    public Result<Void> upload(@RequestParam Long songId, MultipartFile file) throws IOException {
-        lyricService.upload(songId, file);
+    public Result<Void> upload(@RequestParam Long songId,
+                               @RequestParam(defaultValue = "original") String variant,
+                               MultipartFile file) throws IOException {
+        lyricService.upload(songId, file, variant);
         return Result.success();
     }
 }

@@ -47,6 +47,9 @@ public class Song implements Serializable {
     /** 歌词内容（LRC 格式文本） */
     private String lyric;
 
+    /** 歌词译文（独立 LRC 文本，按时间标签与原歌词对齐） */
+    private String lyricTranslation;
+
     /** 状态：0下架 1正常 */
     private Integer status;
 

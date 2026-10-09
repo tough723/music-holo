@@ -98,8 +98,10 @@ export const usePlayerStore = defineStore('player', {
       playing: false,
       volume: typeof saved.volume === 'number' && Number.isFinite(saved.volume) ? Math.max(0, Math.min(1, saved.volume)) : 0.8,
       mode: MODES.some((mode) => mode.key === saved.mode) ? saved.mode : 'order',
-      /** 歌词 */
+      /** 原歌词与可选译文歌词 */
       lyrics: [],
+      lyricTranslations: [],
+      lyricLoadRequestId: 0,
       lyricVisible: false,
       /** 播放进度（秒，由播放器组件实时更新） */
       currentTime: 0,
@@ -260,7 +262,9 @@ export const usePlayerStore = defineStore('player', {
       if (this.queue.length === 0) {
         this.currentIndex = -1
         this.playing = false
+        this.lyricLoadRequestId++
         this.lyrics = []
+        this.lyricTranslations = []
         persist(this)
         return
       }
@@ -277,7 +281,9 @@ export const usePlayerStore = defineStore('player', {
         if (wasPlaying) {
           this.playAt(this.currentIndex)
         } else {
+          this.lyricLoadRequestId++
           this.lyrics = []
+          this.lyricTranslations = []
         }
       }
     },
@@ -288,7 +294,9 @@ export const usePlayerStore = defineStore('player', {
       this.queue = []
       this.currentIndex = -1
       this.playing = false
+      this.lyricLoadRequestId++
       this.lyrics = []
+      this.lyricTranslations = []
       persist(this)
       releaseLocalSongs(previousQueue)
     },
@@ -351,21 +359,28 @@ export const usePlayerStore = defineStore('player', {
       persist(this)
       return true
     },
-    /** 加载当前歌曲歌词 */
+    /** 加载当前歌曲的原歌词与时间对齐译文 */
     async loadLyrics(song) {
+      const requestId = ++this.lyricLoadRequestId
       if (song?.isCustomSource) {
         this.lyrics = Array.isArray(song.customLyrics) ? song.customLyrics : []
+        this.lyricTranslations = Array.isArray(song.customTranslationLyrics) ? song.customTranslationLyrics : []
         return
       }
       if (!song?.id || song.isLocal) {
         this.lyrics = []
+        this.lyricTranslations = []
         return
       }
       try {
         const res = await lyricApi.parse(song.id)
-        this.lyrics = res?.lines || []
+        if (requestId !== this.lyricLoadRequestId) return
+        this.lyrics = Array.isArray(res?.lines) ? res.lines : []
+        this.lyricTranslations = Array.isArray(res?.translationLines) ? res.translationLines : []
       } catch (e) {
+        if (requestId !== this.lyricLoadRequestId) return
         this.lyrics = []
+        this.lyricTranslations = []
       }
     },
     toggleLyric() {

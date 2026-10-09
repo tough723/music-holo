@@ -18,12 +18,16 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
+
 /**
  * 歌曲服务：增删改查、播放（播放量统计）
  */
 @Service
 @RequiredArgsConstructor
 public class SongService {
+
+    private static final int MAX_LRC_BYTES = 65_535;
 
     private final SongMapper songMapper;
     private final SingerMapper singerMapper;
@@ -76,6 +80,8 @@ public class SongService {
         if (categoryMapper.selectById(dto.getCategoryId()) == null) {
             throw new BusinessException("歌曲分类不存在");
         }
+        validateLrcSize(dto.getLyric());
+        validateLrcSize(dto.getLyricTranslation());
         Song song;
         if (dto.getId() == null) {
             song = new Song();
@@ -95,12 +101,21 @@ public class SongService {
         song.setCover(dto.getCover());
         song.setAudioUrl(dto.getAudioUrl());
         song.setLyric(dto.getLyric());
+        if (dto.getId() == null || dto.getLyricTranslation() != null) {
+            song.setLyricTranslation(dto.getLyricTranslation());
+        }
         if (dto.getId() == null) {
             songMapper.insert(song);
         } else {
             songMapper.updateById(song);
         }
         return songAssembler.toVO(song);
+    }
+
+    private void validateLrcSize(String lrc) {
+        if (lrc != null && lrc.getBytes(StandardCharsets.UTF_8).length > MAX_LRC_BYTES) {
+            throw new BusinessException("单份 LRC 文本不能超过 64 KB");
+        }
     }
 
     /**

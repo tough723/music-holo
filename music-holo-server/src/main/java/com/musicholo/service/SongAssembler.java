@@ -30,7 +30,10 @@ public class SongAssembler {
         if (song == null) {
             return null;
         }
-        return toVOList(List.of(song)).get(0);
+        SongVO vo = toVOList(List.of(song)).get(0);
+        vo.setLyric(song.getLyric());
+        vo.setLyricTranslation(song.getLyricTranslation());
+        return vo;
     }
 
     public List<SongVO> toVOList(List<Song> songs) {
@@ -55,7 +58,7 @@ public class SongAssembler {
             vo.setDuration(song.getDuration());
             vo.setCover(song.getCover());
             vo.setAudioUrl(song.getAudioUrl());
-            vo.setLyric(song.getLyric());
+            // List endpoints stay lightweight; detail() explicitly attaches both LRC texts.
             vo.setStatus(song.getStatus());
             vo.setPlayCount(song.getPlayCount());
             vo.setFavorite(false);

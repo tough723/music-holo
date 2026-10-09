@@ -38,6 +38,9 @@ public class SongSaveDTO implements Serializable {
     /** 歌词（LRC 格式文本） */
     private String lyric;
 
+    /** 可选译文歌词（独立 LRC 格式） */
+    private String lyricTranslation;
+
     /** 状态：0下架 1正常 */
     private Integer status;
 }

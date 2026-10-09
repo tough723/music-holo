@@ -103,7 +103,8 @@ music-holo/
 ├── sql/
 │   ├── music_holo.sql          # 全新安装：建库建表 + 种子数据（内置 admin/123456、demo/123456）
 │   ├── migration_20261008_play_history.sql # 已部署数据库增量升级：最近播放表
-│   └── migration_20261009_music_reviews.sql # 已部署数据库增量升级：短评、点赞与举报审核表
+│   ├── migration_20261009_music_reviews.sql # 已部署数据库增量升级：短评、点赞与举报审核表
+│   └── migration_20261009_lyric_translation.sql # 已部署数据库增量升级：双语歌词译文列
 ├── music-holo-server/          # 后端（Spring Boot 3.2）
 │   ├── pom.xml
 │   └── src/main/
@@ -169,9 +170,10 @@ docker compose up -d mysql redis
 ```bash
 mysql -uroot -proot music_holo < sql/migration_20261008_play_history.sql
 mysql -uroot -proot music_holo < sql/migration_20261009_music_reviews.sql
+mysql -uroot -proot music_holo < sql/migration_20261009_lyric_translation.sql
 ```
 
-迁移均使用 `CREATE TABLE IF NOT EXISTS`；若目标表已存在，可安全跳过对应迁移。
+表迁移使用 `CREATE TABLE IF NOT EXISTS`；双语歌词迁移通过 `INFORMATION_SCHEMA` 检查后补列，均可安全重复执行。
 
 ### 启动后端
 
@@ -203,7 +205,7 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-Playwright 当前覆盖 17 个浏览器测试场景：游客搜索并播放、同源空间音效开关、系统媒体控制同步、导航分组/桌面折叠持久化/中等屏幕收窄/窄屏抽屉、demo 收藏与个人播放历史、设置页主题/资料/密码校验、自定义源文件导入/元数据/排序/导出/HTTPS URL 导入、显式同意后的隔离 Worker 初始化检测，以及曲库歌曲自定义源解析/音质选择/歌词封面匿名 CORS 播放、专辑详情与整张播放、相似歌曲电台播放、每日推荐筛选播放、公开歌单分享回退、本地音频导入与窄屏滚动时播放器固定、短评发布/举报/管理员隐藏/作者查看说明、管理员仪表盘。
+Playwright 当前覆盖 18 个浏览器测试场景：游客搜索并播放、同源空间音效开关、系统媒体控制同步、导航分组/桌面折叠持久化/中等屏幕收窄/窄屏抽屉、demo 收藏与个人播放历史、设置页主题/资料/密码校验、自定义源文件导入/元数据/排序/导出/HTTPS URL 导入、显式同意后的隔离 Worker 初始化检测，以及曲库歌曲自定义源解析/音质选择/歌词封面匿名 CORS 播放、管理员上传译文后播放器同步切换双语 LRC、专辑详情与整张播放、相似歌曲电台播放、每日推荐筛选播放、公开歌单分享回退、本地音频导入与窄屏滚动时播放器固定、短评发布/举报/管理员隐藏/作者查看说明、管理员仪表盘。
 
 ### 4. 演示账号
 
@@ -225,7 +227,7 @@ VITE_API_MOCK=true npm run dev
 
 ### 自动化检查
 
-`.github/workflows/ci.yml` 在推送 `main` / `arena/**` 分支或向 `main` 提交 PR 时自动执行：前端依赖安全审计、Mock API 集成测试、生产构建、Playwright Chromium 17 个关键浏览器测试场景（搜索/播放、空间音效、系统媒体控制、分组导航/桌面折叠持久化/中等屏幕收窄/窄屏抽屉、收藏/历史、设置页主题/资料/密码校验、自定义源导入/排序/导出/URL 导入、显式确认的隔离 Worker 初始化检测与正常歌曲解析播放/音质/歌词封面匿名 CORS、专辑浏览与播放、相似歌曲电台、每日推荐、歌单分享、本地音频/播放器悬浮、短评审核、管理员仪表盘）、后端 Java 17 Maven `verify`，以及本机生产式 Docker Compose 全栈 smoke test（登录、收藏、播放历史、音频与上传文件重启持久化）。浏览器测试失败时会保留截图、trace 与 HTML 报告。
+`.github/workflows/ci.yml` 在推送 `main` / `arena/**` 分支或向 `main` 提交 PR 时自动执行：前端依赖安全审计、Mock API 集成测试、生产构建、Playwright Chromium 18 个关键浏览器测试场景（搜索/播放、空间音效、系统媒体控制、分组导航/桌面折叠持久化/中等屏幕收窄/窄屏抽屉、收藏/历史、设置页主题/资料/密码校验、自定义源导入/排序/导出/URL 导入、显式确认的隔离 Worker 初始化检测与正常歌曲解析播放/音质/歌词封面匿名 CORS、管理员双语 LRC 上传/保存/播放器切换、专辑浏览与播放、相似歌曲电台、每日推荐、歌单分享、本地音频/播放器悬浮、短评审核、管理员仪表盘）、后端 Java 17 Maven `verify`，以及本机生产式 Docker Compose 全栈 smoke test（登录、收藏、播放历史、音频与上传文件重启持久化）。浏览器测试失败时会保留截图、trace 与 HTML 报告。
 
 ---
 
