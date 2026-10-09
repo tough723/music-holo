@@ -14,7 +14,10 @@ describe('本机设置备份', () => {
       visualMotion: 'calm',
       sidebarCollapsed: true,
       playbackMode: 'random',
-      volume: 0.45
+      volume: 0.45,
+      rememberSearchHistory: false,
+      showSearchSuggestions: false,
+      searchHistoryLimit: 4
     }, '2026-10-09T00:00:00.000Z')
 
     expect(backup).toMatchObject({
@@ -30,7 +33,10 @@ describe('本机设置备份', () => {
         visualMotion: 'calm',
         sidebarCollapsed: true,
         playbackMode: 'random',
-        volume: 0.45
+        volume: 0.45,
+        rememberSearchHistory: false,
+        showSearchSuggestions: false,
+        searchHistoryLimit: 4
       }
     })
   })
@@ -56,5 +62,15 @@ describe('本机设置备份', () => {
       version: LOCAL_SETTINGS_BACKUP_VERSION,
       settings: { volume: 2 }
     })).toThrow('音量配置无效')
+    expect(() => parseLocalSettingsBackup({
+      format: LOCAL_SETTINGS_BACKUP_FORMAT,
+      version: LOCAL_SETTINGS_BACKUP_VERSION,
+      settings: { rememberSearchHistory: 'no' }
+    })).toThrow('搜索历史偏好无效')
+    expect(() => parseLocalSettingsBackup({
+      format: LOCAL_SETTINGS_BACKUP_FORMAT,
+      version: LOCAL_SETTINGS_BACKUP_VERSION,
+      settings: { searchHistoryLimit: 6 }
+    })).toThrow('搜索历史条数配置无效')
   })
 })

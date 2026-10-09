@@ -199,6 +199,38 @@ test('设置中心提供低闪烁动效、播放偏好与本机配置备份', as
   await expect(page.getByText('脚本默认不会自动运行')).toBeVisible()
 })
 
+test('搜索与隐私设置可关闭探索词和历史记忆并限制本机记录数量', async ({ page }) => {
+  const seededTerms = ['夜航星', '云端信使', '霓虹海', '回声', '夏夜', '远方']
+  await page.addInitScript((terms) => {
+    localStorage.setItem('music-holo-recent-searches', JSON.stringify(terms))
+  }, seededTerms)
+  await loginAs(page, 'demo')
+  await openMenu(page, '设置')
+  await page.getByRole('tab', { name: '搜索与隐私' }).click()
+
+  await page.getByLabel('最近搜索保留条数').click()
+  await page.getByRole('option', { name: '4 条' }).click()
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('music-holo-recent-searches'))))
+    .toEqual(seededTerms.slice(0, 4))
+
+  await openMenu(page, '全局搜索')
+  await expect(page.locator('.discovery')).toBeVisible()
+  await expect(page.locator('.recent-searches .el-tag')).toHaveCount(4)
+  await expect(page.locator('.recent-searches')).toContainText('仅此设备')
+
+  await openMenu(page, '设置')
+  await page.getByRole('tab', { name: '搜索与隐私' }).click()
+  await page.getByRole('switch', { name: '显示探索关键词' }).click()
+  await page.getByRole('switch', { name: '记住最近搜索' }).click()
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('music-holo-recent-searches'))).toBeNull()
+
+  await page.goto('/search')
+  await expect(page.locator('.discovery')).toHaveCount(0)
+  await page.goto('/search?q=privacy-memory-disabled')
+  await expect(page.locator('.results-heading')).toContainText('privacy-memory-disabled')
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('music-holo-recent-searches'))).toBeNull()
+})
+
 test('本机自定义源支持导入、隔离检测、曲库填充、匿名 CORS 试听和导出', async ({ page }) => {
   await loginAs(page, 'demo')
   await openMenu(page, '设置')

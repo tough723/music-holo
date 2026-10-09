@@ -107,6 +107,10 @@
         <PlaybackPreferences />
       </el-tab-pane>
 
+      <el-tab-pane label="搜索与隐私" name="search">
+        <SearchPreferences />
+      </el-tab-pane>
+
       <!-- 个人资料 -->
       <el-tab-pane label="个人资料" name="profile">
         <div v-loading="loadingProfile" class="profile-panel glass-panel">
@@ -209,6 +213,7 @@ import Cover from '@/components/Cover.vue'
 import CustomSourceManager from '@/components/settings/CustomSourceManager.vue'
 import GeneralPreferences from '@/components/settings/GeneralPreferences.vue'
 import PlaybackPreferences from '@/components/settings/PlaybackPreferences.vue'
+import SearchPreferences from '@/components/settings/SearchPreferences.vue'
 import SettingsBackupPanel from '@/components/settings/SettingsBackupPanel.vue'
 import { usePreferencesStore } from '@/store/preferences'
 
@@ -218,7 +223,7 @@ const playerStore = usePlayerStore()
 const preferencesStore = usePreferencesStore()
 
 const SETTINGS_TAB_KEY = 'mh_settings_tab'
-const SETTINGS_TABS = ['general', 'theme', 'playback', 'profile', 'password', 'sources', 'data']
+const SETTINGS_TABS = ['general', 'theme', 'playback', 'search', 'profile', 'password', 'sources', 'data']
 const savedTab = localStorage.getItem(SETTINGS_TAB_KEY)
 const activeTab = ref(SETTINGS_TABS.includes(savedTab) ? savedTab : 'general')
 const tabPosition = ref(typeof window !== 'undefined' && window.innerWidth <= 760 ? 'top' : 'left')

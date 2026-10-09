@@ -19,16 +19,21 @@
       <div class="search-tip">快捷键：Ctrl / ⌘ + K</div>
     </section>
 
-    <section v-if="!route.query.q" class="discovery glass-panel">
-      <div class="section-title">从一段灵感开始</div>
-      <p>搜歌词、想起的歌名，或从这些关键词探索音乐。</p>
-      <div class="chip-list">
-        <el-tag v-for="term in suggestionTerms" :key="term" effect="plain" round @click="searchFor(term)">
-          {{ term }}
-        </el-tag>
-      </div>
-      <div v-if="recentTerms.length" class="recent-searches">
-        <div class="minor-title">最近搜索</div>
+    <section
+      v-if="!route.query.q && (preferences.showSearchSuggestions || (preferences.rememberSearchHistory && recentTerms.length))"
+      class="discovery glass-panel"
+    >
+      <template v-if="preferences.showSearchSuggestions">
+        <div class="section-title">从一段灵感开始</div>
+        <p>搜歌词、想起的歌名，或从这些关键词探索音乐。</p>
+        <div class="chip-list">
+          <el-tag v-for="term in suggestionTerms" :key="term" effect="plain" round @click="searchFor(term)">
+            {{ term }}
+          </el-tag>
+        </div>
+      </template>
+      <div v-if="preferences.rememberSearchHistory && recentTerms.length" class="recent-searches">
+        <div class="minor-title">最近搜索 · 仅此设备</div>
         <div class="chip-list">
           <el-tag v-for="term in recentTerms" :key="term" type="info" effect="plain" round @click="searchFor(term)">
             {{ term }}
@@ -94,6 +99,7 @@ import { ElMessage } from 'element-plus'
 import * as searchApi from '@/api/search'
 import * as favoriteApi from '@/api/favorite'
 import { usePlayerStore } from '@/store/player'
+import { usePreferencesStore, RECENT_SEARCH_STORAGE_KEY } from '@/store/preferences'
 import { useUserStore } from '@/store/user'
 import { fmtCount } from '@/utils/format'
 import SongList from '@/components/SongList.vue'
@@ -102,6 +108,7 @@ import Cover from '@/components/Cover.vue'
 const route = useRoute()
 const router = useRouter()
 const playerStore = usePlayerStore()
+const preferences = usePreferencesStore()
 const userStore = useUserStore()
 const keyword = ref('')
 const loading = ref(false)
@@ -110,26 +117,39 @@ const favoriteIds = ref([])
 const recentTerms = ref([])
 const results = ref({ keyword: '', songs: [], singers: [], playlists: [] })
 const suggestionTerms = ['霓虹', '月光', '夏夜', '回声', '远方']
-const RECENT_KEY = 'music-holo-recent-searches'
 
 const readRecent = () => {
+  if (!preferences.rememberSearchHistory) {
+    recentTerms.value = []
+    return
+  }
   try {
-    recentTerms.value = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]').slice(0, 8)
+    const stored = JSON.parse(localStorage.getItem(RECENT_SEARCH_STORAGE_KEY) || '[]')
+    recentTerms.value = Array.isArray(stored)
+      ? [...new Set(stored.filter((item) => typeof item === 'string').map((item) => item.trim()).filter(Boolean))]
+        .slice(0, preferences.searchHistoryLimit)
+      : []
   } catch {
     recentTerms.value = []
   }
 }
 
 const rememberSearch = (term) => {
+  if (!preferences.rememberSearchHistory) return
   const cleaned = term.trim()
   if (!cleaned) return
-  recentTerms.value = [cleaned, ...recentTerms.value.filter((item) => item !== cleaned)].slice(0, 8)
-  localStorage.setItem(RECENT_KEY, JSON.stringify(recentTerms.value))
+  recentTerms.value = [cleaned, ...recentTerms.value.filter((item) => item !== cleaned)]
+    .slice(0, preferences.searchHistoryLimit)
+  try {
+    localStorage.setItem(RECENT_SEARCH_STORAGE_KEY, JSON.stringify(recentTerms.value))
+  } catch {
+    // Searching should still work if browser storage is unavailable or full.
+  }
 }
 
 const clearRecent = () => {
   recentTerms.value = []
-  localStorage.removeItem(RECENT_KEY)
+  preferences.clearSearchHistory()
 }
 
 const loadResults = async (value) => {
@@ -156,6 +176,11 @@ const loadResults = async (value) => {
   }
 }
 
+readRecent()
+watch(
+  () => [preferences.rememberSearchHistory, preferences.searchHistoryLimit],
+  readRecent
+)
 watch(() => route.query.q, (value) => { loadResults(value) }, { immediate: true })
 
 const submitSearch = () => {

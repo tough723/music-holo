@@ -14,6 +14,7 @@
         <span>主题与玻璃透明度</span>
         <span>全息动效与侧栏偏好</span>
         <span>播放模式与音量</span>
+        <span>搜索记录偏好（不含搜索词）</span>
       </div>
 
       <div class="backup-actions">
@@ -31,7 +32,7 @@
 
       <el-alert class="backup-security-note" type="info" :closable="false" show-icon>
         <template #title>备份范围刻意保持精简</template>
-        <template #default>不会包含账号资料、密码、登录令牌、播放历史或自定义源脚本。自定义源请在“自定义源”页单独导出/导入；导入这里的主题设置时，若已登录会尝试同步到账号。</template>
+        <template #default>不会包含账号资料、密码、登录令牌、播放历史、搜索词或自定义源脚本。自定义源请在“自定义源”页单独导出/导入；导入这里的主题设置时，若已登录会尝试同步到账号。</template>
       </el-alert>
     </article>
 
@@ -71,7 +72,10 @@ function currentSettings() {
     visualMotion: preferences.visualMotion,
     sidebarCollapsed: preferences.sidebarCollapsed,
     playbackMode: player.mode,
-    volume: player.volume
+    volume: player.volume,
+    rememberSearchHistory: preferences.rememberSearchHistory,
+    showSearchSuggestions: preferences.showSearchSuggestions,
+    searchHistoryLimit: preferences.searchHistoryLimit
   }
 }
 
@@ -94,6 +98,9 @@ async function applySettings(settings) {
   if (settings.sidebarCollapsed !== undefined) preferences.setSidebarCollapsed(settings.sidebarCollapsed)
   if (settings.playbackMode) player.setMode(settings.playbackMode)
   if (settings.volume !== undefined) player.setVolume(settings.volume)
+  if (settings.rememberSearchHistory !== undefined) preferences.setRememberSearchHistory(settings.rememberSearchHistory)
+  if (settings.showSearchSuggestions !== undefined) preferences.setShowSearchSuggestions(settings.showSearchSuggestions)
+  if (settings.searchHistoryLimit !== undefined) preferences.setSearchHistoryLimit(settings.searchHistoryLimit)
 }
 
 async function onFileSelected(event) {

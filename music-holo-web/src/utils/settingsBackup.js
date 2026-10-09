@@ -1,6 +1,6 @@
 import { THEMES } from '@/store/theme'
 import { MODES } from '@/store/player'
-import { VISUAL_MOTION_MODES } from '@/store/preferences'
+import { SEARCH_HISTORY_LIMITS, VISUAL_MOTION_MODES } from '@/store/preferences'
 
 export const LOCAL_SETTINGS_BACKUP_FORMAT = 'music-holo-local-settings'
 export const LOCAL_SETTINGS_BACKUP_VERSION = 1
@@ -8,14 +8,17 @@ export const LOCAL_SETTINGS_BACKUP_VERSION = 1
 const themeKeys = new Set(THEMES.map(({ key }) => key))
 const playbackModeKeys = new Set(MODES.map(({ key }) => key))
 
-/** Build a small, allowlisted backup. It deliberately excludes account data, tokens, history and source scripts. */
+/** Build a small, allowlisted backup. It excludes account data, tokens, search terms/history content and source scripts. */
 export function buildLocalSettingsBackup({
   theme,
   glassOpacity,
   visualMotion,
   sidebarCollapsed,
   playbackMode,
-  volume
+  volume,
+  rememberSearchHistory,
+  showSearchSuggestions,
+  searchHistoryLimit
 } = {}, exportedAt = new Date().toISOString()) {
   return {
     format: LOCAL_SETTINGS_BACKUP_FORMAT,
@@ -27,7 +30,10 @@ export function buildLocalSettingsBackup({
       visualMotion,
       sidebarCollapsed,
       playbackMode,
-      volume
+      volume,
+      rememberSearchHistory,
+      showSearchSuggestions,
+      searchHistoryLimit
     }
   }
 }
@@ -93,6 +99,18 @@ export function parseLocalSettingsBackup(input) {
       throw invalidBackup('音量配置无效。')
     }
     settings.volume = source.volume
+  }
+  if (source.rememberSearchHistory !== undefined) {
+    if (typeof source.rememberSearchHistory !== 'boolean') throw invalidBackup('搜索历史偏好无效。')
+    settings.rememberSearchHistory = source.rememberSearchHistory
+  }
+  if (source.showSearchSuggestions !== undefined) {
+    if (typeof source.showSearchSuggestions !== 'boolean') throw invalidBackup('搜索建议偏好无效。')
+    settings.showSearchSuggestions = source.showSearchSuggestions
+  }
+  if (source.searchHistoryLimit !== undefined) {
+    if (!SEARCH_HISTORY_LIMITS.includes(source.searchHistoryLimit)) throw invalidBackup('搜索历史条数配置无效。')
+    settings.searchHistoryLimit = source.searchHistoryLimit
   }
   if (Object.keys(settings).length === 0) throw invalidBackup('备份中没有可应用的设置。')
 

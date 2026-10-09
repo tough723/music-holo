@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
-import { usePreferencesStore, UI_PREFERENCES_KEY, SIDEBAR_PREFERENCE_KEY } from '../src/store/preferences.js'
+import {
+  usePreferencesStore,
+  UI_PREFERENCES_KEY,
+  SIDEBAR_PREFERENCE_KEY,
+  RECENT_SEARCH_STORAGE_KEY,
+  SEARCH_HISTORY_LIMITS
+} from '../src/store/preferences.js'
 
 describe('本机界面偏好', () => {
   beforeEach(() => {
@@ -40,5 +46,39 @@ describe('本机界面偏好', () => {
     expect(preferences.visualMotion).toBe('calm')
     expect(preferences.sidebarCollapsed).toBe(false)
     expect(document.documentElement.dataset.holoMotion).toBe('calm')
+  })
+
+  it('关闭最近搜索记忆时立即清除搜索词并持久化本机偏好', () => {
+    localStorage.setItem(RECENT_SEARCH_STORAGE_KEY, JSON.stringify(['夜航星', '旧日信件']))
+    const preferences = usePreferencesStore()
+
+    preferences.setRememberSearchHistory(false)
+
+    expect(preferences.rememberSearchHistory).toBe(false)
+    expect(localStorage.getItem(RECENT_SEARCH_STORAGE_KEY)).toBe(null)
+    expect(JSON.parse(localStorage.getItem(UI_PREFERENCES_KEY)).rememberSearchHistory).toBe(false)
+  })
+
+  it('只接受 4、8、12 条历史上限并在调低时立即截断本机记录', () => {
+    const preferences = usePreferencesStore()
+    const terms = ['一', '二', '三', '四', '五', '六']
+    localStorage.setItem(RECENT_SEARCH_STORAGE_KEY, JSON.stringify(terms))
+
+    expect(SEARCH_HISTORY_LIMITS).toEqual([4, 8, 12])
+    expect(preferences.setSearchHistoryLimit(4)).toBe(true)
+    expect(preferences.searchHistoryLimit).toBe(4)
+    expect(JSON.parse(localStorage.getItem(RECENT_SEARCH_STORAGE_KEY))).toEqual(terms.slice(0, 4))
+    expect(preferences.setSearchHistoryLimit(6)).toBe(false)
+    expect(preferences.searchHistoryLimit).toBe(4)
+  })
+
+  it('可以清空最近搜索，且清空操作不改变记忆开关', () => {
+    const preferences = usePreferencesStore()
+    localStorage.setItem(RECENT_SEARCH_STORAGE_KEY, JSON.stringify(['夜航星']))
+
+    preferences.clearSearchHistory()
+
+    expect(localStorage.getItem(RECENT_SEARCH_STORAGE_KEY)).toBe(null)
+    expect(preferences.rememberSearchHistory).toBe(true)
   })
 })
