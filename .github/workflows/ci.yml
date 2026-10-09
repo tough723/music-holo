@@ -130,6 +130,23 @@ jobs:
         uses: actions/checkout@v5
       - name: Validate Compose configuration
         run: docker compose config --quiet
+      - name: Prefetch base images
+        # Docker Hub 对匿名拉取按 IP 限流（第三方服务故障，与代码无关）：
+        # 先退避重试，仍失败时改用公共镜像代理 mirror.gcr.io（同一官方镜像，只换拉取源）。
+        run: |
+          set +e
+          for image in mysql:8.0 redis:7; do
+            if docker image inspect "$image" > /dev/null 2>&1; then echo "$image 已在本地"; continue; fi
+            for attempt in 1 2 3; do
+              docker pull "$image" && break
+              echo "::warning title=Image pull retry::$image 第 $attempt 次拉取失败，20 秒后重试"
+              sleep 20
+            done
+            if ! docker image inspect "$image" > /dev/null 2>&1; then
+              docker pull "mirror.gcr.io/library/$image" && docker tag "mirror.gcr.io/library/$image" "$image"
+            fi
+            docker image inspect "$image" > /dev/null 2>&1 || echo "::error title=Base image unavailable::$image 无法从 Docker Hub 或公共代理拉取"
+          done
       - name: Start and wait for the production-like stack
         run: |
           set +e
