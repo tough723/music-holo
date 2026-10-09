@@ -5,6 +5,7 @@ const handlers = new Map()
 const pendingRequests = new Map()
 let requestSequence = 0
 let sourceMetadata = {}
+let desktopEnvironment = false
 
 function sendParent(message) {
   nativeWorkerPostMessage(message)
@@ -156,14 +157,14 @@ const utils = Object.freeze({
   zlib: Object.freeze({ inflate: (value) => transformZlib(value, 'inflate'), deflate: (value) => transformZlib(value, 'deflate') })
 })
 
-function on(eventName, handler) {
-  if (typeof eventName !== 'string' || typeof handler !== 'function') return
+async function on(eventName, handler) {
+  if (eventName !== eventNames.request || typeof handler !== 'function') throw new Error('无效的音源事件处理器')
   const list = handlers.get(eventName) || []
   list.push(handler)
   handlers.set(eventName, list)
 }
 
-function send(eventName, data) {
+async function send(eventName, data) {
   if (!Object.values(eventNames).includes(eventName)) return
   let normalizedData
   try {
@@ -254,6 +255,7 @@ self.addEventListener('message', (event) => {
   const message = event.data
   if (!message || typeof message !== 'object') return
   if (message.type === 'initialize') {
+    desktopEnvironment = message.env === 'desktop'
     sourceMetadata = message.metadata && typeof message.metadata === 'object' ? message.metadata : {}
     disableDirectCapabilities()
     const lx = Object.freeze({
@@ -261,7 +263,7 @@ self.addEventListener('message', (event) => {
       request,
       on,
       send,
-      env: 'web-sandbox',
+      env: message.env === 'desktop' ? 'desktop' : 'web-sandbox',
       version: '1.0.0',
       currentScriptInfo: Object.freeze({
         name: String(sourceMetadata.name || ''),
@@ -287,8 +289,15 @@ self.addEventListener('message', (event) => {
     const callback = pendingRequests.get(message.requestId)
     if (!callback) return
     pendingRequests.delete(message.requestId)
-    if (message.ok) callback(null, message.response, message.response?.body)
-    else callback(new Error(String(message.error || '网络请求失败')))
+    if (message.ok) {
+      const response = message.response
+      if (desktopEnvironment && typeof response?.body === 'string') {
+        // LX desktop attempts JSON parsing regardless of Content-Type, falling
+        // back to the original string for LRC, JavaScript and non-JSON responses.
+        try { response.body = JSON.parse(response.body) } catch { /* Preserve text. */ }
+      }
+      callback(null, response, response?.body)
+    } else callback(new Error(String(message.error || '网络请求失败')))
     return
   }
   if (message.type === 'dispatch') dispatch(message.eventName, message.data, message.requestId)

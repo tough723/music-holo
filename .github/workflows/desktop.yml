@@ -1,0 +1,40 @@
+name: Desktop validation
+on:
+  push:
+    branches: [main, 'arena/**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  desktop:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            music-holo-desktop/package-lock.json
+            music-holo-web/package-lock.json
+      - run: npm ci --prefix music-holo-web
+      - run: npm ci --prefix music-holo-desktop
+      - run: npm audit --prefix music-holo-desktop --audit-level=moderate
+      - run: npm test --prefix music-holo-desktop
+      - run: node --test examples/lx-custom-source/music-holo-local.test.cjs
+      - run: npm run build:demo --prefix music-holo-desktop
+      - name: Electron smoke (real Chromium sandbox, mocked third-party network)
+        run: xvfb-run -a npm run test:smoke --prefix music-holo-desktop
+      - name: Production desktop directory packaging
+        run: npm run pack --prefix music-holo-desktop
+      - name: Preserve desktop smoke diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-smoke-diagnostics
+          path: music-holo-desktop/test-results/
+          if-no-files-found: ignore
+          retention-days: 7

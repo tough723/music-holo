@@ -7,6 +7,22 @@
 
 ---
 
+## Electron 桌面客户端（新增，0.1 基础接入）
+
+项目新增 `music-holo-desktop/`，复用当前 Vue 界面，以 **Electron 桌面端作为用户自定义音源的主路线**。脚本继续在受限 Worker 中执行；桌面网络桥通过原生域名确认、公网 DNS 校验与受限 HTTP(S) 请求接入音源，媒体用本窗口临时票据流式播放。网页端保留原有 HTTPS/CORS 限制，不开放 Node 权限。
+
+运行、后端配置、打包、安全边界和验收状态见 [桌面客户端说明](docs/desktop-client.md)。**这次只交付桌面音源基础接入；第三方平台搜索/榜单尚未实现，星海脚本和 Electron 窗口链路尚未完成实机验收，不代表全部 LX 脚本可用。**
+
+```sh
+npm ci --prefix music-holo-web
+npm ci --prefix music-holo-desktop
+cd music-holo-desktop
+npm run build:demo  # 无后端演示，demo / 123456；正式连接后端用 build:web
+npm start
+```
+
+---
+
 ## 技术栈
 
 ### 后端 `music-holo-server`
@@ -71,6 +87,8 @@
 在底部播放器打开“播放队列”，可多选本地音频文件导入并立即播放。音频使用浏览器临时 Blob URL，不会上传服务端或写入账号播放历史；刷新页面后需重新选择文件。底部播放器和歌词面板传送到页面根层，固定在视口上方，不受内容滚动容器影响；3D 全息舞台继续保留为 Music Holo 自有视觉特色。
 
 ### 自定义源曲库播放
+
+开发自己的源脚本可参阅 [LX 自定义源编写与使用指南](docs/lx-custom-source-guide.md)，仓库附带 [授权直链源示例](examples/lx-custom-source/music-holo-local.js) 与无需依赖的协议测试；示例需配置自有资源，不自带第三方解析 API。
 
 设置中心导入的 `.js/.mjs` 脚本仍按当前账号保存在本机，导入本身不会执行。歌曲列表中有「使用自定义源播放」按钮时，可针对一首曲库歌曲单独选择脚本、平台和音质；初始化需显式确认，运行后再按脚本声明解析 `musicUrl`，并可选调用 `lyric`/`pic`。对于需要 `songmid` 等平台 ID 的脚本，可在确认框的可选 JSON 字段补充曲目 ID；敏感凭据字段会拒绝，曲目信息仅为本次传入。LX 自定义源协议本身不提供通用搜索动作，所以搜索结果仍只来自 Music Holo 曲库。
 

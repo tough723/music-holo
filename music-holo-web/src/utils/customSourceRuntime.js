@@ -1,9 +1,10 @@
+import { parseSourceNetworkUrl, desktopSourceBridge } from './desktopSource'
 import workerBootstrap from './customSourceWorker.js?raw'
 import { MAX_CUSTOM_SOURCE_BYTES, parseCustomSourceUrl } from './customSources'
 
-export const CUSTOM_SOURCE_RUNTIME_TIMEOUT_MS = 15000
-export const CUSTOM_SOURCE_SESSION_TIMEOUT_MS = 45000
-export const CUSTOM_SOURCE_ACTION_TIMEOUT_MS = 20000
+export const CUSTOM_SOURCE_RUNTIME_TIMEOUT_MS = desktopSourceBridge() ? 60000 : 15000
+export const CUSTOM_SOURCE_SESSION_TIMEOUT_MS = desktopSourceBridge() ? 600000 : 45000
+export const CUSTOM_SOURCE_ACTION_TIMEOUT_MS = desktopSourceBridge() ? 90000 : 20000
 export const MAX_CUSTOM_SOURCE_REQUEST_BYTES = 64 * 1024
 export const MAX_CUSTOM_SOURCE_RESPONSE_BYTES = 512 * 1024
 const MAX_CUSTOM_SOURCE_URL_LENGTH = 4096
@@ -55,7 +56,7 @@ export function normalizeLxSourceCapabilities(payload) {
 export function validateCustomSourceMediaUrl(value, { pageOrigin = globalThis.location?.origin } = {}) {
   const rawUrl = typeof value === 'string' ? value : value && typeof value === 'object' ? value.url : ''
   if (typeof rawUrl !== 'string' || !rawUrl.trim()) throw new Error('音源没有返回可播放的 HTTPS 音频地址')
-  const url = parseCustomSourceUrl(rawUrl.trim())
+  const url = parseSourceNetworkUrl(rawUrl.trim())
   url.hash = ''
   let currentOrigin = ''
   try { currentOrigin = pageOrigin ? new URL(pageOrigin).origin : '' } catch { /* Ignore unavailable page origins in non-browser tests. */ }
@@ -309,7 +310,7 @@ function createSandboxDocument() {
         URL.revokeObjectURL(workerUrl);
         worker.addEventListener('message', (workerEvent) => forward(workerEvent.data || {}));
         worker.addEventListener('error', (workerError) => forward({ type: 'source-error', error: workerError.message || '隔离 Worker 执行失败' }));
-        worker.postMessage({ type: 'initialize', script: String(message.script || ''), metadata: message.metadata || {} });
+        worker.postMessage({ type: 'initialize', script: String(message.script || ''), metadata: message.metadata || {}, env: message.env });
         forward({ type: 'sandbox-ready' });
       } catch (error) {
         forward({ type: 'source-error', error: String(error && error.message || error) });
@@ -366,9 +367,9 @@ export function createCustomSourceSession(source, {
     let initSettled = false
     let requestSequence = 0
     let activeNetworkCount = 0
-    const startupLimit = Math.max(1000, Math.min(30000, Number(startupTimeoutMs) || CUSTOM_SOURCE_RUNTIME_TIMEOUT_MS))
-    const sessionLimit = Math.max(1000, Math.min(60000, Number(sessionTimeoutMs) || CUSTOM_SOURCE_SESSION_TIMEOUT_MS))
-    const actionLimit = Math.max(1000, Math.min(30000, Number(actionTimeoutMs) || CUSTOM_SOURCE_ACTION_TIMEOUT_MS))
+    const startupLimit = Math.max(1000, Math.min(desktopSourceBridge() ? 60000 : 30000, Number(startupTimeoutMs) || CUSTOM_SOURCE_RUNTIME_TIMEOUT_MS))
+    const sessionLimit = Math.max(1000, Math.min(desktopSourceBridge() ? 600000 : 60000, Number(sessionTimeoutMs) || CUSTOM_SOURCE_SESSION_TIMEOUT_MS))
+    const actionLimit = Math.max(1000, Math.min(desktopSourceBridge() ? 120000 : 30000, Number(actionTimeoutMs) || CUSTOM_SOURCE_ACTION_TIMEOUT_MS))
     let startupTimer
     let sessionTimer
 
@@ -383,6 +384,7 @@ export function createCustomSourceSession(source, {
       clearTimeout(sessionTimer)
       window.removeEventListener('message', handleMessage)
       signal?.removeEventListener('abort', onExternalAbort)
+      onRequest.dispose?.()
       for (const controller of pendingNetwork.values()) controller.abort()
       pendingNetwork.clear()
       iframe.remove()
@@ -512,6 +514,7 @@ export function createCustomSourceSession(source, {
         type: 'bootstrap',
         token,
         workerBootstrap,
+        env: desktopSourceBridge() ? 'desktop' : 'web-sandbox',
         script: source.script,
         metadata: {
           name: source.name,

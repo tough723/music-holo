@@ -1,0 +1,137 @@
+# Music Holo Electron 桌面客户端（0.1 基础接入）
+
+## 当前交付范围
+
+主路线为 **Electron 桌面客户端 + 现有 Vue 界面 + 原 Spring Boot 业务后端**。网页继续存在，网页端不会因为新增桌面客户端而获得本机权限或绕过浏览器 CORS。
+
+本轮实现的是桌面音源运行与播放接入基础，不是 LX 全功能移植，也不是已验收的第三方音乐聚合发行版。
+
+| 能力 | 本轮状态 |
+| --- | --- |
+| 加载打包的 Vue 界面，独立本机存储、账号登录、原曲库与播放器 | 已接入；桌面用 hash 路由，页面由 `app://music-holo/` 提供 |
+| 音源文件导入、备份、能力检测、手动传入 musicInfo 解析试听 | 复用原有 UI；脚本导入不会执行 |
+| HTTPS URL 下载源脚本 | 桌面原生请求，先原生窗口授权；仍有 128 KB 文件限制 |
+| `lx.request` 桌面网络桥 | 受控 HTTP(S) 请求，不依赖浏览器 CORS；独立于账号 API 通道 |
+| 播放与封面 | 显式授权后签发临时媒体票据，经 `app://music-holo/__source_media/<随机票据>` 流式加载；支持单段 Range |
+| 音源持久化 | 脚本按账号存于 Electron 的页面本机存储，不上传 Spring Boot |
+| 第三方平台搜索、榜单、平台 ID 自动映射 | **未接入**；现有搜索/榜单仍为 Music Holo 曲库，不能把曲库 ID 当平台 ID |
+| 星海源所有平台与音质 | **未完成真实接口/客户端验收，不保证可用**；不内置、不自动运行或分发该脚本 |
+| 签名安装包、自动更新、原生手机端 | **未实现/未发布**；仅提供桌面打包配置 |
+
+## 开发环境运行
+
+需要 Node.js **22.12 或更高版本**、npm，以及可运行 Electron 的桌面系统。Linux 需要相应图形库与可用的 Chromium 沙箱；不要用 `--no-sandbox` 规避部署问题。
+
+在仓库根目录安装：
+
+```sh
+npm ci --prefix music-holo-web
+npm ci --prefix music-holo-desktop
+```
+
+安装 Electron 会从其发行站下载运行文件，需要网络可达。仅 `npm ci --ignore-scripts` 不代表 Electron 已安装完整。
+
+### 无后端的界面/协议演示
+
+```sh
+cd music-holo-desktop
+npm run build:demo
+npm start
+```
+
+演示构建使用现有 Mock API，可使用 `demo / 123456` 登录，进入设置 → 自定义源。Mock 数据不代表第三方音乐平台数据。此模式只用于开发，不用于发布。
+
+### 连接真正的 Spring Boot 后端
+
+先按主 README 启动 MySQL、Redis 与 `music-holo-server`。然后：
+
+```sh
+cd music-holo-desktop
+npm run build:web
+npm start
+```
+
+默认业务后端为 `http://127.0.0.1:8080`。也可以在启动前设置由部署者控制的服务源（**不带路径、账号或密码**）：
+
+```sh
+# macOS / Linux
+MUSIC_HOLO_BACKEND=https://your-backend.example.com npm start
+```
+
+```powershell
+# Windows PowerShell
+$env:MUSIC_HOLO_BACKEND = 'https://your-backend.example.com'
+npm start
+```
+
+`your-backend.example.com` 是占位地址，必须换成真实服务。远程后端要求 HTTPS，本机回环可用 HTTP。桌面将 `/api/*` 转到配置后端的 `/*`，`/profile/*` 保留路径转发；现有账号令牌只进入业务 API。源网络桥拒绝业务后端主机名，也不会接收其 Cookie 或令牌。
+
+这一版没有面向普通用户的后端配置向导；部署者必须提供可用的业务后端或以演示构建验收。桌面包并不自带 MySQL、Redis 或 Spring Boot。
+
+## 如何导入用户提供的音源
+
+1. 登录 → 设置 → 自定义源，选择本机 `.js/.mjs`，或粘贴 HTTPS 脚本链接。
+2. URL 导入会显示原生域名授权窗口；拒绝则不下载，不自动执行下载到的脚本。
+3. 点击隔离兼容检测并确认信任；脚本通过 `globalThis.lx` 注册能力。
+4. 首次请求某个 HTTP(S) 来源时出现原生授权窗口。域名授权只属于本次音源会话；HTTP 会标记明文风险。
+5. 打开试听台，填写脚本所需的 `musicInfo`（例如正确的平台 `songmid`/`hash`），选择平台、音质，再解析。
+6. 解析成功后确认媒体来源，交给全局播放器。曲目与临时媒体票据不进入服务端历史和持久播放队列。
+
+也可在原曲库歌曲列表选择「使用自定义源播放」，但原曲库 ID **不能自动当作第三方平台 ID**。需要的平台字段必须来自真实平台元数据，不猜 ID。
+
+可以先用 [`examples/lx-custom-source/music-holo-local.js`](../examples/lx-custom-source/music-holo-local.js) 和自己的授权 HTTPS 音频测试。其字段说明见 [源脚本指南](lx-custom-source-guide.md)。
+
+## 运行与安全边界
+
+```text
+打包 Vue 主页面（无 Node，contextIsolation + sandbox + webSecurity）
+    ├─ 原业务 API → 固定配置的 Spring Boot 服务
+    └─ 沙箱 iframe → 一次性 Worker → lx.request 消息
+          ↓ 仅主页面可调用的窄 IPC
+        主进程会话、原生域名确认、DNS 校验、受限网络请求
+          ↓
+        第三方接口 / 已授权的临时媒体流
+```
+
+- `nodeIntegration: false`、`contextIsolation: true`、`sandbox: true`、`webSecurity: true`。不开启 webview；阻止应用窗口外部导航及新窗口，不提供 shell/文件/任意 IPC API。
+- preload 只向主 frame 暴露窄接口；主进程再次核对窗口、frame 身份和固定应用 URL。Worker 无 preload、require、process、DOM、页面存储；其 CSP 禁止直接联网。`new Function` 仅在一次性 Worker 内使用，不在主进程或业务页面执行源脚本。
+- 顶层 CSP 的 `unsafe-eval`/`unsafe-inline` 用于当前继承 CSP 的 srcdoc/Worker 引导，并不等于允许脚本直接联网；这不是强 CPU/内存配额沙箱。恶意 Worker 仍可能消耗渲染进程资源，**只运行可信脚本**，需要保持 Electron 更新。
+- 源请求只支持 GET/POST/HEAD、HTTP(S) 标准端口 80/443。拒绝 URL 凭据、IP 直连、本地名称和业务后端主机；解析 IPv4，拒绝非公网及混合 DNS 答案，将校验通过的 IP 固定到 socket，避免二次解析的 DNS 重绑定。IPv6-only 主机当前不支持。
+- 不跟随任何重定向。需要重定向的接口/CDN 会失败，必须提供最终地址；不静默改写协议或放宽内网限制。
+- 不共享 Cookie、账号登录头、代理授权、连接池或网络缓存；保留受限的自定义普通请求头。不支持 multipart `formData`，支持 `form`、文本/JSON/二进制 body。传输层返回 UTF-8 文本，下载脚本不会被解析或执行；桌面 Worker 的 `lx.request` 回调会先尝试 JSON.parse，失败则保留文本，回调第三参数与 `resp.body` 一致。支持 gzip/deflate/br 接口响应，压缩前后均限制 512 KB，拒绝损坏或未知压缩格式。网页回调仍保留原文本行为。`on/send` 返回 Promise。
+- 8 个源会话上限、每会话最多 16 个来源、全窗口 4 个源网络请求并发；请求体 64 KB、响应 512 KB；网络总时限最多 15 秒。桌面脚本初始化 60 秒、action 默认 90 秒、会话 10 分钟，关闭/取消/超时中止网络并清理会话。最后一个等待者取消时会关闭原生授权窗口并释放并发名额；共享窗口不会因其中一个等待者取消而误关。
+- 媒体票据仅存在主进程内存，一窗口最多 256 个，最多 8 个媒体流；流上限 1 GB / 2 小时，首连 15 秒。只转发 Range，不转发 Cookie/登录头，不跟随重定向，不开放任意 URL 代理。刷新、关闭窗口即撤销票据并中止流；票据不落盘。Range 会拒绝空范围、反向范围、超大数值及多段范围；媒体拒绝 SVG/HTML 等主动文档，并加上 sandbox CSP。
+- 未实现完整 LX 加密 API：沿用 Web Worker 工具子集，RSA 未开放，AES/zlib 行为不能视为完全等同 LX。`env: desktop` 只表示桌面宿主，不代表全量兼容认证；扩展平台/音质可以展示，不代表播放器有对应编解码能力。
+- 更新提示事件不会触发自动下载或执行。脚本可以发起更新/IP 请求，但仍受同样的原生域名授权限制。
+
+## 构建与打包
+
+```sh
+cd music-holo-desktop
+npm run pack   # 重建生产网页，生成当前系统的未安装应用目录
+npm run dist   # 重建生产网页，按当前系统生成 AppImage / NSIS / DMG
+```
+
+输出在被 Git 忽略的 `music-holo-desktop/release/`。不同系统应在相应系统构建并验收；当前没有代码签名证书、自动发布和自动更新，不应声称已有可供公众安装的正式发行包。依赖锁定在 `package-lock.json`；开发依赖 `global-agent` 覆盖到 4.1.3，避免旧依赖链的审计问题，打包兼容性仍须 CI 验收。
+
+## 验证与后续验收
+
+```sh
+npm test --prefix music-holo-desktop
+npm test --prefix music-holo-web
+node --test examples/lx-custom-source/music-holo-local.test.cjs
+npm run build:demo --prefix music-holo-desktop
+npm run test:smoke --prefix music-holo-desktop
+```
+
+Linux 无显示器时最后一步使用 `xvfb-run -a npm run test:smoke --prefix music-holo-desktop`。
+
+桌面单元测试覆盖 IPC sender、URL/DNS/请求限制、域名授权、取消与超时、拒绝重定向、媒体票据/Range/刷新撤销以及业务 API 通道隔离。Electron smoke 脚本使用真实窗口和沙箱，测试代码通过调试通道模拟第三方网络及原生确认；应用本身没有测试旁路。新增 `.github/workflows/desktop.yml` 会运行测试、smoke 与目录打包。
+
+**本轮沙箱实测**：桌面 33 项单元测试、前端测试与构建可运行；Electron 运行文件下载报 `fetch failed`，所以未完成本机 Electron 窗口 smoke 和实际打包，也未完成真实星海接口播放验收。新增 CI 配置不等于 CI 已通过。
+
+下一阶段顺序：先在有桌面的开发机/CI 跑通 smoke 和媒体回归，再逐项验收用户脚本依赖；之后接入明确的平台搜索/榜单适配器与正确的平台曲目 ID，最后做真实客户端播放、后台播放、安装包签名及升级验收。
+
+### 星海脚本静态兼容核对
+
+已继续静态阅读用户提供链接的请求包装、初始化和解析分支。所见脚本主要使用 `lx.request/on/send`、buffer UTF-8/base64、URLSearchParams、Promise，以及 X-Token/X-Client/User-Agent 等请求头；X-Token 是脚本生成的第三方服务字段，不是本站登录令牌。独立编写的测试夹具覆盖了这些交互及扩展平台/音质声明，未复制、执行或分发第三方脚本。脚本声明了平台扩展，也读取 `env?.platform`，但官方 `lx.env` 是字符串；不为单个脚本伪造非标准 env 对象。其加密媒体能否播放、服务返回是否可用，以及全部平台分支仍需实机验证。

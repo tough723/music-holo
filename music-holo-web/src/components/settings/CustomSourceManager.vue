@@ -3,7 +3,7 @@
     <div class="source-manager-head glass-panel">
       <div class="source-manager-copy">
         <div class="source-eyebrow">LOCAL SOURCE LIBRARY</div>
-        <h2>自定义音源</h2>
+        <h2>自定义音源 <el-tag v-if="isDesktop" size="small">桌面隔离模式</el-tag></h2>
         <p>导入并整理个人音源脚本，按当前账号保存在本机浏览器中。</p>
       </div>
       <div class="source-manager-actions">
@@ -35,13 +35,14 @@
     <div class="source-url-import glass-panel">
       <el-input v-model="sourceUrl" clearable placeholder="粘贴 HTTPS 音源脚本地址" aria-label="音源脚本地址" @keyup.enter="importFromUrl" />
       <el-button :loading="importingUrl" :disabled="!sourceUrl.trim()" @click="importFromUrl">从 URL 导入</el-button>
-      <small>跨域不可读时，请在浏览器下载脚本后使用文件导入。</small>
+      <small>{{ isDesktop ? '桌面模式通过原生授权窗口下载，导入不会执行脚本。' : '跨域不可读时，请在浏览器下载脚本后使用文件导入。' }}</small>
     </div>
 
     <el-alert class="source-safety-alert" type="warning" :closable="false" show-icon>
       <template #title>脚本默认不会自动运行</template>
       <template #default>
-          可手动对可信脚本执行一次性隔离兼容检测：脚本在受限 Worker 中运行，无法访问页面 DOM、本机存储或直接联网；外部 HTTPS 请求须按域名确认，并由浏览器 CORS 策略控制。程序会拦截常见本地地址和私网 DNS 别名，但浏览器端无法可靠验证任意域名最终解析到的 IP，不能防住所有 DNS 重绑定。检测结束后沙箱销毁；能力检测不会自动添加搜索结果或播放歌曲。普通曲目可由你在列表中单独选择自定义源解析；请求仍受 HTTPS、用户确认和浏览器 CORS 限制。
+          <span v-if="isDesktop">脚本在受限 Worker 中运行，网络通过受控桌面桥访问公网 HTTP(S)。首次访问域名须原生窗口授权；检查 DNS 并固定公网地址，不访问业务后端和内网，不携带 Cookie 或账号令牌。导入不自动执行；关闭检测会销毁会话。部分 LX 工具 API 尚未实现，兼容检测不等于可播放或内容授权。第三方搜索／榜单尚未接入。</span>
+          <span v-else>可手动对可信脚本执行一次性隔离兼容检测：脚本在受限 Worker 中运行，无法访问页面 DOM、本机存储或直接联网；外部 HTTPS 请求须按域名确认，并由浏览器 CORS 策略控制。程序会拦截常见本地地址和私网 DNS 别名，但浏览器端无法可靠验证任意域名最终解析到的 IP，不能防住所有 DNS 重绑定。检测结束后沙箱销毁；能力检测不会自动添加搜索结果或播放歌曲。普通曲目可由你在列表中单独选择自定义源解析；请求仍受 HTTPS、用户确认和浏览器 CORS 限制。</span>
       </template>
     </el-alert>
 
@@ -181,7 +182,9 @@
         <el-alert type="warning" :closable="false" show-icon>
           <template #title>LX 自定义源负责解析，不负责搜索</template>
           <template #default>
-            试听会重新运行此脚本并调用其 musicUrl。先选 Music Holo 曲库歌曲可自动填入通用信息；若源要求 songmid、musicmid 等平台 ID，请自行补充到 JSON。音频仅接受 HTTPS，并通过播放器以匿名 CORS 模式加载；常见本地/私网主机名会拦截，但浏览器无法验证任意域名最终解析的 IP。目标音频站未开放 CORS 时浏览器会阻止播放。
+            试听会重新运行此脚本并调用其 musicUrl。先选 Music Holo 曲库歌曲可自动填入通用信息；若源要求 songmid、musicmid 等平台 ID，请自行补充到 JSON。
+            <span v-if="isDesktop">桌面支持公网 HTTP(S) 媒体，通过原生授权与 DNS 校验后匿名流式加载；HTTP 明文传输，重定向会拒绝。</span>
+            <span v-else>音频仅接受 HTTPS，并通过播放器以匿名 CORS 模式加载；常见本地/私网主机名会拦截，但浏览器无法验证任意域名最终解析的 IP。目标音频站未开放 CORS 时浏览器会阻止播放。</span>
           </template>
         </el-alert>
 
@@ -243,6 +246,7 @@
 </template>
 
 <script setup>
+import { desktopSourceBridge, createDesktopSourceRequestBridge, desktopMediaUrl } from '@/utils/desktopSource'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useUserStore } from '@/store/user'
@@ -266,6 +270,8 @@ import {
   validateCustomSourceMediaUrl
 } from '@/utils/customSourceRuntime'
 import { createCustomSourceRequestBridge } from '@/utils/customSourceConsent'
+
+const isDesktop = !!desktopSourceBridge()
 
 const userStore = useUserStore()
 const playerStore = usePlayerStore()
@@ -463,8 +469,15 @@ async function importFromUrl() {
 
   importingUrl.value = true
   const controller = new AbortController()
-  const timeoutId = window.setTimeout(() => controller.abort(), 15_000)
+  const timeoutId = window.setTimeout(() => controller.abort(), isDesktop ? 90_000 : 15_000)
+  const desktopRequest = isDesktop ? createDesktopSourceRequestBridge({ name: '下载音源脚本（不执行）' }) : null
   try {
+    if (desktopRequest) {
+      const response = await desktopRequest(url.href, { method: 'GET' }, controller.signal)
+      if (response.statusCode < 200 || response.statusCode >= 300) throw new Error(`HTTP ${response.statusCode}`)
+      if (addSource(sourceFileNameFromUrl(url), response.body)) sourceUrl.value = ''
+      return
+    }
     const response = await fetch(url.href, {
       method: 'GET',
       mode: 'cors',
@@ -479,8 +492,9 @@ async function importFromUrl() {
   } catch (error) {
     ElMessage.warning(error?.message?.includes('128 KB')
       ? error.message
-      : '远程导入失败：源站可能不支持跨域读取，请下载 .js 文件后再导入')
+      : isDesktop ? `桌面导入失败：${error?.message || '网络不可用'}` : '远程导入失败：源站可能不支持跨域读取，请下载 .js 文件后再导入')
   } finally {
+    desktopRequest?.dispose()
     window.clearTimeout(timeoutId)
     importingUrl.value = false
   }
@@ -666,10 +680,12 @@ async function resolveAudition() {
     }
     if (controller.signal.aborted) throw new Error('隔离试听已取消')
     await ElMessageBox.confirm(
-      `音频来自 ${media.origin}。播放器将使用 crossorigin=anonymous（不发送 Cookie/登录态）；若该站未允许 CORS，浏览器将阻止播放。请确认你有权试听。`,
+      isDesktop ? `音频来自 ${media.origin}。桌面将再次确认域名，并通过不带 Cookie 的受控媒体流加载。HTTP 为明文传输。请确认你有权试听。` : `音频来自 ${media.origin}。播放器将使用 crossorigin=anonymous（不发送 Cookie/登录态）；若该站未允许 CORS，浏览器将阻止播放。请确认你有权试听。`,
       '确认加载音频',
       { type: 'warning', confirmButtonText: '允许加载音频', cancelButtonText: '取消', closeOnClickModal: false }
     )
+    if (controller.signal.aborted) throw new Error('隔离试听已取消')
+    const playbackUrl = await desktopMediaUrl(media.href)
     if (controller.signal.aborted) throw new Error('隔离试听已取消')
     const title = firstMusicText(musicInfo.title, musicInfo.name) || '自定义源曲目'
     const singerName = firstMusicText(musicInfo.singerName, musicInfo.singer, musicInfo.artist, musicInfo.artists) || '自定义音源'
@@ -681,7 +697,7 @@ async function resolveAudition() {
       album: firstMusicText(musicInfo.album, musicInfo.albumName),
       cover: '',
       duration: Number.isFinite(duration) && duration > 0 && duration <= 3600 ? duration : 0,
-      audioUrl: media.href,
+      audioUrl: playbackUrl,
       audioOrigin: media.origin,
       customLyrics,
       categoryName: '自定义源',

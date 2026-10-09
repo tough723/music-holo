@@ -22,3 +22,7 @@ music-holo-server/upload/
 # 操作系统
 .DS_Store
 Thumbs.db
+
+# Electron packaging artifacts
+music-holo-desktop/release/
+music-holo-desktop/test-results/

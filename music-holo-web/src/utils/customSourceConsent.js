@@ -1,3 +1,4 @@
+import { desktopSourceBridge, createDesktopSourceRequestBridge } from './desktopSource'
 import { ElMessageBox } from 'element-plus'
 import { parseCustomSourceUrl } from './customSources'
 import { performCustomSourceRequest } from './customSourceRuntime'
@@ -19,6 +20,7 @@ export function createCustomSourceRequestBridge(source, {
   confirmRequest = confirmCustomSourceNetworkRequest,
   request = performCustomSourceRequest
 } = {}) {
+  if (desktopSourceBridge() && request === performCustomSourceRequest) return createDesktopSourceRequestBridge(source)
   const approvedOrigins = new Set()
   const sourceName = String(source?.name || '自定义音源').slice(0, 80)
 

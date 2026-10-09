@@ -13,7 +13,8 @@
       <el-alert type="warning" :closable="false" show-icon>
         <template #title>仅在本次操作中运行可信脚本</template>
         <template #default>
-          脚本不会自动运行。初始化和每次网络请求都受隔离 Worker、HTTPS、逐域名确认与浏览器 CORS 限制；请求不携带 Cookie 或登录态。同源媒体地址会拒绝，避免播放器请求附带 Music Holo 站点凭据。常见本机地址会拦截，但浏览器无法保证识别所有 DNS 重绑定，仍只运行可信脚本。默认只传歌曲标题、歌手、专辑、时长和 Music Holo 歌曲 ID；可选补充平台曲目 ID，敏感凭据字段会拒绝。
+          <span v-if="isDesktop">桌面模式：脚本仍在受限 Worker 中运行；网络经桌面桥逐域名授权，支持公网 HTTP(S)，不受网页 CORS 限制。禁止访问内网、业务后端和本机文件，不携带登录凭据；HTTP 为明文传输。只支持部分 LX API，并非所有脚本都兼容。搜索仍来自 Music Holo 曲库。</span>
+          <span v-else>脚本不会自动运行。初始化和每次网络请求都受隔离 Worker、HTTPS、逐域名确认与浏览器 CORS 限制；请求不携带 Cookie 或登录态。同源媒体地址会拒绝，避免播放器请求附带 Music Holo 站点凭据。常见本机地址会拦截，但浏览器无法保证识别所有 DNS 重绑定，仍只运行可信脚本。默认只传歌曲标题、歌手、专辑、时长和 Music Holo 歌曲 ID；可选补充平台曲目 ID，敏感凭据字段会拒绝。</span>
         </template>
       </el-alert>
 
@@ -153,6 +154,7 @@
 </template>
 
 <script setup>
+import { desktopSourceBridge, desktopMediaUrl } from '@/utils/desktopSource'
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useRouter } from 'vue-router'
@@ -171,6 +173,8 @@ import {
   parseCustomSourceLyrics,
   validateCustomSourceMediaUrl
 } from '@/utils/customSourceRuntime'
+
+const isDesktop = !!desktopSourceBridge()
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -285,7 +289,7 @@ async function initializeSource() {
     sessionExpiryTimer = setTimeout(() => {
       if (activeSession.value !== createdSession) return
       sessionReady.value = false
-      errorMessage.value = '隔离会话已超过 45 秒安全时限，请重新初始化。'
+      errorMessage.value = `隔离会话已超过 ${Math.round(CUSTOM_SOURCE_SESSION_TIMEOUT_MS / 1000)} 秒安全时限，请重新初始化。`
     }, CUSTOM_SOURCE_SESSION_TIMEOUT_MS + 100)
   } catch (error) {
     createdSession?.destroy()
@@ -357,10 +361,17 @@ async function resolveAndPlay() {
 
     const coverPermission = cover ? `；封面来自 ${cover.origin}` : ''
     await ElMessageBox.confirm(
-      `音频来自 ${audio.origin}${coverPermission}。媒体地址必须是与 Music Holo 不同源的 HTTPS URL；播放器使用匿名 CORS 加载，不发送 Cookie 或登录态，未开放 CORS 的站点将无法播放（封面也可能无法显示）。请确认你有权访问此音源。`,
+      isDesktop ? `音频来自 ${audio.origin}${coverPermission}。桌面将再次确认域名，通过无 Cookie 的受控媒体流加载，临时地址仅保留在本窗口。HTTP 地址不加密。请确认你有权访问。` : `音频来自 ${audio.origin}${coverPermission}。媒体地址必须是与 Music Holo 不同源的 HTTPS URL；播放器使用匿名 CORS 加载，不发送 Cookie 或登录态，未开放 CORS 的站点将无法播放（封面也可能无法显示）。请确认你有权访问此音源。`,
       '确认加载自定义媒体',
       { type: 'warning', confirmButtonText: '允许并播放', cancelButtonText: '拒绝', closeOnClickModal: false }
     )
+    if (controller.signal.aborted) return
+
+    const playbackUrl = await desktopMediaUrl(audio.href)
+    let coverUrl = cover?.href || song.cover || ''
+    if (cover) {
+      try { coverUrl = await desktopMediaUrl(cover.href) } catch { coverUrl = '' }
+    }
     if (controller.signal.aborted) return
 
     const suffix = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
@@ -368,8 +379,8 @@ async function resolveAndPlay() {
       ...song,
       id: `custom-source-${suffix}`,
       sourceSongId: song.id,
-      audioUrl: audio.href,
-      cover: cover?.href || song.cover || '',
+      audioUrl: playbackUrl,
+      cover: coverUrl,
       customLyrics,
       isCustomSource: true,
       sourceName: source.name,
