@@ -30,6 +30,7 @@
       <el-menu-item v-if="userStore.isLogin" index="/recent"><el-icon><Clock /></el-icon><template #title>最近播放</template></el-menu-item>
       <el-menu-item index="/favorites"><el-icon><Star /></el-icon><template #title>我的收藏</template></el-menu-item>
       <el-menu-item index="/queue"><el-icon><List /></el-icon><template #title>播放列表</template></el-menu-item>
+      <el-menu-item index="/downloads"><el-icon><Download /></el-icon><template #title>下载中心</template><el-badge v-if="downloadStore.activeCount" :value="downloadStore.activeCount" class="nav-badge" /></el-menu-item>
     </el-menu-item-group>
 
     <el-menu-item-group v-if="userStore.isAdmin">
@@ -56,6 +57,7 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useUserStore } from '@/store/user'
+import { useDownloadStore } from '@/store/downloads'
 import { desktopSourceBridge } from '@/utils/desktopSource'
 
 const isDesktop = !!desktopSourceBridge()
@@ -66,6 +68,7 @@ const props = defineProps({
 const emit = defineEmits(['navigate'])
 const route = useRoute()
 const userStore = useUserStore()
+const downloadStore = useDownloadStore()
 
 const activeIndex = computed(() => {
   const { path } = route

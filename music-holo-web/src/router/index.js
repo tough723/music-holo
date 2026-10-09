@@ -36,6 +36,7 @@ const routes = [
       { path: 'recent', name: 'RecentlyPlayed', component: () => import('@/views/RecentlyPlayed.vue'), meta: { title: '最近播放', requiresAuth: true } },
       { path: 'favorites', name: 'Favorites', component: () => import('@/views/Favorites.vue'), meta: { title: '我的收藏', requiresAuth: true } },
       { path: 'queue', name: 'Queue', component: () => import('@/views/Queue.vue'), meta: { title: '播放列表', requiresAuth: true } },
+      { path: 'downloads', name: 'Downloads', component: () => import('@/views/Downloads.vue'), meta: { title: '下载中心' } },
       { path: 'settings', name: 'Settings', component: () => import('@/views/Settings.vue'), meta: { title: '设置', requiresAuth: true } },
       // ---------- 管理后台 ----------
       { path: 'admin/dashboard', name: 'AdminDashboard', component: () => import('@/views/admin/Dashboard.vue'), meta: { title: '仪表盘', requiresAuth: true, requiresAdmin: true } },

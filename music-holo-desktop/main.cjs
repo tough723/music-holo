@@ -8,10 +8,11 @@ const { sourceRequest, openPublicResponse } = require('./transport.cjs')
 const { SourceSessions } = require('./sessions.cjs')
 const { assertTrustedSender } = require('./ipc-security.cjs')
 const { mediaRange, mediaContentType } = require('./media-policy.cjs')
+const { DownloadManager } = require('./downloads.cjs')
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }])
 const APP_URL = 'app://music-holo/'
-let win, sources
+let win, sources, downloads
 const mediaTickets = new Map()
 const mediaControllers = new Set()
 const promptControllers = new Set()
@@ -37,18 +38,49 @@ async function confirm(name, url, signal) {
 }
 function reset() {
   generation++
-  sources?.closeAll(); mediaTickets.clear()
+  sources?.closeAll(); downloads?.cancelAll(); mediaTickets.clear()
   for (const controller of promptControllers) controller.abort()
   promptControllers.clear()
   for (const controller of mediaControllers) controller.abort()
   mediaControllers.clear()
 }
+/** 所有 IPC 都校验发送方是主窗口，且只暴露最小能力。 */
+const handle = (name, callback) => ipcMain.handle(name, (event, ...args) => { assertTrustedSender(event, win); return callback(...args) })
+
+function registerDownloadIpc() {
+  handle('download:pickDirectory', async () => {
+    if (!win || win.isDestroyed()) return ''
+    const result = await dialog.showOpenDialog(win, {
+      title: '选择下载保存目录', properties: ['openDirectory', 'createDirectory', 'dontAddToRecent']
+    })
+    return result.canceled || !result.filePaths.length ? '' : result.filePaths[0]
+  })
+  handle('download:pickPath', async (fileName) => {
+    if (!win || win.isDestroyed()) return ''
+    const result = await dialog.showSaveDialog(win, {
+      title: '保存音频文件', defaultPath: String(fileName || 'music-holo-track.mp3'),
+      properties: ['createDirectory', 'showOverwriteConfirmation', 'dontAddToRecent']
+    })
+    return result.canceled || !result.filePath ? '' : result.filePath
+  })
+  handle('download:start', (job) => downloads.start(job || {}))
+  handle('download:cancel', (id) => downloads.cancel(id))
+  handle('download:show', (target) => {
+    const file = String(target || '')
+    if (file) require('electron').shell.showItemInFolder(file)
+  })
+  handle('download:openPath', (target) => {
+    const file = String(target || '')
+    return file ? require('electron').shell.openPath(file) : ''
+  })
+}
+
 function registerIpc() {
-  const handle = (name, callback) => ipcMain.handle(name, (event, ...args) => { assertTrustedSender(event, win); return callback(...args) })
   handle('source:open', (name) => sources.open(name))
   handle('source:close', (id) => sources.close(id))
   handle('source:cancel', (id, requestId) => sources.cancel(id, requestId))
   handle('source:request', (id, requestId, url, options) => sources.run(id, requestId, url, options))
+  registerDownloadIpc()
   handle('source:media', async (rawUrl) => {
     const url = sourceUrl(rawUrl, deniedHosts)
     if (mediaTickets.size + mediaPrompts >= 256 || mediaPrompts >= 2) throw new Error('临时媒体数量或授权并发超过限制，请重启客户端清理')
@@ -155,6 +187,7 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
   session.defaultSession.setPermissionCheckHandler(() => false)
   sources = new SourceSessions({ confirm, request: sourceRequest, deniedHosts })
+  downloads = new DownloadManager({ emit: (event) => { if (win && !win.isDestroyed()) win.webContents.send('download:event', event) } })
   protocol.handle('app', serveApp)
   registerIpc(); createWindow()
   app.on('activate', () => { if (!win) createWindow() })
