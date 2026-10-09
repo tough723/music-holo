@@ -9,9 +9,14 @@ async function loginAs(page, username) {
   await expect(page).toHaveURL(/\/home$/)
 }
 
+async function openPlaylistPage(page) {
+  // Keep the SPA alive so the in-memory Mock token registry is not reset by a hard reload.
+  await page.locator('.sidebar .app-nav-menu').getByRole('menuitem', { name: '歌单' }).click()
+}
+
 test('账号歌单可导出并预览导入；重名创建私密副本且跳过缺失曲目', async ({ page }) => {
   await loginAs(page, 'demo')
-  await page.goto('/playlists')
+  await openPlaylistPage(page)
 
   const downloadPromise = page.waitForEvent('download')
   await page.getByRole('button', { name: '导出我的歌单' }).click()

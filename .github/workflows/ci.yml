@@ -102,10 +102,18 @@ jobs:
           set +e
           mvn --batch-mode --no-transfer-progress verify > /tmp/maven-verify.log 2>&1
           status=$?
-          cat /tmp/maven-verify.log
           if [ "$status" -ne 0 ]; then
-            summary=$(tail -n 18 /tmp/maven-verify.log | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            if [ -d target/surefire-reports ]; then
+              {
+                printf '\n--- Surefire failure details ---\n'
+                grep -R -n -B 2 -A 18 -E '<<< FAILURE!|<<< ERROR!|Failures: [1-9]|Errors: [1-9]' target/surefire-reports --include='*.txt' || true
+              } >> /tmp/maven-verify.log
+            fi
+            cat /tmp/maven-verify.log
+            summary=$(tail -n 80 /tmp/maven-verify.log | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
             echo "::error title=Maven verify failed::$summary"
+          else
+            cat /tmp/maven-verify.log
           fi
           exit "$status"
 
@@ -128,6 +136,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          trap 'echo "::error title=Container API smoke failed::Failed at shell line $LINENO"' ERR
           # Exercise the additive migration against the initialized schema twice (no-op on an existing column).
           docker compose exec -T mysql mysql -uroot -proot music_holo < sql/migration_20261009_lyric_translation.sql
           docker compose exec -T mysql mysql -uroot -proot music_holo < sql/migration_20261009_lyric_translation.sql
