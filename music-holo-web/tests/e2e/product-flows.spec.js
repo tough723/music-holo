@@ -220,8 +220,14 @@ test('搜索与隐私设置可关闭探索词和历史记忆并限制本机记�
 
   await openMenu(page, '设置')
   await page.getByRole('tab', { name: '搜索与隐私' }).click()
-  await page.getByRole('switch', { name: '显示探索关键词' }).click()
-  await page.getByRole('switch', { name: '记住最近搜索' }).click()
+  await page.locator('.search-setting-card .setting-row')
+    .filter({ hasText: '显示探索关键词' })
+    .locator('.el-switch__core')
+    .click()
+  await page.locator('.search-setting-card .setting-row')
+    .filter({ hasText: '记住最近搜索' })
+    .locator('.el-switch__core')
+    .click()
   await expect.poll(() => page.evaluate(() => localStorage.getItem('music-holo-recent-searches'))).toBeNull()
 
   await page.goto('/search')
