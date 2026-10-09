@@ -135,7 +135,9 @@ jobs:
         # 先退避重试，仍失败时改用公共镜像代理 mirror.gcr.io（同一官方镜像，只换拉取源）。
         run: |
           set +e
-          for image in mysql:8.0 redis:7; do
+          # 运行镜像（compose 服务）与构建基础镜像（两个 Dockerfile 的 FROM）都要预先拉到本地：
+          # 本地已有镜像时 buildkit 不会再向 registry-1.docker.io 请求元数据，从而避开限流。
+          for image in mysql:8.0 redis:7 node:22-bookworm-slim nginx:stable-alpine maven:3.9.11-eclipse-temurin-17 eclipse-temurin:17-jre-jammy; do
             if docker image inspect "$image" > /dev/null 2>&1; then echo "$image 已在本地"; continue; fi
             for attempt in 1 2 3; do
               docker pull "$image" && break
@@ -143,6 +145,7 @@ jobs:
               sleep 20
             done
             if ! docker image inspect "$image" > /dev/null 2>&1; then
+              # mirror.gcr.io 是 Docker Hub 官方镜像的公共代理（内容一致，仅换拉取源）。
               docker pull "mirror.gcr.io/library/$image" && docker tag "mirror.gcr.io/library/$image" "$image"
             fi
             docker image inspect "$image" > /dev/null 2>&1 || echo "::error title=Base image unavailable::$image 无法从 Docker Hub 或公共代理拉取"
