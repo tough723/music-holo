@@ -28,6 +28,7 @@
         <div class="mini-holo">
           <HoloProjector
             :cover="playerStore.currentSong?.cover"
+            :anonymous-cover="Boolean(playerStore.currentSong?.isCustomSource)"
             :title="playerStore.currentSong?.title"
             :playing="playerStore.playing"
             :size="72"

@@ -6,7 +6,7 @@
       <div class="holo-ring r2"></div>
       <div class="holo-disc">
         <div class="disc-face front">
-          <Cover :src="cover" :text="title" :size="size * 0.62" />
+          <Cover :src="cover" :text="title" :size="size * 0.62" :anonymous="anonymousCover" />
         </div>
         <div class="disc-face back"></div>
         <div class="holo-scan"></div>
@@ -29,6 +29,7 @@ import Cover from './Cover.vue'
 
 defineProps({
   cover: { type: String, default: '' },
+  anonymousCover: { type: Boolean, default: false },
   title: { type: String, default: '' },
   singer: { type: String, default: '' },
   playing: { type: Boolean, default: false },

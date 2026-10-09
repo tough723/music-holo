@@ -39,6 +39,7 @@
       <div class="playlist-holo">
         <HoloProjector
           :cover="playerStore.currentSong?.cover"
+          :anonymous-cover="Boolean(playerStore.currentSong?.isCustomSource)"
           :title="playerStore.currentSong?.title || playlist.name"
           :playing="playerStore.playing"
           :size="150"

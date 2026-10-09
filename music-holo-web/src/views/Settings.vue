@@ -93,6 +93,7 @@
           <div class="preview-stage">
             <HoloProjector
               :cover="playerStore.currentSong?.cover"
+              :anonymous-cover="Boolean(playerStore.currentSong?.isCustomSource)"
               :title="playerStore.currentSong?.title || '全息投影'"
               :singer="playerStore.currentSong?.singerName"
               :playing="playerStore.playing"

@@ -5,6 +5,7 @@
       <div class="hero-visual">
         <HoloProjector
           :cover="playerStore.currentSong?.cover"
+          :anonymous-cover="Boolean(playerStore.currentSong?.isCustomSource)"
           :title="playerStore.currentSong?.title || '3D 全息音乐'"
           :singer="playerStore.currentSong?.singerName || 'Music Holo'"
           :playing="playerStore.playing"

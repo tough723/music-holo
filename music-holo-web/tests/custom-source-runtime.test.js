@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   MAX_CUSTOM_SOURCE_REQUEST_BYTES,
   MAX_CUSTOM_SOURCE_RESPONSE_BYTES,
+  buildCustomSourceMusicInfo,
+  mergeCustomSourceMusicInfo,
   normalizeLxSourceCapabilities,
   parseCustomSourceLyrics,
   performCustomSourceRequest,
@@ -13,6 +15,49 @@ afterEach(() => {
 })
 
 describe('隔离自定义音源兼容检测', () => {
+  it('只向自定义源传递最小公开曲目信息，不泄漏无关字段', () => {
+    const info = buildCustomSourceMusicInfo({
+      id: 42,
+      title: '云端信使',
+      singerName: '星港',
+      album: '全息夜航',
+      duration: 196,
+      audioUrl: 'https://internal.example/secret-token',
+      authorization: 'must-not-leak'
+    })
+    expect(info).toEqual({
+      musicHoloId: '42',
+      id: '42',
+      title: '云端信使',
+      name: '云端信使',
+      singerName: '星港',
+      singer: '星港',
+      album: '全息夜航',
+      duration: 196
+    })
+    expect(JSON.stringify(info)).not.toContain('secret-token')
+    expect(JSON.stringify(info)).not.toContain('must-not-leak')
+    expect(() => buildCustomSourceMusicInfo({ id: 1 })).toThrow('缺少有效标题')
+  })
+
+  it('合并可选的平台曲目 ID，同时保护曲库标题并拒绝凭据字段', () => {
+    const merged = mergeCustomSourceMusicInfo({ id: 42, title: '云端信使', singerName: '星港' }, JSON.stringify({
+      songmid: 'provider-song-42',
+      id: 'attempted-override',
+      title: 'attempted-title-override'
+    }))
+    expect(merged).toMatchObject({
+      id: '42',
+      musicHoloId: '42',
+      title: '云端信使',
+      name: '云端信使',
+      songmid: 'provider-song-42'
+    })
+    expect(() => mergeCustomSourceMusicInfo({ id: 1, title: '歌曲' }, '{broken')).toThrow('有效 JSON')
+    expect(() => mergeCustomSourceMusicInfo({ id: 1, title: '歌曲' }, '[]')).toThrow('JSON 对象')
+    expect(() => mergeCustomSourceMusicInfo({ id: 1, title: '歌曲' }, '{"accessToken":"do-not-send"}')).toThrow('疑似凭据')
+  })
+
   it('规范化 inited 声明且只返回安全展示字段', () => {
     const result = normalizeLxSourceCapabilities({
       sources: {
@@ -135,6 +180,7 @@ describe('隔离自定义音源兼容检测', () => {
     expect(() => validateCustomSourceMediaUrl('http://cdn.example.org/music.mp3')).toThrow('公网 HTTPS')
     expect(() => validateCustomSourceMediaUrl('javascript:alert(1)')).toThrow('公网 HTTPS')
     expect(() => validateCustomSourceMediaUrl('https://localhost/music.mp3')).toThrow('公网 HTTPS')
+    expect(() => validateCustomSourceMediaUrl('https://music-holo.example/music.mp3', { pageOrigin: 'https://music-holo.example' })).toThrow('同源')
     expect(() => validateCustomSourceMediaUrl('')).toThrow('没有返回')
   })
 

@@ -69,6 +69,23 @@ describe('Media Session bridge', () => {
     expect(session.metadata).toBeNull()
   })
 
+  it('does not disclose custom-source artwork URLs to the operating system', () => {
+    const session = createSession()
+    const controller = createMediaSessionController({
+      navigatorObject: { mediaSession: session },
+      MediaMetadataConstructor: FakeMediaMetadata
+    })
+
+    controller.updateMetadata({
+      title: '临时解析曲目',
+      singerName: '测试歌手',
+      album: '全息试听',
+      cover: 'https://cdn.example.org/signed-cover?token=temporary',
+      isCustomSource: true
+    }, 'https://music.example')
+    expect(session.metadata).toMatchObject({ title: '临时解析曲目', artwork: [] })
+  })
+
   it('reports playback state and safely clamps the system seek position', () => {
     const session = createSession()
     const controller = createMediaSessionController({ navigatorObject: { mediaSession: session } })

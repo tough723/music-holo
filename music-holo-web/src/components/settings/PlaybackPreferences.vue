@@ -49,11 +49,11 @@
         <p v-if="player.currentSong">{{ player.currentSong.title }} · {{ player.currentSong.singerName || '未知歌手' }}</p>
         <p v-else>播放队列为空；从曲库选择歌曲后，播放设置会立即生效。</p>
       </div>
-      <el-tag v-if="player.currentSong?.isCustomSource" type="warning" effect="plain">本次会话试听</el-tag>
+      <el-tag v-if="player.currentSong?.isCustomSource" type="warning" effect="plain">自定义源 · 仅本次会话</el-tag>
       <el-tag v-else-if="player.playing" type="success" effect="plain">正在播放</el-tag>
     </article>
 
-    <div class="playback-footnote"><el-icon><InfoFilled /></el-icon>浏览器自定义源试听与本地音频不会写入服务端播放历史，也不会恢复到持久队列。</div>
+    <div class="playback-footnote"><el-icon><InfoFilled /></el-icon>自定义源播放与本地音频不会写入服务端播放历史，也不会恢复到持久队列；临时解析地址仅保存在当前浏览器会话内。</div>
   </section>
 </template>
 

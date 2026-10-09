@@ -27,6 +27,7 @@
       <div class="singer-holo">
         <HoloProjector
           :cover="playerStore.currentSong?.singerId === singer.id ? playerStore.currentSong?.cover : ''"
+          :anonymous-cover="Boolean(playerStore.currentSong?.singerId === singer.id && playerStore.currentSong?.isCustomSource)"
           :title="playerStore.currentSong?.singerId === singer.id ? playerStore.currentSong?.title : singer.name"
           :playing="playerStore.playing && playerStore.currentSong?.singerId === singer.id"
           :size="150"

@@ -34,6 +34,7 @@
         <div class="radio-stage__beam"></div>
         <HoloProjector
           :cover="sourceSong?.cover || playerStore.currentSong?.cover"
+          :anonymous-cover="Boolean(sourceSong?.isCustomSource || (!sourceSong && playerStore.currentSong?.isCustomSource))"
           :title="sourceSong?.title || playerStore.currentSong?.title || 'HOLO RADIO'"
           :singer="sourceSong?.singerName || playerStore.currentSong?.singerName"
           :playing="playerStore.playing"
@@ -98,7 +99,7 @@ async function loadRadio() {
     let source = null
     if (Number.isFinite(queryId) && queryId > 0) {
       source = await songApi.detail(queryId)
-    } else if (playerStore.currentSong && !playerStore.currentSong.isLocal) {
+    } else if (playerStore.currentSong && !playerStore.currentSong.isLocal && !playerStore.currentSong.isCustomSource) {
       source = playerStore.currentSong
     }
     if (currentRequest !== requestId) return

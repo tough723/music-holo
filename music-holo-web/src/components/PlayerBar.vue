@@ -5,6 +5,7 @@
       <div class="pb-holo" @click="toggleLyric">
         <HoloProjector
           :cover="currentSong?.cover"
+          :anonymous-cover="Boolean(currentSong?.isCustomSource)"
           :title="currentSong?.title"
           :playing="playing"
           :size="58"
@@ -160,7 +161,7 @@
         </div>
       </el-tooltip>
       <el-tooltip content="歌词 · L" placement="top">
-        <el-button circle text :class="{ active: playerStore.lyricVisible }" @click="toggleLyric">
+        <el-button circle text :class="{ active: playerStore.lyricVisible }" :aria-label="playerStore.lyricVisible ? '关闭歌词' : '显示歌词'" @click="toggleLyric">
           <el-icon><ChatLineSquare /></el-icon>
         </el-button>
       </el-tooltip>
@@ -217,13 +218,15 @@
       :class="{ active: index === playerStore.currentIndex }"
       @click="playerStore.playAt(index)"
     >
-      <div class="queue-cover"><Cover :src="song.cover" :text="song.title" :size="36" /></div>
+      <div class="queue-cover"><Cover :src="song.cover" :text="song.title" :size="36" :anonymous="Boolean(song.isCustomSource)" /></div>
       <div class="queue-meta">
         <div class="queue-title">{{ song.title }}</div>
         <div class="queue-artist">
           {{ song.singerName }}
           <el-tag v-if="song.isLocal" size="small" effect="plain" class="queue-local-tag">本地</el-tag>
-          <el-tag v-else-if="song.isCustomSource" size="small" effect="plain" class="queue-local-tag">{{ song.sourcePlatform || '自定义源' }}</el-tag>
+          <el-tag v-else-if="song.isCustomSource" size="small" effect="plain" class="queue-local-tag">
+            {{ song.sourceName ? `${song.sourceName} · ${song.sourcePlatform || '自定义源'}` : song.sourcePlatform || '自定义源' }}
+          </el-tag>
         </div>
       </div>
       <el-button circle size="small" text @click.stop="playerStore.removeAt(index)">
@@ -304,9 +307,16 @@ function ensureSpatialAudioGraph() {
 function setAudioSource(audio, audioUrl, { anonymous = false } = {}) {
   if (!audio) return
   const previousCorsMode = audio.getAttribute('crossorigin')
-  if (anonymous) audio.crossOrigin = 'anonymous'
-  else audio.removeAttribute('crossorigin')
-  const corsModeChanged = previousCorsMode !== audio.getAttribute('crossorigin')
+  const previousReferrerPolicy = audio.getAttribute('referrerpolicy')
+  if (anonymous) {
+    audio.crossOrigin = 'anonymous'
+    audio.setAttribute('referrerpolicy', 'no-referrer')
+  } else {
+    audio.removeAttribute('crossorigin')
+    audio.removeAttribute('referrerpolicy')
+  }
+  const corsModeChanged = previousCorsMode !== audio.getAttribute('crossorigin') ||
+    previousReferrerPolicy !== audio.getAttribute('referrerpolicy')
   if (!audioUrl) {
     audio.pause()
     audio.removeAttribute('src')

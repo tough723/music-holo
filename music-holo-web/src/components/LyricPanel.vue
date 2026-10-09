@@ -17,7 +17,7 @@
         <header class="lyric-header">
           <div class="lyric-track">
             <div class="lyric-cover">
-              <Cover :src="playerStore.currentSong?.cover" :text="playerStore.currentSong?.title || '♪'" :size="48" />
+              <Cover :src="playerStore.currentSong?.cover" :text="playerStore.currentSong?.title || '♪'" :size="48" :anonymous="Boolean(playerStore.currentSong?.isCustomSource)" />
             </div>
             <div class="lyric-title">
               <span class="lyric-eyebrow">HOLO LYRICS · 空间歌词</span>
@@ -47,6 +47,7 @@
             <div class="visual-projector">
               <HoloProjector
                 :cover="playerStore.currentSong?.cover"
+                :anonymous-cover="Boolean(playerStore.currentSong?.isCustomSource)"
                 :title="playerStore.currentSong?.title || '全息投影'"
                 :singer="playerStore.currentSong?.singerName || 'Music Holo'"
                 :playing="playerStore.playing"

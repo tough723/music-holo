@@ -41,7 +41,7 @@
     <el-alert class="source-safety-alert" type="warning" :closable="false" show-icon>
       <template #title>脚本默认不会自动运行</template>
       <template #default>
-          可手动对可信脚本执行一次性隔离兼容检测：脚本在受限 Worker 中运行，无法访问页面 DOM、本机存储或直接联网；外部 HTTPS 请求须按域名确认，并由浏览器 CORS 策略控制。程序会拦截常见本地地址和私网 DNS 别名，但浏览器端无法可靠验证任意域名最终解析到的 IP，不能防住所有 DNS 重绑定。检测结束后沙箱销毁；该检测不会将音源接入歌曲搜索或播放。
+          可手动对可信脚本执行一次性隔离兼容检测：脚本在受限 Worker 中运行，无法访问页面 DOM、本机存储或直接联网；外部 HTTPS 请求须按域名确认，并由浏览器 CORS 策略控制。程序会拦截常见本地地址和私网 DNS 别名，但浏览器端无法可靠验证任意域名最终解析到的 IP，不能防住所有 DNS 重绑定。检测结束后沙箱销毁；能力检测不会自动添加搜索结果或播放歌曲。普通曲目可由你在列表中单独选择自定义源解析；请求仍受 HTTPS、用户确认和浏览器 CORS 限制。
       </template>
     </el-alert>
 
@@ -249,9 +249,9 @@ import { useUserStore } from '@/store/user'
 import { usePlayerStore } from '@/store/player'
 import * as searchApi from '@/api/search'
 import {
-  CUSTOM_SOURCE_STORAGE_KEY,
   MAX_CUSTOM_SOURCE_BYTES,
   MAX_CUSTOM_SOURCES,
+  customSourceStorageKeyForOwner,
   formatSourceSize,
   parseCustomSourceFile,
   parseCustomSourceUrl,
@@ -262,10 +262,10 @@ import {
 import {
   createCustomSourceSession,
   parseCustomSourceLyrics,
-  performCustomSourceRequest,
   runCustomSourceCompatibility,
   validateCustomSourceMediaUrl
 } from '@/utils/customSourceRuntime'
+import { createCustomSourceRequestBridge } from '@/utils/customSourceConsent'
 
 const userStore = useUserStore()
 const playerStore = usePlayerStore()
@@ -292,7 +292,7 @@ let activeAuditionSession = null
 let activeAuditionController = null
 let activeCompatibilityController = null
 const sourceOwner = computed(() => userStore.userInfo?.id ?? userStore.userInfo?.username ?? 'local')
-const storageKey = computed(() => `${CUSTOM_SOURCE_STORAGE_KEY}:${String(sourceOwner.value).replace(/[^a-zA-Z0-9._-]/g, '_')}`)
+const storageKey = computed(() => customSourceStorageKeyForOwner(sourceOwner.value))
 const sources = ref(readCustomSources(localStorage, storageKey.value))
 const visibleSources = computed(() => {
   const query = sourceFilter.value.trim().toLowerCase()
@@ -495,25 +495,6 @@ function moveSource(index, offset) {
   persist(reordered)
 }
 
-function createSourceRequestBridge(source) {
-  const approvedOrigins = new Set()
-  return async (rawUrl, options, signal) => {
-    const target = parseCustomSourceUrl(rawUrl)
-    if (signal?.aborted) throw new Error('网络请求已取消')
-    if (!approvedOrigins.has(target.origin)) {
-      const requestMethod = String(options?.method || 'GET').toUpperCase()
-      await ElMessageBox.confirm(
-        `「${source.name}」请求 ${requestMethod} ${target.origin}${target.pathname}。请求不携带 Cookie 或登录态，不绕过浏览器 CORS；该来源仅在本次运行期间允许。`,
-        '确认音源网络请求',
-        { type: 'warning', confirmButtonText: '仅本次允许', cancelButtonText: '拒绝请求', closeOnClickModal: false }
-      )
-      if (signal?.aborted) throw new Error('网络请求已取消')
-      approvedOrigins.add(target.origin)
-    }
-    return performCustomSourceRequest(target.href, options, { signal })
-  }
-}
-
 async function checkCompatibility(source) {
   if (checkingSourceId.value) return
   let executionStarted = false
@@ -529,12 +510,12 @@ async function checkCompatibility(source) {
     if (controller.signal.aborted) return
     executionStarted = true
     const result = await runCustomSourceCompatibility(source, {
-      onRequest: createSourceRequestBridge(source),
+      onRequest: createCustomSourceRequestBridge(source),
       signal: controller.signal
     })
     if (controller.signal.aborted) return
     compatibilityBySource.value = { ...compatibilityBySource.value, [source.id]: result }
-    ElMessage.success(`隔离初始化通过：声明 ${result.sources.length} 个平台；尚未接入搜索或播放`)
+    ElMessage.success(`隔离初始化通过：声明 ${result.sources.length} 个平台；本次仅检测协议能力，未解析或播放歌曲`)
   } catch (error) {
     if (controller.signal.aborted) return
     const wasCancelled = error === 'cancel' || error === 'close'
@@ -653,7 +634,7 @@ async function resolveAudition() {
     if (controller.signal.aborted) throw new Error('隔离试听已取消')
     consentGranted = true
     session = await createCustomSourceSession(source, {
-      onRequest: createSourceRequestBridge(source),
+      onRequest: createCustomSourceRequestBridge(source),
       signal: controller.signal
     })
     activeAuditionSession = session

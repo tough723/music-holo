@@ -29,6 +29,7 @@
       <div class="album-projector">
         <HoloProjector
           :cover="playerStore.currentSong?.cover || album.cover"
+          :anonymous-cover="Boolean(playerStore.currentSong?.isCustomSource)"
           :title="playerStore.currentSong?.title || album.album"
           :singer="playerStore.currentSong?.singerName || album.singerName"
           :playing="playerStore.playing"
@@ -83,7 +84,7 @@ const favoriteIds = ref([])
 const loading = ref(false)
 const albumName = computed(() => String(route.query.album || '').trim())
 const singerId = computed(() => route.query.singerId ? Number(route.query.singerId) : undefined)
-const sourceSong = computed(() => playerStore.currentSong && !playerStore.currentSong.isLocal ? playerStore.currentSong : null)
+const sourceSong = computed(() => playerStore.currentSong && !playerStore.currentSong.isLocal && !playerStore.currentSong.isCustomSource ? playerStore.currentSong : null)
 let requestId = 0
 
 const formatCount = (value) => new Intl.NumberFormat('zh-CN').format(Number(value || 0))

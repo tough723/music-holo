@@ -3,6 +3,7 @@ import {
   CUSTOM_SOURCE_STORAGE_KEY,
   MAX_CUSTOM_SOURCE_BYTES,
   MAX_CUSTOM_SOURCES,
+  customSourceStorageKeyForOwner,
   formatSourceSize,
   parseCustomSourceFile,
   parseCustomSourceUrl,
@@ -112,6 +113,11 @@ describe('自定义音源安全导入与本地管理', () => {
     expect(() => parseCustomSourceUrl('https://printer/source.js')).toThrow('公网 HTTPS')
     expect(() => parseCustomSourceUrl('https://user:secret@cdn.example.org/source.js')).toThrow('公网 HTTPS')
     expect(() => parseCustomSourceUrl('https://music.local/source.js')).toThrow('公网 HTTPS')
+  })
+
+  it('按当前账号生成稳定且安全的本机音源存储键', () => {
+    expect(customSourceStorageKeyForOwner('user/42@test')).toBe('mh_custom_sources_v1:user_42_test')
+    expect(customSourceStorageKeyForOwner(null)).toBe('mh_custom_sources_v1:local')
   })
 
   it('格式化源文件大小', () => {

@@ -2,6 +2,11 @@ export const CUSTOM_SOURCE_STORAGE_KEY = 'mh_custom_sources_v1'
 export const MAX_CUSTOM_SOURCE_BYTES = 128 * 1024
 export const MAX_CUSTOM_SOURCES = 24
 
+export function customSourceStorageKeyForOwner(owner = 'local') {
+  const normalizedOwner = String(owner ?? 'local').replace(/[^a-zA-Z0-9._-]/g, '_') || 'local'
+  return `${CUSTOM_SOURCE_STORAGE_KEY}:${normalizedOwner}`
+}
+
 const ALLOWED_EXTENSIONS = new Set(['.js', '.mjs'])
 const BLOCKED_HOST_SUFFIXES = [
   '.localhost', '.local', '.internal', '.lan', '.test', '.home.arpa',

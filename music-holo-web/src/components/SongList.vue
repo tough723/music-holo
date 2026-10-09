@@ -69,7 +69,7 @@
       </template>
     </el-table-column>
 
-    <el-table-column label="操作" :width="showHistory ? 224 : 190" align="center" fixed="right">
+    <el-table-column label="操作" :width="(showHistory ? 224 : 190) + (hasCustomSources ? 40 : 0)" align="center" fixed="right">
       <template #default="{ row, $index }">
         <el-tooltip content="播放" placement="top">
           <el-button circle size="small" :aria-label="`播放《${row.title}》`" @click.stop="emit('play', row, $index)">
@@ -91,6 +91,18 @@
         <el-tooltip content="查看短评" placement="top">
           <el-button circle size="small" :aria-label="`短评《${row.title}》`" @click.stop="openReview(row)">
             <el-icon><ChatDotRound /></el-icon>
+          </el-button>
+        </el-tooltip>
+        <el-tooltip content="使用本机自定义源解析并播放" placement="top">
+          <el-button
+            v-if="hasCustomSources"
+            circle
+            size="small"
+            :aria-label="`使用自定义源播放《${row.title}》`"
+            :data-testid="`custom-source-play-${row.id}`"
+            @click.stop="openCustomSourcePlayback(row)"
+          >
+            <el-icon><Connection /></el-icon>
           </el-button>
         </el-tooltip>
         <el-tooltip content="加入播放队列" placement="top">
@@ -116,16 +128,25 @@
       :target-title="activeReviewSong.title"
     />
   </el-dialog>
+  <CustomSourcePlaybackDialog
+    v-if="customSourceDialogVisible"
+    v-model="customSourceDialogVisible"
+    :song="customSourceSong"
+  />
   </div>
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { usePlayerStore } from '@/store/player'
+import { useUserStore } from '@/store/user'
 import ReviewPanel from './ReviewPanel.vue'
 import { fmtDuration, fmtCount, fmtDateTime } from '@/utils/format'
+import { customSourceStorageKeyForOwner, readCustomSources } from '@/utils/customSources'
 import Cover from './Cover.vue'
+
+const CustomSourcePlaybackDialog = defineAsyncComponent(() => import('./CustomSourcePlaybackDialog.vue'))
 
 const props = defineProps({
   songs: { type: Array, default: () => [] },
@@ -143,10 +164,30 @@ const props = defineProps({
 const emit = defineEmits(['play', 'toggle-favorite', 'add-queue'])
 
 const playerStore = usePlayerStore()
+const userStore = useUserStore()
 const router = useRouter()
+const sourceOwner = computed(() => userStore.userInfo?.id ?? userStore.userInfo?.username ?? 'local')
+const sourceStorageKey = computed(() => customSourceStorageKeyForOwner(sourceOwner.value))
+const localCustomSources = ref([])
+const hasCustomSources = computed(() => localCustomSources.value.length > 0)
+const customSourceDialogVisible = ref(false)
+const customSourceSong = ref(null)
 const playing = computed(() => playerStore.playing)
 const reviewVisible = ref(false)
 const activeReviewSong = ref(null)
+
+function refreshCustomSources() {
+  localCustomSources.value = readCustomSources(globalThis.localStorage, sourceStorageKey.value)
+}
+
+function onCustomSourcesStorage(event) {
+  if (event.key !== null && event.key !== sourceStorageKey.value) return
+  refreshCustomSources()
+}
+
+watch(sourceStorageKey, refreshCustomSources, { immediate: true })
+onMounted(() => window.addEventListener('storage', onCustomSourcesStorage))
+onUnmounted(() => window.removeEventListener('storage', onCustomSourcesStorage))
 
 function openAlbum(song) {
   if (!song?.album) return
@@ -164,9 +205,16 @@ function openReview(song) {
   reviewVisible.value = true
 }
 
+function openCustomSourcePlayback(song) {
+  refreshCustomSources()
+  if (!hasCustomSources.value) return
+  customSourceSong.value = song
+  customSourceDialogVisible.value = true
+}
+
 const favSet = computed(() => new Set(props.favoriteIds))
 const isFavorite = (row) => !props.hideFavorite && favSet.value.has(row.id)
-const isCurrent = (row) => playerStore.currentSong?.id === row.id
+const isCurrent = (row) => playerStore.currentSong?.id === row.id || playerStore.currentSong?.sourceSongId === row.id
 
 const rowClassName = ({ row }) => (isCurrent(row) ? 'current-row' : '')
 // el-table 的 row-click 回调为 (row, column, event)，不含行号，这里手动计算

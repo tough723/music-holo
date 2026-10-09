@@ -47,7 +47,9 @@ export function createMediaSessionController({
       if (typeof MediaMetadataConstructor !== 'function') return false
 
       const artwork = []
-      if (song.cover) {
+      // Custom-source artwork is loaded directly by the browser with anonymous
+      // CORS. Do not hand that URL to the operating system's Media Session API.
+      if (song.cover && !song.isCustomSource) {
         let src = song.cover
         try { src = new URL(song.cover, baseUrl).href } catch { /* Keep browser-native URL validation. */ }
         artwork.push({ src, sizes: '512x512' })

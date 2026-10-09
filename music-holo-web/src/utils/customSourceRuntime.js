@@ -52,12 +52,75 @@ export function normalizeLxSourceCapabilities(payload) {
   return { sources, initializedAt: new Date().toISOString() }
 }
 
-export function validateCustomSourceMediaUrl(value) {
+export function validateCustomSourceMediaUrl(value, { pageOrigin = globalThis.location?.origin } = {}) {
   const rawUrl = typeof value === 'string' ? value : value && typeof value === 'object' ? value.url : ''
   if (typeof rawUrl !== 'string' || !rawUrl.trim()) throw new Error('音源没有返回可播放的 HTTPS 音频地址')
   const url = parseCustomSourceUrl(rawUrl.trim())
   url.hash = ''
+  let currentOrigin = ''
+  try { currentOrigin = pageOrigin ? new URL(pageOrigin).origin : '' } catch { /* Ignore unavailable page origins in non-browser tests. */ }
+  if (currentOrigin && url.origin === currentOrigin) {
+    throw new Error('自定义媒体地址不能与 Music Holo 页面同源，以避免请求携带站点 Cookie 或登录态')
+  }
   return { href: url.href, origin: url.origin }
+}
+
+/** Build only the public, non-secret fields passed to a compatible resolver. */
+export function buildCustomSourceMusicInfo(song) {
+  if (!song || typeof song !== 'object' || Array.isArray(song)) {
+    throw new Error('请选择有效的曲库歌曲')
+  }
+  const title = cleanText(song.title || song.name, 180)
+  if (!title) throw new Error('歌曲缺少有效标题')
+  const singerName = cleanText(song.singerName || song.singer || song.artist, 180)
+  const album = cleanText(song.album || song.albumName, 180)
+  const duration = Number(song.duration)
+  const songId = cleanText(song.id, 128)
+  return {
+    ...(songId ? { musicHoloId: songId, id: songId } : {}),
+    title,
+    name: title,
+    ...(singerName ? { singerName, singer: singerName } : {}),
+    ...(album ? { album } : {}),
+    ...(Number.isFinite(duration) && duration >= 0 && duration <= 3600 ? { duration } : {})
+  }
+}
+
+const MAX_CUSTOM_SOURCE_MUSIC_INFO_BYTES = 64 * 1024
+const BLOCKED_MUSIC_INFO_KEYS = /(?:authorization|cookie|password|passwd|secret|token|csrf|credential|session)/i
+
+export function mergeCustomSourceMusicInfo(song, extraJson = '{}') {
+  const base = buildCustomSourceMusicInfo(song)
+  let extra = {}
+  const text = String(extraJson ?? '').trim()
+  if (text) {
+    try { extra = JSON.parse(text) } catch { throw new Error('平台专属曲目字段不是有效 JSON') }
+  }
+  if (!extra || typeof extra !== 'object' || Array.isArray(extra)) {
+    throw new Error('平台专属曲目字段必须是 JSON 对象')
+  }
+
+  const assertSafeKeys = (value, depth = 0) => {
+    if (depth > 8) throw new Error('平台专属曲目字段嵌套过深')
+    if (!value || typeof value !== 'object') return
+    for (const [key, child] of Object.entries(value)) {
+      if (BLOCKED_MUSIC_INFO_KEYS.test(key)) throw new Error(`平台专属字段「${cleanText(key, 40)}」疑似凭据，不允许传给音源`)
+      assertSafeKeys(child, depth + 1)
+    }
+  }
+  assertSafeKeys(extra)
+
+  let serialized
+  try { serialized = JSON.stringify(extra) } catch { throw new Error('平台专属曲目字段无法序列化') }
+  if (new TextEncoder().encode(serialized || '{}').byteLength > MAX_CUSTOM_SOURCE_MUSIC_INFO_BYTES) {
+    throw new Error('平台专属曲目字段不能超过 64 KB')
+  }
+
+  const combined = { ...extra, ...base }
+  if (new TextEncoder().encode(JSON.stringify(combined)).byteLength > MAX_CUSTOM_SOURCE_MUSIC_INFO_BYTES) {
+    throw new Error('发送给音源的曲目信息不能超过 64 KB')
+  }
+  return combined
 }
 
 export function parseCustomSourceLyrics(value) {

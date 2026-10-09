@@ -1,12 +1,20 @@
 <template>
   <div class="cover">
-    <img v-if="showImg" :src="src" alt="cover" loading="lazy" @error="onError" />
+    <img
+      v-if="showImg"
+      :crossorigin="anonymous ? 'anonymous' : undefined"
+      :referrerpolicy="anonymous ? 'no-referrer' : undefined"
+      :src="src"
+      alt="cover"
+      loading="lazy"
+      @error="onError"
+    />
     <span v-else class="cover-fallback" :style="gradientStyle">{{ fallbackText }}</span>
   </div>
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { hashCode } from '@/utils/format'
 
 const props = defineProps({
@@ -15,10 +23,14 @@ const props = defineProps({
   /** 占位文字（取首字符） */
   text: { type: String, default: '♪' },
   /** 尺寸（px） */
-  size: { type: Number, default: 48 }
+  size: { type: Number, default: 48 },
+  /** 使用匿名 CORS 加载不可信/外部封面，不携带跨站凭据或 Referer */
+  anonymous: { type: Boolean, default: false }
 })
 
 const imgError = ref(false)
+const showImg = computed(() => Boolean(props.src) && !imgError.value)
+watch(() => props.src, () => { imgError.value = false })
 
 const PALETTE = [
   ['#22d3ee', '#818cf8'],
