@@ -170,7 +170,7 @@ import {
   mergeCustomSourceMusicInfo,
   createCustomSourceSession,
   CUSTOM_SOURCE_SESSION_TIMEOUT_MS,
-  parseCustomSourceLyrics,
+  parseCustomSourceLyricBundle,
   validateCustomSourceMediaUrl
 } from '@/utils/customSourceRuntime'
 
@@ -270,11 +270,15 @@ async function initializeSource() {
 
     createdSession = await createCustomSourceSession(source, {
       onRequest: createCustomSourceRequestBridge(source),
+      onUpdateAlert: (alert) => reportUpdateAlert(source, alert),
       signal: controller.signal
     })
     if (controller.signal.aborted || !visible.value) {
       createdSession.destroy()
       return
+    }
+    if (createdSession.capabilities?.devToolsRequested) {
+      ElMessage.info(`「${source.name}」请求了调试模式（openDevTools）。隔离运行环境不会打开开发者工具，但本次会话的网络请求已打印到浏览器控制台。`)
     }
 
     const availablePlatforms = createdSession.capabilities.sources.filter((platform) => platform.actions.includes('musicUrl'))
@@ -303,12 +307,12 @@ async function initializeSource() {
 }
 
 async function resolveOptionalLyrics(session, platform, musicInfo) {
-  if (!platform.actions.includes('lyric')) return []
+  if (!platform.actions.includes('lyric')) return { lines: [], translationLines: [], romajiLines: [], verbatimLines: [] }
   try {
     const result = await session.request({ source: platform.key, action: 'lyric', info: { musicInfo } })
-    return parseCustomSourceLyrics(result)
+    return parseCustomSourceLyricBundle(result)
   } catch {
-    return []
+    return { lines: [], translationLines: [], romajiLines: [], verbatimLines: [] }
   }
 }
 
@@ -320,6 +324,26 @@ async function resolveOptionalCover(session, platform, musicInfo) {
   } catch {
     return null
   }
+}
+
+/** 音源脚本声明的更新提示：只展示日志与官方下载地址，绝不自动下载或执行。 */
+function reportUpdateAlert(source, alert) {
+  if (!alert?.log) return
+  const message = alert.updateUrl
+    ? `「${source.name}」提示更新：${alert.log}。是否打开音源作者提供的更新地址？`
+    : `「${source.name}」提示更新：${alert.log}`
+  if (!alert.updateUrl) {
+    ElMessage.info(message)
+    return
+  }
+  ElMessageBox.confirm(message, '音源更新提示', {
+    type: 'warning',
+    confirmButtonText: '打开更新地址',
+    cancelButtonText: '稍后处理',
+    closeOnClickModal: false
+  }).then(() => {
+    globalThis.open?.(alert.updateUrl, '_blank', 'noopener,noreferrer')
+  }).catch(() => {})
 }
 
 async function resolveAndPlay() {
@@ -354,7 +378,7 @@ async function resolveAndPlay() {
     if (controller.signal.aborted) return
 
     const audio = validateCustomSourceMediaUrl(rawAudio)
-    const customLyrics = await resolveOptionalLyrics(session, platform, musicInfo)
+    const lyricBundle = await resolveOptionalLyrics(session, platform, musicInfo)
     if (controller.signal.aborted) return
     const cover = await resolveOptionalCover(session, platform, musicInfo)
     if (controller.signal.aborted) return
@@ -381,7 +405,10 @@ async function resolveAndPlay() {
       sourceSongId: song.id,
       audioUrl: playbackUrl,
       cover: coverUrl,
-      customLyrics,
+      customLyrics: lyricBundle.lines,
+      customTranslationLyrics: lyricBundle.translationLines,
+      customRomajiLyrics: lyricBundle.romajiLines,
+      customVerbatimLyrics: lyricBundle.verbatimLines,
       isCustomSource: true,
       sourceName: source.name,
       sourcePlatform: platform.name,

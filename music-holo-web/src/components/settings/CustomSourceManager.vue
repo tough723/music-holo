@@ -292,7 +292,7 @@ import {
 } from '@/utils/customSources'
 import {
   createCustomSourceSession,
-  parseCustomSourceLyrics,
+  parseCustomSourceLyricBundle,
   runCustomSourceCompatibility,
   validateCustomSourceMediaUrl
 } from '@/utils/customSourceRuntime'
@@ -318,6 +318,35 @@ const importing = ref(false)
 const importingUrl = ref(false)
 const checkingSourceId = ref('')
 const compatibilityBySource = ref({})
+const updateAlertsBySource = ref({})
+/** 音源脚本声明的更新提示：只展示日志与官方下载地址，绝不自动下载或执行。 */
+function reportUpdateAlert(source, alert) {
+  if (!alert?.log) return
+  updateAlertsBySource.value = { ...updateAlertsBySource.value, [source.id]: alert }
+  const message = alert.updateUrl
+    ? `「${source.name}」提示更新：${alert.log}。是否打开音源作者提供的更新地址？`
+    : `「${source.name}」提示更新：${alert.log}`
+  if (alert.updateUrl) {
+    ElMessageBox.confirm(message, '音源更新提示', {
+      type: 'warning',
+      confirmButtonText: '打开更新地址',
+      cancelButtonText: '稍后处理',
+      closeOnClickModal: false,
+      // 允许复制地址：只提供官方主页/下载地址，不代用户下载或替换脚本。
+      dangerouslyUseHTMLString: false
+    }).then(() => {
+      globalThis.open?.(alert.updateUrl, '_blank', 'noopener,noreferrer')
+    }).catch(() => {})
+  } else {
+    ElMessage.info(message)
+  }
+}
+
+/** 音源请求了 openDevTools：隔离 iframe 无法附加开发者工具，改为提示并打开请求日志。 */
+function reportDevToolsRequest(source) {
+  ElMessage.info(`「${source.name}」请求了调试模式（openDevTools）。隔离运行环境不会打开开发者工具，但本次会话的网络请求已打印到浏览器控制台。`)
+}
+
 const expandedSourceId = ref('')
 const auditionVisible = ref(false)
 const auditioning = ref(false)
@@ -572,8 +601,10 @@ async function checkCompatibility(source) {
     executionStarted = true
     const result = await runCustomSourceCompatibility(source, {
       onRequest: createCustomSourceRequestBridge(source),
+      onUpdateAlert: (alert) => reportUpdateAlert(source, alert),
       signal: controller.signal
     })
+    if (result?.devToolsRequested) reportDevToolsRequest(source)
     if (controller.signal.aborted) return
     compatibilityBySource.value = { ...compatibilityBySource.value, [source.id]: result }
     ElMessage.success(`隔离初始化通过：声明 ${result.sources.length} 个平台；本次仅检测协议能力，未解析或播放歌曲`)
@@ -760,9 +791,11 @@ async function resolveAudition() {
     consentGranted = true
     session = await createCustomSourceSession(source, {
       onRequest: createCustomSourceRequestBridge(source),
+      onUpdateAlert: (alert) => reportUpdateAlert(source, alert),
       signal: controller.signal
     })
     activeAuditionSession = session
+    if (session.capabilities?.devToolsRequested) reportDevToolsRequest(source)
     const runtimePlatform = session.capabilities.sources.find((platform) => platform.key === selectedPlatform.key)
     if (!runtimePlatform?.actions.includes('musicUrl')) throw new Error('本次初始化没有声明所选平台的 musicUrl 能力')
 
@@ -776,7 +809,7 @@ async function resolveAudition() {
     })
     if (controller.signal.aborted) throw new Error('隔离试听已取消')
     const media = validateCustomSourceMediaUrl(rawMediaUrl)
-    let customLyrics = []
+    let lyricBundle = { lines: [], translationLines: [], romajiLines: [], verbatimLines: [] }
     if (runtimePlatform.actions.includes('lyric')) {
       try {
         const lyricResult = await session.request({
@@ -784,7 +817,7 @@ async function resolveAudition() {
           action: 'lyric',
           info: { musicInfo }
         })
-        customLyrics = parseCustomSourceLyrics(lyricResult)
+        lyricBundle = parseCustomSourceLyricBundle(lyricResult)
       } catch {
         // 歌词是可选能力；失败不影响已解析的音频。
       }
@@ -804,7 +837,9 @@ async function resolveAudition() {
         ? { ...selectedCatalogTrack.value, musicInfo }
         : { musicInfo }
       const extras = await fetchPlatformTrackExtras(runtimePlatform.key, catalogTrack, { signal: controller.signal })
-      if (!customLyrics.length && extras?.lyric) customLyrics = parseCustomSourceLyrics(extras.lyric)
+      if (!lyricBundle.lines.length && extras?.lyric) {
+        lyricBundle = parseCustomSourceLyricBundle({ lyric: extras.lyric })
+      }
       if (!coverUrl && extras?.coverUrl) coverUrl = String(extras.coverUrl)
     } catch {
       // 附加信息是可选能力；失败不影响已解析的音频。
@@ -830,7 +865,10 @@ async function resolveAudition() {
       duration: Number.isFinite(duration) && duration > 0 && duration <= 3600 ? duration : 0,
       audioUrl: playbackUrl,
       audioOrigin: media.origin,
-      customLyrics,
+      customLyrics: lyricBundle.lines,
+      customTranslationLyrics: lyricBundle.translationLines,
+      customRomajiLyrics: lyricBundle.romajiLines,
+      customVerbatimLyrics: lyricBundle.verbatimLines,
       categoryName: '自定义源',
       sourceName: source.name,
       sourcePlatform: runtimePlatform.name,

@@ -46,6 +46,27 @@
 
 **`audioUrl`、`coverUrl`、`lyricUrl` 和这里的 `songmid` 映射规则是本示例约定，不是 LX 保证存在的本地曲目字段。** 桌面端实际传来的 `musicInfo` 依版本、曲目类型而异；若没有这些字段，需要根据实际元数据修改脚本中的曲目查找逻辑（例如用你维护的稳定曲目 ID 映射到 `TRACKS`）。不要假设导入即能自动匹配本地文件或平台曲库。本次没有进行 LX 桌面客户端实机验收。
 
+## 宿主提供的 `lx.utils` 支持范围
+
+以 LX 官方文档为基线：
+
+| 接口 | 支持情况 |
+| --- | --- |
+| `buffer.from` / `buffer.bufToString` | `utf8`、`ascii`、`latin1`/`binary`、`utf16le`/`ucs2`、`hex`、`base64`、`base64url`；编码与解码语义对齐 Node Buffer（ascii 编码取低字节、解码清高位） |
+| `crypto.md5` | 完整支持 |
+| `crypto.randomBytes` | 完整支持（单次上限 4096 字节） |
+| `crypto.aesEncrypt(buffer, mode, key, iv)` | 支持 `ECB / CBC / CFB / OFB / CTR / GCM`，模式名可写 `aes-128-cbc`、`AES-CBC`、`cbc` 等；ECB/CBC 使用 PKCS#7 填充，其余模式不填充，输出与 Node `createCipheriv` 逐字节一致。`GCM` 走 WebCrypto，密文含认证标签 |
+| `crypto.rsaEncrypt(buffer, key[, options])` | 支持公钥加密，默认 OAEP + SHA-1（与 Node `crypto.publicEncrypt` 一致），可选 `{ padding: 'pkcs1' }` 或 `{ hash: 'sha256' }`；密钥可为 SPKI PEM、`RSA PUBLIC KEY` PEM、JWK 或裸 base64/hex DER。**私钥材料一律拒绝**，沙箱不提供解密与签名 |
+| `zlib.inflate` / `zlib.deflate` | 支持，基于浏览器压缩流，行为不保证与 Node zlib 完全等同 |
+
+其余差异（相对 LX 桌面端）：
+
+- `lx.request` 的 `resp` 同时提供 `statusCode` 与 `status`。
+- `formData` 在网页沙箱与桌面桥都可用（桌面桥按 multipart/form-data 组装，字段名需为简单文本以防请求头注入）；`form` 与 `body` 两种用法不受影响。
+- `inited` 的 `openDevTools` 不会打开开发者工具：隔离环境无法附加调试器，宿主只开启本次会话的网络请求日志（输出到浏览器控制台）并在界面提示。
+- `updateAlert` 会被校验并展示（日志、可选下载地址），每次运行只提示一次，**不会自动下载或替换脚本**；非法声明直接忽略。
+- `lyric` 返回的 `lyric / tlyric / rlyric / lxlyric` 都会被消费：主歌词、译文、罗马音进入播放器，`lxlyric` 以逐字（卡拉 OK）方式高亮；只有逐字歌词时会用逐字文本合成主歌词行。
+
 ## 接入自己的解析 API
 
 如果要实现 kw/kg/tx/wy/mg，需先有已获授权的解析接口，并明确：
@@ -64,8 +85,9 @@
 - 不在脚本或曲目 JSON 中保存密码、Cookie、长期令牌；脚本导出会暴露其全部内容。
 - 地址校验只是格式校验，不是 DNS、私网或重定向安全检查；仅配置可信资源。
 - LX 桌面提供的网络能力不等同于 Music Holo 浏览器沙箱。后者继续执行 HTTPS、逐会话域名授权、无凭据 CORS、超时和响应体积限制，不提供绕过代理。
-- 脚本无初始化网络访问，无自动更新弹窗；可选远程歌词请求超时为 10 秒，歌词限制为 256K 字符，宿主可能施加更严格的字节限制。
-- 原文、译文、罗马音和逐字歌词均按协议返回；宿主最终显示哪些字段由其播放器能力决定。
+- 脚本的自动更新提示只展示日志与作者提供的下载地址，宿主不会自动下载或替换脚本。
+- 可选远程歌词请求超时为 10 秒，歌词限制为 256K 字符，宿主可能施加更严格的字节限制。
+- 原文、译文、罗马音和逐字歌词均按协议返回并展示（逐字歌词支持卡拉 OK 高亮）。
 
 ## 测试
 

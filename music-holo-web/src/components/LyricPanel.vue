@@ -46,6 +46,16 @@
             >
               {{ showRomaji ? '隐藏罗马音' : '显示罗马音' }}
             </el-button>
+            <el-button
+              v-if="hasVerbatim"
+              text
+              size="small"
+              class="translation-toggle"
+              :aria-pressed="showVerbatim"
+              @click="showVerbatim = !showVerbatim"
+            >
+              {{ showVerbatim ? '隐藏逐字' : '显示逐字' }}
+            </el-button>
             <el-tooltip :content="immersive ? '退出沉浸模式' : '沉浸式歌词'" placement="top">
               <el-button circle text :aria-label="immersive ? '退出沉浸模式' : '进入沉浸模式'" @click="toggleImmersive">
                 <el-icon><ScaleToOriginal v-if="immersive" /><FullScreen v-else /></el-icon>
@@ -99,7 +109,18 @@
               >
                 <span class="line-time">{{ fmtDuration(line.time) }}</span>
                 <span class="line-content">
-                  <span class="line-copy">{{ line.text || '♪' }}</span>
+                  <span class="line-copy" :class="{ 'is-verbatim': wordsForLine(line) }">
+                    <template v-if="wordsForLine(line)">
+                      <span
+                        v-for="(word, wordIndex) in wordsForLine(line)"
+                        :key="`${wordIndex}-${word.time}`"
+                        class="verbatim-word"
+                        :class="{ sung: index === activeIndex && wordProgress(line, word) >= 100 }"
+                        :style="index === activeIndex ? { '--word-fill': `${wordProgress(line, word)}%` } : { '--word-fill': '0%' }"
+                      >{{ word.text }}</span>
+                    </template>
+                    <template v-else>{{ line.text || '♪' }}</template>
+                  </span>
                   <span v-if="showTranslation && alignedTranslations[index]" class="line-translation">
                     {{ alignedTranslations[index] }}
                   </span>
@@ -188,6 +209,33 @@ function alignLines(originals, extras) {
     const match = extras[cursor]
     return match && Math.abs(Number(match.time) - time) <= 1.25 ? (match.text || '') : ''
   })
+}
+
+const showVerbatim = ref(true)
+
+/** 逐字歌词按行首时间索引：[分钟:秒.毫秒]<开始,持续>文字 */
+const verbatimWordsByTime = computed(() => {
+  const map = new Map()
+  for (const entry of playerStore.lyricVerbatim || []) {
+    if (!entry || !Array.isArray(entry.words) || !entry.words.length) continue
+    const key = Number(entry.time)
+    if (!Number.isFinite(key) || map.has(key)) continue
+    map.set(key, entry.words)
+  }
+  return map
+})
+
+const wordsForLine = (line) => (showVerbatim.value && line ? verbatimWordsByTime.value.get(Number(line.time)) || null : null)
+const hasVerbatim = computed(() => (playerStore.lyricVerbatim || []).length > 0)
+
+/** 单字演唱进度（0–100）：只有当前行才需要逐字高亮。 */
+const wordProgress = (line, word) => {
+  const start = Number(line?.time) + Number(word?.time || 0) / 1000
+  const duration = Math.max(0.08, Number(word?.duration || 0) / 1000)
+  const now = playerStore.currentTime
+  if (!Number.isFinite(start) || now <= start) return 0
+  if (now >= start + duration) return 100
+  return ((now - start) / duration) * 100
 }
 
 const alignedTranslations = computed(() => alignLines(playerStore.lyrics, playerStore.lyricTranslations))
@@ -565,6 +613,20 @@ onUnmounted(() => {
   line-height: 1.45;
   letter-spacing: 0.15px;
   transition: color 0.3s ease, font-size 0.3s ease, filter 0.3s ease;
+}
+.verbatim-word {
+  background-image: linear-gradient(90deg, #fff 0%, var(--holo-primary) var(--word-fill, 0%), rgba(226, 232, 240, 0.54) var(--word-fill, 0%), rgba(226, 232, 240, 0.54) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  transition: filter 0.12s linear;
+}
+.verbatim-word.sung {
+  filter: drop-shadow(0 0 10px var(--holo-glow));
+}
+.line-copy.is-verbatim {
+  overflow: visible;
 }
 .line-romaji {
   font-style: italic;

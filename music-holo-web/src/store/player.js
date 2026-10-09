@@ -133,6 +133,7 @@ export const usePlayerStore = defineStore('player', {
       lyrics: [],
       lyricTranslations: [],
       lyricRomaji: [],
+      lyricVerbatim: [],
       lyricLoadRequestId: 0,
       lyricVisible: false,
       /** 播放进度（秒，由播放器组件实时更新） */
@@ -374,6 +375,7 @@ export const usePlayerStore = defineStore('player', {
         this.lyrics = []
         this.lyricTranslations = []
         this.lyricRomaji = []
+        this.lyricVerbatim = []
         persist(this)
         return
       }
@@ -394,6 +396,7 @@ export const usePlayerStore = defineStore('player', {
           this.lyrics = []
           this.lyricTranslations = []
           this.lyricRomaji = []
+          this.lyricVerbatim = []
         }
       }
     },
@@ -409,6 +412,7 @@ export const usePlayerStore = defineStore('player', {
       this.lyrics = []
       this.lyricTranslations = []
       this.lyricRomaji = []
+      this.lyricVerbatim = []
       persist(this)
       releaseLocalSongs(previousQueue)
     },
@@ -478,12 +482,14 @@ export const usePlayerStore = defineStore('player', {
         this.lyrics = Array.isArray(song.customLyrics) ? song.customLyrics : []
         this.lyricTranslations = Array.isArray(song.customTranslationLyrics) ? song.customTranslationLyrics : []
         this.lyricRomaji = Array.isArray(song.customRomajiLyrics) ? song.customRomajiLyrics : []
+        this.lyricVerbatim = Array.isArray(song.customVerbatimLyrics) ? song.customVerbatimLyrics : []
         return
       }
       if (!song?.id || song.isLocal) {
         this.lyrics = []
         this.lyricTranslations = []
         this.lyricRomaji = []
+        this.lyricVerbatim = []
         return
       }
       try {
@@ -492,11 +498,13 @@ export const usePlayerStore = defineStore('player', {
         this.lyrics = Array.isArray(res?.lines) ? res.lines : []
         this.lyricTranslations = Array.isArray(res?.translationLines) ? res.translationLines : []
         this.lyricRomaji = Array.isArray(res?.romajiLines) ? res.romajiLines : []
+        this.lyricVerbatim = Array.isArray(res?.verbatimLines) ? res.verbatimLines : []
       } catch (e) {
         if (requestId !== this.lyricLoadRequestId) return
         this.lyrics = []
         this.lyricTranslations = []
         this.lyricRomaji = []
+        this.lyricVerbatim = []
       }
     },
     toggleLyric() {
