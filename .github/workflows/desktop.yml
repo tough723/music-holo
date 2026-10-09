@@ -49,7 +49,7 @@ jobs:
         run: npm run pack --prefix music-holo-desktop
       - name: Preserve desktop smoke diagnostics
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: desktop-smoke-diagnostics
           path: music-holo-desktop/test-results/
