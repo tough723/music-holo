@@ -758,13 +758,23 @@ async function rememberLocalFiles() {
     return
   }
   const entries = []
+  let remembered = 0
   for (const handle of handles) {
+    let file
+    try {
+      file = await handle.getFile()
+    } catch {
+      continue
+    }
+    let handleId = null
     try {
       const saved = await rememberHandle(handle)
-      entries.push({ file: await handle.getFile(), handleId: saved.id, name: saved.name })
+      handleId = saved.id
+      remembered += 1
     } catch {
-      // 单个句柄失败不影响其余文件。
+      handleId = null
     }
+    entries.push({ file, handleId, name: file.name || handle.name || '本地音乐' })
   }
   if (entries.length === 0) {
     ElMessage.warning('没有识别到可播放的音频文件')
@@ -774,7 +784,9 @@ async function rememberLocalFiles() {
   await refreshLocalPanels()
   if (result.count > 0) {
     await playerStore.playAt(result.startIndex)
-    ElMessage.success(`已记住并播放 ${result.count} 首本地音乐，文件仍只在本机`)
+    ElMessage.success(remembered > 0
+      ? `已记住并播放 ${result.count} 首本地音乐，文件仍只在本机`
+      : `已播放 ${result.count} 首本地音乐，但这个浏览器没能记住文件句柄`)
   }
 }
 
