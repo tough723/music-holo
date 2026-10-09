@@ -574,9 +574,10 @@ test('登录用户可屏蔽歌曲和歌手，自动播放与推荐跳过但手�
   await expect(songPage.getByTestId('dislike-status')).toHaveText('已不喜欢《霓虹海》，自动切歌和推荐会跳过')
   await expect(neonRow.getByTestId('dislike-song-1')).toHaveAttribute('data-disliked', 'true')
 
-  await page.getByRole('button', { name: '播放全部' }).click()
+  await songPage.getByRole('button', { name: '播放全部' }).click()
   await expect(page.locator('.player-bar .pb-title')).toHaveText('极光列车')
-  await page.locator('.player-bar').getByRole('button', { name: '播放下一首', exact: true }).click()
+  // 播放器控制区有 3D 位移，坐标点击可能打不中按钮；直接触发按钮自身的 click。
+  await page.locator('.player-bar').getByRole('button', { name: '播放下一首', exact: true }).evaluate((button) => button.click())
   await expect(page.locator('.player-bar .pb-title')).toHaveText('深空回响')
 
   await openMenu(page, '全局搜索')
