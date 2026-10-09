@@ -7,6 +7,31 @@
     :row-class-name="rowClassName"
     @row-click="onRowClick"
   >
+    <el-table-column v-if="selectable" width="52" align="center">
+      <template #header>
+        <input
+          class="row-select"
+          type="checkbox"
+          :checked="pageSelection.all"
+          :indeterminate="pageSelection.indeterminate"
+          aria-label="选择本页歌曲"
+          @click.stop
+          @change="emit('toggle-page', songs)"
+        >
+      </template>
+      <template #default="{ row }">
+        <input
+          class="row-select"
+          type="checkbox"
+          :checked="isSelected(row)"
+          :aria-label="`选择《${row.title}》`"
+          :data-testid="`select-song-${row.id}`"
+          @click.stop
+          @change="emit('toggle-select', row)"
+        >
+      </template>
+    </el-table-column>
+
     <el-table-column type="index" width="56" align="center">
       <template #default="{ $index }">
         <span class="row-index">{{ $index + 1 }}</span>
@@ -161,6 +186,7 @@ import { useUserStore } from '@/store/user'
 import { useDislikeStore } from '@/store/dislike'
 import ReviewPanel from './ReviewPanel.vue'
 import { fmtDuration, fmtCount, fmtDateTime } from '@/utils/format'
+import { pageSelectionState } from '@/utils/songSelection'
 import { customSourceStorageKeyForOwner, readCustomSources } from '@/utils/customSources'
 import Cover from './Cover.vue'
 
@@ -178,10 +204,13 @@ const props = defineProps({
   /** 隐藏收藏按钮（如管理后台） */
   hideFavorite: { type: Boolean, default: false },
   /** 隐藏不喜欢按钮（本地队列或管理视图） */
-  hideDislike: { type: Boolean, default: false }
+  hideDislike: { type: Boolean, default: false },
+  /** 歌曲库跨页多选；搜索、排行榜和管理后台不开启 */
+  selectable: { type: Boolean, default: false },
+  selectedIds: { type: Array, default: () => [] }
 })
 
-const emit = defineEmits(['play', 'toggle-favorite', 'add-queue'])
+const emit = defineEmits(['play', 'toggle-favorite', 'add-queue', 'toggle-select', 'toggle-page'])
 
 const playerStore = usePlayerStore()
 const userStore = useUserStore()
@@ -281,8 +310,13 @@ const isFavorite = (row) => !props.hideFavorite && favSet.value.has(row.id)
 const isCurrent = (row) => playerStore.currentSong?.id === row.id || playerStore.currentSong?.sourceSongId === row.id
 
 const rowClassName = ({ row }) => (isCurrent(row) ? 'current-row' : '')
+const isSelected = (row) => props.selectedIds.some((id) => id != null && String(id) === String(row?.id))
+const pageSelection = computed(() => pageSelectionState(props.selectedIds.map((id) => ({ id })), props.songs))
 // el-table 的 row-click 回调为 (row, column, event)，不含行号，这里手动计算
-const onRowClick = (row) => emit('play', row, props.songs.indexOf(row))
+const onRowClick = (row, _column, event) => {
+  if (event?.target?.closest?.('input, button, a, .dislike-link, .album-link')) return
+  emit('play', row, props.songs.indexOf(row))
+}
 </script>
 
 <style scoped>
@@ -316,6 +350,13 @@ const onRowClick = (row) => emit('play', row, props.songs.indexOf(row))
 }
 .row-index {
   color: var(--text-sub);
+}
+.row-select {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--holo-primary);
+  cursor: pointer;
 }
 .song-cell {
   display: flex;

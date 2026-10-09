@@ -627,6 +627,54 @@ test('登录用户可屏蔽歌曲和歌手，自动播放与推荐跳过但手�
   await expect(page.locator('.daily-list .el-table__row').filter({ hasText: '玻璃糖纸' })).toBeVisible()
 })
 
+test('歌曲库可跨页勾选，并批量加入播放队列和自己的歌单', async ({ page }) => {
+  test.setTimeout(60_000)
+  await loginAs(page, 'demo')
+  await openMenu(page, '歌曲')
+  await expect(page).toHaveURL(/\/songs$/)
+
+  await page.locator('.el-pagination .el-select').click()
+  await page.getByRole('option', { name: '5条/页' }).click()
+  await page.keyboard.press('Escape')
+  const auroraRow = page.locator('.el-table__row').filter({ hasText: '极光列车' }).first()
+  await expect(auroraRow).toBeVisible()
+  await expect(page.locator('.el-table__row').filter({ hasText: '玻璃糖纸' })).toHaveCount(0)
+  await auroraRow.getByRole('checkbox', { name: '选择《极光列车》' }).check()
+
+  await page.locator('.el-pagination').getByRole('button', { name: '下一页', exact: true }).click()
+  const candyRow = page.locator('.el-table__row').filter({ hasText: '玻璃糖纸' }).first()
+  await expect(candyRow).toBeVisible()
+  await expect(page.locator('.el-table__row').filter({ hasText: '极光列车' })).toHaveCount(0)
+  await expect(page.getByRole('region', { name: '已选歌曲' })).toContainText('已选 1 首')
+  await candyRow.getByRole('checkbox', { name: '选择《玻璃糖纸》' }).check()
+  await expect(page.getByRole('region', { name: '已选歌曲' })).toContainText('已选 2 首')
+
+  await page.locator('.el-pagination').getByRole('button', { name: '上一页', exact: true }).click()
+  await expect(auroraRow.getByRole('checkbox', { name: '选择《极光列车》' })).toBeChecked()
+
+  await page.getByRole('button', { name: '将已选歌曲加入播放队列' }).click()
+  await expect(page.getByText('已将 2 首已选歌曲加入播放队列')).toBeVisible()
+  await page.locator('.player-bar').getByRole('button', { name: '播放队列', exact: true }).click()
+  const queue = page.getByRole('dialog', { name: '播放队列' })
+  await expect(queue).toContainText('极光列车')
+  await expect(queue).toContainText('玻璃糖纸')
+  await queue.getByRole('button', { name: '关闭此对话框' }).click()
+
+  await page.getByRole('button', { name: '将已选歌曲加入歌单' }).click()
+  const picker = page.getByRole('dialog', { name: '加入歌单' })
+  await expect(picker.getByRole('radio', { name: '华语精选' })).toBeVisible()
+  await expect(picker.getByRole('radio', { name: '深夜霓虹' })).toHaveCount(0)
+  await picker.getByRole('radio', { name: '华语精选' }).check()
+  await picker.getByRole('button', { name: '加入 2 首' }).click()
+  await expect(page.getByText('成功添加 2 首歌曲')).toBeVisible()
+
+  await openMenu(page, '歌单')
+  await page.locator('.playlist-card').filter({ hasText: '华语精选' }).click()
+  await expect(page).toHaveURL(/\/playlists\/3$/)
+  await expect(page.locator('.el-table__row').filter({ hasText: '极光列车' })).toBeVisible()
+  await expect(page.locator('.el-table__row').filter({ hasText: '玻璃糖纸' })).toBeVisible()
+})
+
 test('管理员可以进入仪表盘并加载运营统计', async ({ page }) => {
   await loginAs(page, 'admin')
   await page.locator('.sidebar .app-nav-menu').getByRole('menuitem', { name: '管理后台' }).click()

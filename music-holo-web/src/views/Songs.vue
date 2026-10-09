@@ -37,14 +37,27 @@
       </div>
     </div>
 
+    <div v-if="selectedSongs.length" class="selection-bar glass-panel" role="region" aria-label="已选歌曲">
+      <span>已选 {{ selectedSongs.length }} 首，翻页后仍保留</span>
+      <div class="selection-actions">
+        <el-button type="primary" aria-label="将已选歌曲加入播放队列" @click="addSelectedToQueue">加入播放队列</el-button>
+        <el-button aria-label="将已选歌曲加入歌单" @click="openPlaylistDialog">加入歌单</el-button>
+        <el-button aria-label="清除已选歌曲" @click="clearSelection">清除选择</el-button>
+      </div>
+    </div>
+
     <SongList
       :songs="list"
       :loading="loading"
       :favorite-ids="favoriteIds"
+      selectable
+      :selected-ids="selectedIds"
       show-album
       @play="onPlay"
       @toggle-favorite="onToggleFavorite"
       @add-queue="onAddQueue"
+      @toggle-select="onToggleSelect"
+      @toggle-page="onTogglePage"
     />
 
     <div class="pagination-wrap">
@@ -52,26 +65,46 @@
         v-model:current-page="pageNum"
         v-model:page-size="pageSize"
         :total="total"
-        :page-sizes="[10, 20, 50]"
+        :page-sizes="[5, 10, 20, 50]"
         layout="total, sizes, prev, pager, next"
         background
         @current-change="loadData"
         @size-change="loadData"
       />
     </div>
+
+    <el-dialog v-model="playlistDialogVisible" title="加入歌单" width="min(440px, calc(100vw - 32px))" append-to-body>
+      <p v-if="playlistsLoading">正在读取你的歌单…</p>
+      <p v-else-if="!myPlaylists.length">还没有自己的歌单。请先到歌单页创建，再回来加入。</p>
+      <fieldset v-else class="playlist-picker">
+        <legend>选择要加入的歌单</legend>
+        <label v-for="item in myPlaylists" :key="item.id" class="playlist-option">
+          <input v-model="targetPlaylistId" type="radio" name="target-playlist" :value="String(item.id)">
+          <span>{{ item.name }}</span>
+        </label>
+      </fieldset>
+      <template #footer>
+        <el-button @click="playlistDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="addingToPlaylist" :disabled="!targetPlaylistId" @click="addSelectedToPlaylist">
+          加入 {{ selectedSongs.length }} 首
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import * as songApi from '@/api/song'
 import * as singerApi from '@/api/singer'
 import * as categoryApi from '@/api/category'
 import * as favoriteApi from '@/api/favorite'
+import * as playlistApi from '@/api/playlist'
 import { usePlayerStore } from '@/store/player'
 import { useUserStore } from '@/store/user'
+import { togglePageSelection, toggleSongSelection } from '@/utils/songSelection'
 import SongList from '@/components/SongList.vue'
 
 const route = useRoute()
@@ -90,6 +123,13 @@ const singerId = ref(null)
 const categories = ref([])
 const singers = ref([])
 const favoriteIds = ref([])
+const selectedSongs = ref([])
+const selectedIds = computed(() => selectedSongs.value.map((song) => song.id))
+const playlistDialogVisible = ref(false)
+const playlistsLoading = ref(false)
+const addingToPlaylist = ref(false)
+const myPlaylists = ref([])
+const targetPlaylistId = ref('')
 
 const loadData = async () => {
   loading.value = true
@@ -167,6 +207,62 @@ const onAddQueue = (song) => {
   ElMessage.success(`已加入播放队列：《${song.title}》`)
 }
 
+const onToggleSelect = (song) => {
+  selectedSongs.value = toggleSongSelection(selectedSongs.value, song)
+}
+
+const onTogglePage = (pageSongs) => {
+  selectedSongs.value = togglePageSelection(selectedSongs.value, pageSongs)
+}
+
+const clearSelection = () => {
+  selectedSongs.value = []
+}
+
+const addSelectedToQueue = () => {
+  if (!selectedSongs.value.length) return
+  let added = 0
+  for (const song of selectedSongs.value) {
+    const before = playerStore.queue.length
+    playerStore.addToQueue(song)
+    if (playerStore.queue.length > before) added += 1
+  }
+  ElMessage.success(added ? `已将 ${added} 首已选歌曲加入播放队列` : '这些歌曲已在播放队列中')
+}
+
+const openPlaylistDialog = async () => {
+  if (!selectedSongs.value.length) return
+  if (!userStore.isLogin) {
+    ElMessage.warning('请先登录后再加入歌单')
+    router.push('/login')
+    return
+  }
+  playlistDialogVisible.value = true
+  playlistsLoading.value = true
+  targetPlaylistId.value = ''
+  try {
+    const res = await playlistApi.page({ pageNum: 1, pageSize: 50, onlyMine: true })
+    myPlaylists.value = res.records || []
+    if (myPlaylists.value.length === 1) targetPlaylistId.value = String(myPlaylists.value[0].id)
+  } catch {
+    myPlaylists.value = []
+  } finally {
+    playlistsLoading.value = false
+  }
+}
+
+const addSelectedToPlaylist = async () => {
+  if (!targetPlaylistId.value || !selectedSongs.value.length) return
+  addingToPlaylist.value = true
+  try {
+    const added = await playlistApi.addSongs(targetPlaylistId.value, selectedSongs.value.map((song) => song.id))
+    ElMessage.success(`成功添加 ${added} 首歌曲`)
+    playlistDialogVisible.value = false
+  } finally {
+    addingToPlaylist.value = false
+  }
+}
+
 // 从首页分类 chip 跳转过来时带上 categoryId
 watch(() => route.query.categoryId, (val) => {
   if (val) {
@@ -216,5 +312,31 @@ onMounted(() => {
 .pagination-wrap {
   display: flex;
   justify-content: center;
+}
+.selection-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  flex-wrap: wrap;
+}
+.selection-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.playlist-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.playlist-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 </style>
