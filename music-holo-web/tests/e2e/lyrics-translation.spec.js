@@ -14,7 +14,7 @@ test('管理员上传并保存译文后，播放器可同步显示并切换译�
 
   const songRow = page.locator('.el-table__row').filter({ hasText: '霓虹海' }).first()
   await expect(songRow).toBeVisible()
-  await songRow.getByRole('button', { name: '编辑' }).click()
+  await page.getByRole('button', { name: '编辑《霓虹海》' }).first().click()
 
   const dialog = page.getByRole('dialog')
   const translationInput = dialog.getByPlaceholder('可选 LRC 译文；建议与原歌词使用对应时间标签')
@@ -32,7 +32,8 @@ test('管理员上传并保存译文后，播放器可同步显示并切换译�
   await expect(dialog).not.toBeVisible()
 
   const refreshedRow = page.locator('.el-table__row').filter({ hasText: '霓虹海' }).first()
-  await refreshedRow.getByRole('button', { name: '播放' }).click()
+  await expect(refreshedRow).toBeVisible()
+  await page.getByRole('button', { name: '播放《霓虹海》' }).first().click()
   await expect(page.locator('.player-bar .pb-title')).toHaveText('霓虹海')
   await page.locator('.player-bar').getByRole('button', { name: '显示歌词' }).click()
 

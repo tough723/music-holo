@@ -57,9 +57,9 @@
         <el-table-column label="播放量" prop="playCount" width="100" align="center" />
         <el-table-column label="操作" width="220" align="center" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" @click="playerStore.playSong(row)">播放</el-button>
-            <el-button size="small" @click="openEdit(row)">编辑</el-button>
-            <el-button size="small" type="danger" plain @click="onDelete(row)">删除</el-button>
+            <el-button size="small" :aria-label="`播放《${row.title}》`" @click="playerStore.playSong(row)">播放</el-button>
+            <el-button size="small" :aria-label="`编辑《${row.title}》`" @click="openEdit(row)">编辑</el-button>
+            <el-button size="small" type="danger" plain :aria-label="`删除《${row.title}》`" @click="onDelete(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
