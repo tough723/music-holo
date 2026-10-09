@@ -14,8 +14,8 @@
 | `lx.request` 桌面网络桥 | 受控 HTTP(S) 请求，不依赖浏览器 CORS；独立于账号 API 通道 |
 | 播放与封面 | 显式授权后签发临时媒体票据，经 `app://music-holo/__source_media/<随机票据>` 流式加载；支持单段 Range |
 | 音源持久化 | 脚本按账号存于 Electron 的页面本机存储，不上传 Spring Boot |
-| 第三方平台搜索、榜单、平台 ID 自动映射 | **未接入**；现有搜索/榜单仍为 Music Holo 曲库，不能把曲库 ID 当平台 ID |
-| 星海源所有平台与音质 | **未完成真实接口/客户端验收，不保证可用**；不内置、不自动运行或分发该脚本 |
+| 第三方平台搜索、榜单、歌词封面 | **已接入宿主平台适配器**（`src/utils/sourceCatalog/`，与音源脚本解耦）：wy 搜索/榜单/歌词封面、kw/kg/mg 搜索已实测；tx 未实测（疑需 Referer，受控桥禁止）、qs 未接入；不猜平台 ID，见 [星海验证记录](xinghai-validation.md) |
+| 星海源 wy + 320k 全流程 | **真实接口已验证**：搜索/榜单取真实 ID → 后端与 GD 双通道解析 → 歌词封面补齐；**实际出声播放仍待联网客户端验收**。其余平台/音质部分实测、部分第三方故障，见 [星海验证记录](xinghai-validation.md) |
 | 签名安装包、自动更新、原生手机端 | **未实现/未发布**；仅提供桌面打包配置 |
 
 ## 开发环境运行
@@ -140,10 +140,10 @@ Linux 无显示器时最后一步使用 `xvfb-run -a npm run test:smoke --prefix
 
 桌面单元测试覆盖 IPC sender、URL/DNS/请求限制、域名授权、取消与超时、拒绝重定向、媒体票据/Range/刷新撤销以及业务 API 通道隔离。Electron smoke 使用生产网页构建、真实窗口，并显式设置 `chromiumSandbox: true`，额外断言不存在 `--no-sandbox`（Playwright 在 Linux 下默认会添加该参数，不能只检查窗口 preferences）。测试代码通过调试通道模拟第三方网络及原生确认，拒绝任何业务后端请求，验证访客导入/解析/媒体播放、Range、拒绝授权、脚本持久化与刷新票据撤销；应用本身没有测试旁路。新增 `.github/workflows/desktop.yml` 会运行测试、smoke 与目录打包。
 
-**已验证**：桌面 33 项单元测试、前端 111 项测试和生产构建通过。本机沙箱仍因发行文件下载受限无法启动 Electron，但已在 [桌面 CI run 37965363398](https://github.com/tough723/music-holo/actions/runs/37965363398) 验证代码提交 `8632f53`：真实 Electron + 显式开启 Chromium 沙箱的免登录/无业务后端播放测试、依赖审计、生产 Linux 目录打包全部通过。测试使用模拟音源服务，不代表星海真实接口可用，也不是 Windows/macOS 人工验收或正式签名发布。 同一代码提交的 [原项目 CI run 37965363418](https://github.com/tough723/music-holo/actions/runs/37965363418) 也全部通过，包括前端测试/审计、生产浏览器旅程、Java verify 和 Docker 全栈 smoke。
+**已验证**：桌面 37 项单元测试（含新增源脚本验证工具回归）、前端 120 项测试和生产构建通过。上一轮 CI（[桌面 run 37965363398](https://github.com/tough723/music-holo/actions/runs/37965363398)、[原项目 run 37965363418](https://github.com/tough723/music-holo/actions/runs/37965363418)）使用的是**模拟音源服务**，不代表真实接口可用。2026-10-10 起对用户提供的星海脚本完成静态检查、隔离契约验证与真实接口实测（星海后端、GD、网易榜单、酷狗/酷我/咪咕搜索均实测；wy+320k 解析双通道成功），并新增宿主平台搜索/榜单适配器；真实接口结果、客户端兼容修复与第三方服务故障的逐项记录见 **[星海音源脚本验证与真实接口测试记录](xinghai-validation.md)**。模拟测试通过 ≠ 真实服务可用；实际出声播放、tx/qs 平台与多系统人工验收仍未完成。
 
-下一阶段：逐项验收真实用户脚本与接口，接入明确的平台搜索/榜单适配器及正确的平台曲目 ID，然后进行多系统人工播放、后台播放、安装包签名及升级验收。
+下一阶段：联网客户端的实际播放与后台播放人工验收，tx 搜索（Referer 约束下）与 qs 接入评估，酷狗解析第三方故障跟踪，Windows/macOS 人工验收、安装包签名及升级验收。
 
-### 星海脚本静态兼容核对
+### 星海脚本验证摘录（2026-10-10）
 
-已继续静态阅读用户提供链接的请求包装、初始化和解析分支。所见脚本主要使用 `lx.request/on/send`、buffer UTF-8/base64、URLSearchParams、Promise，以及 X-Token/X-Client/User-Agent 等请求头；X-Token 是脚本生成的第三方服务字段，不是本站登录令牌。独立编写的测试夹具覆盖了这些交互及扩展平台/音质声明，未复制、执行或分发第三方脚本。脚本声明了平台扩展，也读取 `env?.platform`，但官方 `lx.env` 是字符串；不为单个脚本伪造非标准 env 对象。其加密媒体能否播放、服务返回是否可用，以及全部平台分支仍需实机验证。
+静态阅读与隔离执行确认：脚本只实现 `musicUrl/lyric/pic`（无搜索/榜单），初始化后立即联网（ip/版本检查），平台 ID 主键为 `musicInfo.hash ?? songmid ?? id`，歌词/封面只在解析成功后的会话缓存中出现（GD 分支不带歌词封面），`X-Token` 是脚本自生成的设备信息而非登录令牌，`env.platform` 在官方字符串 `env` 下不可用（X-Client 显示 `(unknown)`，不为单个脚本伪造 env 对象）。新增工具 `music-holo-desktop/scripts/validate-source-script.cjs` 可对任意操作者提供的脚本做同类验证（离线夹具/在线实测），不把第三方脚本复制进仓库。详细结论与真实接口测试数据见 [星海验证记录](xinghai-validation.md)。

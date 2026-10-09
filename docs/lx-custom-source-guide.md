@@ -57,7 +57,7 @@
 
 用 `lx.request(url, options, callback)` 包装 Promise，验证 HTTP 状态和业务响应，再返回媒体 URL；不要返回整个响应对象。不要使用 axios、Node require 或假定存在 fetch。非 `local` 源只声明 `actions: ['musicUrl']`，`qualitys` 只列真实支持的 `128k / 320k / flac / flac24bit` 子集。`local` 可声明三种 action，`qualitys` 必须是 `[]`，调用时 `info.type` 为 null。
 
-参考页面示例中 `lyric`、`pic` 分支误调用 `musicUrl`，不能直接照抄；本实现分别处理三个操作。歌词字段使用 `lyric`、`tlyric`（不是部分文字描述中的 `lryic`、`tlryic`）。协议不定义通用搜索 action。
+参考页面示例中 `lyric`、`pic` 分支误调用 `musicUrl`，不能直接照抄；本实现分别处理三个操作。歌词字段使用 `lyric`、`tlyric`（不是部分文字描述中的 `lryic`、`tlryic`）。协议不定义通用搜索 action；搜索与榜单由宿主（Music Holo 平台适配器）实现，见 [星海验证记录](xinghai-validation.md) 的平台 ID 映射表。
 
 ## 安全与运行边界
 

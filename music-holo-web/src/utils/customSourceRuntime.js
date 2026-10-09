@@ -78,7 +78,9 @@ export function buildCustomSourceMusicInfo(song) {
   const duration = Number(song.duration)
   const songId = cleanText(song.id, 128)
   return {
-    ...(songId ? { musicHoloId: songId, id: songId } : {}),
+    // Music Holo 曲库 ID 只放在 musicHoloId：原曲库 ID 不能伪装成第三方平台 ID，
+    // 需要 id/songmid/hash 的音源必须由用户或平台适配器提供真实平台字段。
+    ...(songId ? { musicHoloId: songId } : {}),
     title,
     name: title,
     ...(singerName ? { singerName, singer: singerName } : {}),
@@ -117,7 +119,13 @@ export function mergeCustomSourceMusicInfo(song, extraJson = '{}') {
     throw new Error('平台专属曲目字段不能超过 64 KB')
   }
 
-  const combined = { ...extra, ...base }
+  // 平台专属字段优先（如网易云 id、QQ songmid、酷狗 hash），但标题、歌手、专辑、
+  // 时长与 musicHoloId 由曲库事实决定，不允许被覆盖，避免界面信息被改写。
+  const PROTECTED_KEYS = new Set(['musicHoloId', 'title', 'name', 'singerName', 'singer', 'album', 'duration'])
+  const combined = { ...base }
+  for (const [key, value] of Object.entries(extra)) {
+    if (!PROTECTED_KEYS.has(key)) combined[key] = value
+  }
   if (new TextEncoder().encode(JSON.stringify(combined)).byteLength > MAX_CUSTOM_SOURCE_MUSIC_INFO_BYTES) {
     throw new Error('发送给音源的曲目信息不能超过 64 KB')
   }

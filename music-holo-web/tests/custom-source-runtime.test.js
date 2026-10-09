@@ -27,7 +27,6 @@ describe('隔离自定义音源兼容检测', () => {
     })
     expect(info).toEqual({
       musicHoloId: '42',
-      id: '42',
       title: '云端信使',
       name: '云端信使',
       singerName: '星港',
@@ -40,18 +39,23 @@ describe('隔离自定义音源兼容检测', () => {
     expect(() => buildCustomSourceMusicInfo({ id: 1 })).toThrow('缺少有效标题')
   })
 
-  it('合并可选的平台曲目 ID，同时保护曲库标题并拒绝凭据字段', () => {
+  it('合并平台曲目 ID 时允许平台 id/songmid/hash，同时保护曲库标题与 musicHoloId', () => {
     const merged = mergeCustomSourceMusicInfo({ id: 42, title: '云端信使', singerName: '星港' }, JSON.stringify({
       songmid: 'provider-song-42',
-      id: 'attempted-override',
-      title: 'attempted-title-override'
+      id: '347230',
+      hash: 'abc123def456',
+      interval: 326,
+      title: 'attempted-title-override',
+      musicHoloId: 'attempted-id-override'
     }))
     expect(merged).toMatchObject({
-      id: '42',
+      id: '347230',
       musicHoloId: '42',
       title: '云端信使',
       name: '云端信使',
-      songmid: 'provider-song-42'
+      songmid: 'provider-song-42',
+      hash: 'abc123def456',
+      interval: 326
     })
     expect(() => mergeCustomSourceMusicInfo({ id: 1, title: '歌曲' }, '{broken')).toThrow('有效 JSON')
     expect(() => mergeCustomSourceMusicInfo({ id: 1, title: '歌曲' }, '[]')).toThrow('JSON 对象')
