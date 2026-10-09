@@ -10,7 +10,10 @@ async function loginAs(page, username) {
 
 test('管理员上传并保存译文后，播放器可同步显示并切换译文', async ({ page }) => {
   await loginAs(page, 'admin')
-  await page.goto('/admin/songs')
+  await page.locator('.sidebar .app-nav-menu').getByRole('menuitem', { name: '管理后台' }).click()
+  await page.locator('.sidebar .app-nav-menu').getByRole('menuitem', { name: '歌曲管理' }).click()
+  await expect(page).toHaveURL(/\/admin\/songs$/)
+  await expect(page.locator('.page-title')).toHaveText('歌曲管理')
 
   const songRow = page.locator('.el-table__row').filter({ hasText: '霓虹海' }).first()
   await expect(songRow).toBeVisible()
