@@ -202,6 +202,8 @@ test('设置中心提供低闪烁动效、播放偏好与本机配置备份', as
 test('搜索与隐私设置可关闭探索词和历史记忆并限制本机记录数量', async ({ page }) => {
   const seededTerms = ['夜航星', '云端信使', '霓虹海', '回声', '夏夜', '远方']
   await page.addInitScript((terms) => {
+    if (sessionStorage.getItem('search-history-test-seeded')) return
+    sessionStorage.setItem('search-history-test-seeded', 'true')
     localStorage.setItem('music-holo-recent-searches', JSON.stringify(terms))
   }, seededTerms)
   await loginAs(page, 'demo')
