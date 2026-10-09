@@ -17,7 +17,11 @@ function reportFailure(error, url, pageErrors = []) {
   try {
     if (process.env.GITHUB_STEP_SUMMARY) require('node:fs').appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### 桌面烟测失败\n\n${detail}\n`)
   } catch { /* 摘要写入失败不影响退出码 */ }
-  console.log(`::error title=Desktop smoke failed::${detail.replace(/\n/g, '%0A')}`)
+  try {
+    // 单独落盘：CI 日志里混杂大量渲染进程告警，失败原因单独取用更可靠。
+    require('node:fs').writeFileSync(require('node:path').join(__dirname, '../test-results/failure.txt'), `${detail}\n`)
+  } catch { /* 落盘失败不影响退出码 */ }
+  console.log(`SMOKE_FAILURE_START\n${detail}\nSMOKE_FAILURE_END`)
 }
 
 async function main() {

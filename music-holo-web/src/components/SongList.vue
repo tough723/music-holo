@@ -129,9 +129,8 @@
             <el-icon><ChatDotRound /></el-icon>
           </el-button>
         </el-tooltip>
-        <el-tooltip content="使用本机自定义源解析并播放" placement="top">
+        <el-tooltip v-if="hasCustomSources" content="使用本机自定义源解析并播放" placement="top">
           <el-button
-            v-if="hasCustomSources"
             circle
             size="small"
             :aria-label="`使用自定义源播放《${row.title}》`"

@@ -17,9 +17,8 @@
         </div>
         <div class="pb-artist">{{ currentSong?.singerName || 'Music Holo' }}</div>
       </div>
-      <el-tooltip :content="isFav ? '取消收藏' : '收藏'" placement="top">
+      <el-tooltip v-if="currentSong && !currentSong.isLocal && !currentSong.isCustomSource" :content="isFav ? '取消收藏' : '收藏'" placement="top">
         <el-button
-          v-if="currentSong && !currentSong.isLocal && !currentSong.isCustomSource"
           circle
           size="small"
           :type="isFav ? 'danger' : 'default'"
@@ -35,9 +34,8 @@
           <el-icon><Headset /></el-icon>
         </el-button>
       </el-tooltip>
-      <el-tooltip content="快速换源：为当前曲目换一个可用音源" placement="top">
+      <el-tooltip v-if="currentSong" content="快速换源：为当前曲目换一个可用音源" placement="top">
         <el-button
-          v-if="currentSong"
           class="pb-switch"
           circle
           size="small"

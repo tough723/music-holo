@@ -136,9 +136,17 @@ jobs:
           docker version 2>&1 | head -n 20 || true
           docker compose version 2>&1 | head -n 5 || true
           df -h / /var/lib/docker 2>&1 | head -n 5 || true
-          docker compose up --build --detach --wait --wait-timeout 300 > /tmp/compose-up.log 2>&1
-          status=$?
-          cat /tmp/compose-up.log
+          # Docker Hub 对匿名拉取有按 IP 的限流（第三方服务故障，与代码无关），失败时退避重试。
+          for attempt in 1 2 3; do
+            docker compose up --build --detach --wait --wait-timeout 300 > /tmp/compose-up.log 2>&1
+            status=$?
+            cat /tmp/compose-up.log
+            [ "$status" -eq 0 ] && break
+            grep -q 'toomanyrequests\|pull rate limit\|Error response from daemon: Get' /tmp/compose-up.log || break
+            echo "::warning title=Docker Hub rate limited::第 $attempt 次镜像拉取被限流，等待 90 秒后重试"
+            docker compose down --volumes --remove-orphans > /dev/null 2>&1
+            [ "$attempt" -lt 3 ] && sleep 90
+          done
           if [ "$status" -ne 0 ]; then
             docker compose ps || true
             docker compose logs --no-color --tail 200 || true
