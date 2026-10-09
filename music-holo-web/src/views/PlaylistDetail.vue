@@ -51,7 +51,7 @@
     <div class="section-head">
       <div>
         <div class="section-title">歌曲列表</div>
-        <div class="section-subtitle">点击播放，收藏喜欢的歌曲</div>
+        <div class="section-subtitle">{{ canReorder ? '使用上移或下移保存曲目顺序' : '点击播放，收藏喜欢的歌曲' }}</div>
       </div>
       <el-button v-if="canManage" type="primary" plain round size="small" @click="openAddSongs">
         <el-icon><Plus /></el-icon> 添加歌曲
@@ -65,9 +65,40 @@
       @toggle-favorite="onToggleFavorite"
       @add-queue="onAddQueue"
     >
+      <template #meta="{ row, index }">
+        <div v-if="canReorder" class="playlist-order-actions">
+          <button
+            type="button"
+            class="playlist-order-button"
+            title="上移一位"
+            :disabled="index === 0 || moving"
+            :aria-label="`上移《${row.title}》`"
+            @click.stop="moveSong(row, -1)"
+          >
+            <el-icon><ArrowUp /></el-icon>
+          </button>
+          <button
+            type="button"
+            class="playlist-order-button"
+            title="下移一位"
+            :disabled="index === songs.length - 1 || moving"
+            :aria-label="`下移《${row.title}》`"
+            @click.stop="moveSong(row, 1)"
+          >
+            <el-icon><ArrowDown /></el-icon>
+          </button>
+        </div>
+      </template>
       <template #actions="{ row }">
         <el-tooltip v-if="canManage" content="从歌单移除" placement="top">
-          <el-button circle size="small" type="danger" plain @click.stop="onRemoveSong(row)">
+          <el-button
+            circle
+            size="small"
+            type="danger"
+            plain
+            :aria-label="`从歌单移除《${row.title}》`"
+            @click.stop="onRemoveSong(row)"
+          >
             <el-icon><Remove /></el-icon>
           </el-button>
         </el-tooltip>
@@ -189,10 +220,15 @@ const songsLoading = ref(false)
 const songKeyword = ref('')
 const selectedIds = ref([])
 const adding = ref(false)
+const moving = ref(false)
 
 const canManage = computed(() => {
   if (!userStore.isLogin || !playlist.value) return false
   return playlist.value.creatorId === userStore.userInfo?.id || userStore.isAdmin
+})
+const canReorder = computed(() => {
+  if (!userStore.isLogin || !playlist.value) return false
+  return playlist.value.creatorId === userStore.userInfo?.id
 })
 const isPublicPlaylist = computed(() => Number(playlist.value?.isPublic) === 1)
 
@@ -353,6 +389,32 @@ const onRemoveSong = async (song) => {
   loadData()
 }
 
+const applySongOrder = (order) => {
+  if (!Array.isArray(order) || order.length !== songs.value.length) return false
+  const byId = new Map(songs.value.map((song) => [String(song.id), song]))
+  const next = []
+  for (const id of order) {
+    const song = byId.get(String(id))
+    if (!song) return false
+    next.push(song)
+  }
+  songs.value = next
+  return true
+}
+
+const moveSong = async (song, direction) => {
+  if (!canReorder.value || moving.value) return
+  moving.value = true
+  try {
+    const order = await playlistApi.moveSong(playlist.value.id, song.id, direction)
+    if (!applySongOrder(order)) await loadData()
+  } catch {
+    // 错误提示由请求层展示，本地顺序保持不变
+  } finally {
+    moving.value = false
+  }
+}
+
 watch(() => route.params.id, () => {
   if (route.params.id) loadData()
 })
@@ -445,6 +507,35 @@ onMounted(loadData)
   font-size: 12px;
   color: var(--text-sub);
   margin-top: 4px;
+}
+.playlist-order-actions {
+  display: flex;
+  gap: 2px;
+  margin-top: 4px;
+}
+.playlist-order-button {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--text-sub);
+  background: transparent;
+  cursor: pointer;
+}
+.playlist-order-button:hover:not(:disabled) {
+  color: var(--holo-primary);
+  background: color-mix(in srgb, var(--holo-primary) 12%, transparent);
+}
+.playlist-order-button:focus-visible {
+  outline: 2px solid var(--holo-primary);
+  outline-offset: 1px;
+}
+.playlist-order-button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 .upload-row {
   display: flex;

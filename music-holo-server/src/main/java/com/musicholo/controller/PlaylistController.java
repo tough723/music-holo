@@ -9,6 +9,7 @@ import com.musicholo.dto.PlaylistBackupDTO;
 import com.musicholo.dto.PlaylistBackupImportRequestDTO;
 import com.musicholo.dto.PlaylistQuery;
 import com.musicholo.dto.PlaylistSaveDTO;
+import com.musicholo.dto.PlaylistSongMoveDTO;
 import com.musicholo.service.PlaylistBackupService;
 import com.musicholo.service.PlaylistService;
 import com.musicholo.vo.PlaylistBackupImportResultVO;
@@ -132,5 +133,12 @@ public class PlaylistController {
     public Result<Void> removeSong(@PathVariable Long id, @PathVariable Long songId) {
         playlistService.removeSong(id, songId, StpUtil.getLoginIdAsLong());
         return Result.success();
+    }
+
+    @Operation(summary = "创建者上移或下移歌单内的一首歌曲")
+    @SaCheckLogin
+    @PutMapping("/{id}/songs/order")
+    public Result<List<Long>> moveSong(@PathVariable Long id, @Validated @RequestBody PlaylistSongMoveDTO dto) {
+        return Result.success(playlistService.moveSong(id, dto.getSongId(), dto.getDirection(), StpUtil.getLoginIdAsLong()));
     }
 }

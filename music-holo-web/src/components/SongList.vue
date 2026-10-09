@@ -39,7 +39,7 @@
     </el-table-column>
 
     <el-table-column label="歌曲" min-width="260">
-      <template #default="{ row }">
+      <template #default="{ row, $index }">
         <div class="song-cell">
           <div class="song-cover" @click.stop="emit('play', row, props.songs.indexOf(row))">
             <Cover :src="row.cover" :text="row.title" :size="44" />
@@ -53,6 +53,7 @@
               <el-icon v-if="isCurrent(row) && playing" class="playing-icon"><CaretRight /></el-icon>
             </div>
             <div class="song-artist">{{ row.singerName || '-' }}</div>
+            <slot name="meta" :row="row" :index="$index"></slot>
           </div>
           <button
             v-if="canDislike(row)"

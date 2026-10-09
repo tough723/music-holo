@@ -675,6 +675,43 @@ test('歌曲库可跨页勾选，并批量加入播放队列和自己的歌单',
   await expect(page.locator('.el-table__row').filter({ hasText: '玻璃糖纸' })).toBeVisible()
 })
 
+test('歌单创建者可以上下移动曲目并保存，管理员不能调整别人的歌单', async ({ page }) => {
+  await loginAs(page, 'demo')
+  await openMenu(page, '歌单')
+  await page.locator('.playlist-card').filter({ hasText: '华语精选' }).click()
+  await expect(page).toHaveURL(/\/playlists\/3$/)
+
+  const titles = page.locator('.el-table__body-wrapper .song-title')
+  await expect(titles).toHaveText(['霓虹海', '云端信使', '旧城之光'])
+  await expect(page.getByRole('button', { name: '上移《霓虹海》' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '下移《旧城之光》' })).toBeDisabled()
+
+  await page.getByRole('button', { name: '上移《云端信使》' }).click()
+  await expect(titles).toHaveText(['云端信使', '霓虹海', '旧城之光'])
+  await page.getByRole('button', { name: '下移《霓虹海》' }).click()
+  await expect(titles).toHaveText(['云端信使', '旧城之光', '霓虹海'])
+  await expect(page.getByRole('button', { name: '上移《云端信使》' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '下移《霓虹海》' })).toBeDisabled()
+
+  await openMenu(page, '歌曲')
+  await expect(page).toHaveURL(/\/songs$/)
+  await openMenu(page, '歌单')
+  await page.locator('.playlist-card').filter({ hasText: '华语精选' }).click()
+  await expect(page).toHaveURL(/\/playlists\/3$/)
+  await expect(titles).toHaveText(['云端信使', '旧城之光', '霓虹海'])
+
+  await page.locator('.user-chip').click()
+  await page.getByRole('menuitem', { name: '退出登录' }).click()
+  await expect(page).toHaveURL(/\/login$/)
+  await loginFromCurrentPage(page, 'admin')
+  await openMenu(page, '歌单')
+  await page.locator('.playlist-card').filter({ hasText: '华语精选' }).click()
+  await expect(titles).toHaveText(['云端信使', '旧城之光', '霓虹海'])
+  await expect(page.getByRole('button', { name: '上移《云端信使》' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '下移《霓虹海》' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '从歌单移除《云端信使》' })).toBeVisible()
+})
+
 test('管理员可以进入仪表盘并加载运营统计', async ({ page }) => {
   await loginAs(page, 'admin')
   await page.locator('.sidebar .app-nav-menu').getByRole('menuitem', { name: '管理后台' }).click()

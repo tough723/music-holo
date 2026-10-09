@@ -446,6 +446,45 @@ describe('内置 Mock API 集成测试', () => {
     }
   })
 
+  it('只有歌单创建者能上下移动曲目，边界移动保持原顺序', async () => {
+    await loginAs('demo')
+    await expect(playlistApi.moveSong(1, 1, 1)).rejects.toMatchObject({
+      code: 403,
+      msg: '只能调整自己创建的歌单顺序'
+    })
+    expect((await playlistApi.songsOfPlaylist(1)).map((song) => song.id)).toEqual([1, 2, 4])
+
+    const created = await playlistApi.save({ name: '排序测试歌单', isPublic: 1 })
+    try {
+      expect(await playlistApi.addSongs(created.id, [7, 1, 2])).toBe(3)
+      expect(await playlistApi.moveSong(created.id, 1, -1)).toEqual([1, 7, 2])
+      expect((await playlistApi.songsOfPlaylist(created.id)).map((song) => song.id)).toEqual([1, 7, 2])
+      expect(await playlistApi.moveSong(created.id, 1, -1)).toEqual([1, 7, 2])
+      expect(await playlistApi.moveSong(created.id, 2, 1)).toEqual([1, 7, 2])
+      await expect(playlistApi.moveSong(created.id, 99, -1)).rejects.toMatchObject({
+        code: 400,
+        msg: '歌曲不在歌单中'
+      })
+      await expect(playlistApi.moveSong(created.id, 1, 0)).rejects.toMatchObject({
+        code: 400,
+        msg: '只能上移或下移一位'
+      })
+
+      await loginAs('admin')
+      await expect(playlistApi.moveSong(created.id, 7, 1)).rejects.toMatchObject({
+        code: 403,
+        msg: '只能调整自己创建的歌单顺序'
+      })
+      expect((await playlistApi.songsOfPlaylist(created.id)).map((song) => song.id)).toEqual([1, 7, 2])
+    } finally {
+      await loginAs('demo')
+      await playlistApi.remove(created.id)
+    }
+
+    useUserStore().logoutLocal()
+    await expect(playlistApi.moveSong(3, 1, 1)).rejects.toMatchObject({ code: 401 })
+  })
+
   it('歌单支持创建、批量加歌、删歌和删除', async () => {
     await loginAs('demo')
     const created = await playlistApi.save({ name: '自动化测试歌单', description: 'Vitest' })

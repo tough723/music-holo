@@ -977,7 +977,7 @@ route('get', '/playlist/:id/songs', async (ctx) => {
   }
   const relations = state.playlistSongs
     .filter((ps) => ps.playlistId === id)
-    .sort((a, b) => a.sort - b.sort)
+    .sort((a, b) => a.sort - b.sort || a.id - b.id)
   const result = []
   for (const rel of relations) {
     const song = state.songs.find((s) => s.id === rel.songId)
@@ -1057,6 +1057,34 @@ route('delete', '/playlist/:id/songs/:songId', async (ctx) => {
   state.playlistSongs = state.playlistSongs.filter((ps) => !(ps.playlistId === id && ps.songId === num(ctx.params.songId)))
   return null
 })
+
+route('put', '/playlist/:id/songs/order', async (ctx) => {
+  const user = requireUser(ctx)
+  return movePlaylistSong(num(ctx.params.id), user, ctx.body)
+})
+
+function movePlaylistSong(playlistId, user, body) {
+  const playlist = state.playlists.find((item) => item.id === playlistId)
+  if (!playlist) throw mockError(500, '歌单不存在')
+  if (!user || playlist.creatorId !== user.id) throw mockError(403, '只能调整自己创建的歌单顺序')
+  const direction = body?.direction
+  if (direction !== -1 && direction !== 1) throw mockError(400, '只能上移或下移一位')
+  const songId = num(body?.songId, NaN)
+  const relations = state.playlistSongs
+    .filter((item) => item.playlistId === playlistId)
+    .sort((a, b) => a.sort - b.sort || a.id - b.id)
+  const index = relations.findIndex((item) => item.songId === songId)
+  if (index < 0) throw mockError(400, '歌曲不在歌单中')
+  const target = index + direction
+  if (target >= 0 && target < relations.length) {
+    const [moving] = relations.splice(index, 1)
+    relations.splice(target, 0, moving)
+    relations.forEach((item, position) => {
+      item.sort = position + 1
+    })
+  }
+  return relations.map((item) => item.songId)
+}
 
 // ---------- 歌曲 / 歌单短评 ----------
 route('get', '/review/page', async (ctx) => {

@@ -22,6 +22,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -234,6 +235,48 @@ public class PlaylistService {
         playlistSongMapper.delete(new LambdaQueryWrapper<PlaylistSong>()
                 .eq(PlaylistSong::getPlaylistId, playlistId)
                 .eq(PlaylistSong::getSongId, songId));
+    }
+
+    /**
+     * 创建者把歌单内一首歌曲上移或下移一位。管理员不能调整别人的歌单，因此不复用允许管理员的 checkOwner。
+     * 交换后把 sort 重写成 1..n，避免相同 sort 只交换内存、落库后顺序不变。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public List<Long> moveSong(Long playlistId, Long songId, Integer direction, Long userId) {
+        if (direction == null || (direction != -1 && direction != 1)) {
+            throw new BusinessException(400, "只能上移或下移一位");
+        }
+        if (songId == null) {
+            throw new BusinessException(400, "歌曲不能为空");
+        }
+        Playlist playlist = getById(playlistId);
+        if (userId == null || !userId.equals(playlist.getCreatorId())) {
+            throw new BusinessException(403, "只能调整自己创建的歌单顺序");
+        }
+        List<PlaylistSong> relations = playlistSongMapper.selectList(
+                new LambdaQueryWrapper<PlaylistSong>()
+                        .eq(PlaylistSong::getPlaylistId, playlistId)
+                        .orderByAsc(PlaylistSong::getSort)
+                        .orderByAsc(PlaylistSong::getId));
+        List<Long> current = relations.stream().map(PlaylistSong::getSongId).collect(Collectors.toList());
+        final List<Long> next;
+        try {
+            next = PlaylistOrder.move(current, songId, direction);
+        } catch (PlaylistOrder.NotInListException ex) {
+            throw new BusinessException(400, ex.getMessage());
+        }
+        if (next.equals(current)) {
+            return next;
+        }
+        int from = PlaylistOrder.indexOf(current, songId);
+        int to = PlaylistOrder.indexOf(next, songId);
+        Collections.swap(relations, from, to);
+        for (int i = 0; i < relations.size(); i++) {
+            PlaylistSong relation = relations.get(i);
+            relation.setSort(i + 1);
+            playlistSongMapper.updateById(relation);
+        }
+        return next;
     }
 
     public Playlist getById(Long id) {

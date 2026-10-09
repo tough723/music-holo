@@ -13,6 +13,13 @@ export const addSongs = (id, songIds) => api({ url: `/playlist/${id}/songs`, met
 /** 从歌单移除一首歌曲 */
 export const removeSong = (id, songId) => api({ url: `/playlist/${id}/songs/${songId}`, method: 'delete' })
 
+/** 创建者把歌单内一首歌曲上移或下移一位，direction 为 -1 或 1 */
+export const moveSong = (id, songId, direction) => api({
+  url: `/playlist/${id}/songs/order`,
+  method: 'put',
+  data: { songId, direction }
+})
+
 /** 当前账号歌单备份的导出、预览和导入 */
 export const exportBackup = () => api({ url: '/playlist/backup', method: 'get' })
 export const previewBackup = (backup) => api({ url: '/playlist/backup/preview', method: 'post', data: backup })
