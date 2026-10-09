@@ -6,6 +6,8 @@
 //
 // 所有能力默认关闭，需要用户在设置中心显式开启；本机 API 需要令牌，且只监听回环地址。
 
+import { normalizeLyricView } from '@/store/player'
+
 export function desktopIntegration() {
   const bridge = globalThis.musicHoloDesktop?.version ? globalThis.musicHoloDesktop : null
   return bridge?.integration || null
@@ -51,6 +53,12 @@ export function runDesktopCommand(playerStore, command, payload = {}) {
     case 'volumeDown':
       playerStore.setVolume(Math.max(0, (Number(playerStore.volume) || 0) - 0.05))
       return true
+    // 桌面歌词窗没有自己的偏好存储，校准请求转发回主窗口的播放器 store。
+    case 'lyricOffset': {
+      const delta = Number(payload?.deltaMs)
+      playerStore.adjustLyricOffset?.(Number.isFinite(delta) ? delta : 0)
+      return true
+    }
     default:
       return false
   }
@@ -80,7 +88,9 @@ export function collectDesktopState(playerStore) {
     currentTime: Number(playerStore?.currentTime) || 0,
     duration: Number(playerStore?.duration) || 0,
     lyrics: toBridgeData(Array.isArray(playerStore?.lyrics) ? playerStore.lyrics : [], []),
-    translations: toBridgeData(Array.isArray(playerStore?.lyricTranslations) ? playerStore.lyricTranslations : [], [])
+    translations: toBridgeData(Array.isArray(playerStore?.lyricTranslations) ? playerStore.lyricTranslations : [], []),
+    // 桌面歌词窗与站内歌词台共用一套显示偏好，校准/字号只需在主窗口改一次。
+    lyricView: normalizeLyricView(playerStore?.lyricView)
   }
 }
 
@@ -100,7 +110,7 @@ export function bindDesktopIntegration({ playerStore, router, integration = desk
   const pushState = () => {
     const state = collectDesktopState(playerStore)
     // 播放进度每 0.5 秒才算一次变化，避免高频 IPC。
-    const signature = `${state.title}|${state.playing}|${Math.floor(state.currentTime * 2)}|${state.lyrics.length}`
+    const signature = `${state.title}|${state.playing}|${Math.floor(state.currentTime * 2)}|${state.lyrics.length}|${state.lyricView.offsetMs}|${state.lyricView.fontSize}`
     if (signature === lastSignature) return
     lastSignature = signature
     integration.pushLyricState(state).catch(() => {})

@@ -366,14 +366,29 @@
     />
     <div v-if="playerStore.queue.length === 0" class="queue-empty">队列空空如也，点上方“导入本地音乐”选择文件，或去曲库挑几首歌吧～</div>
     <div v-else-if="filteredQueue.length === 0" class="queue-empty">没有匹配「{{ queueKeyword }}」的曲目</div>
-    <div
-      v-for="entry in filteredQueue"
-      :key="`${entry.index}-${entry.song.id}`"
-      class="queue-item"
-      :ref="(element) => setQueueItemRef(element, entry.index === playerStore.currentIndex)"
-      :class="{ active: entry.index === playerStore.currentIndex }"
-      @click="playerStore.playAt(entry.index)"
-    >
+    <ul v-else class="queue-list" role="listbox" aria-label="播放队列（可拖拽排序、支持键盘操作）">
+      <li
+        v-for="entry in filteredQueue"
+        :key="`${entry.index}-${entry.song.id}`"
+        class="queue-item"
+        :ref="(element) => setQueueItemRef(element, entry.index === playerStore.currentIndex)"
+        :class="{
+          active: entry.index === playerStore.currentIndex,
+          dragging: dragIndex === entry.index,
+          'drop-target': dropIndex === entry.index && dragIndex !== entry.index
+        }"
+        role="option"
+        tabindex="0"
+        :aria-selected="entry.index === playerStore.currentIndex ? 'true' : 'false'"
+        :aria-label="`第 ${entry.index + 1} 首：${entry.song.title}`"
+        :draggable="canDragQueue ? 'true' : 'false'"
+        @click="playerStore.playAt(entry.index)"
+        @keydown="onQueueItemKeydown($event, entry)"
+        @dragstart="onQueueDragStart($event, entry.index)"
+        @dragover.prevent="onQueueDragOver(entry.index)"
+        @drop.prevent="onQueueDrop(entry.index)"
+        @dragend="onQueueDragEnd"
+      >
       <div class="queue-cover"><Cover :src="entry.song.cover" :text="entry.song.title" :size="36" :anonymous="Boolean(entry.song.isCustomSource)" /></div>
       <div class="queue-meta">
         <div class="queue-title">{{ entry.song.title }}</div>
@@ -416,7 +431,11 @@
           <el-icon><Close /></el-icon>
         </button>
       </div>
-    </div>
+      </li>
+    </ul>
+    <p v-if="playerStore.queue.length > 0" class="queue-hint">
+      {{ canDragQueue ? '拖动条目可调整顺序；聚焦某行后按回车播放、Delete 移除、Alt + ↑/↓ 移动。' : '清空搜索框后可拖动排序；聚焦某行按回车播放、Delete 移除、Alt + ↑/↓ 移动。' }}
+    </p>
   </el-drawer>
 </template>
 
@@ -547,7 +566,7 @@ const canDislikeCurrent = computed(() => {
 const currentDisliked = computed(() => Boolean(canDislikeCurrent.value && dislikeStore.hasSong(currentSong.value.id)))
 const canDownloadCurrent = computed(() => Boolean(currentSong.value?.audioUrl && !currentSong.value.isLocal))
 
-// ---- 队列搜索 ----
+// ---- 队列搜索 / 排序 ----
 const filteredQueue = computed(() => {
   const entries = playerStore.queue.map((song, index) => ({ song, index }))
   const keyword = queueKeyword.value.trim().toLowerCase()
@@ -555,6 +574,67 @@ const filteredQueue = computed(() => {
   return entries.filter(({ song }) => [song?.title, song?.singerName, song?.album]
     .some((field) => String(field || '').toLowerCase().includes(keyword)))
 })
+/** 搜索过滤时拖拽的目标位置会与视觉顺序不一致，索性禁用拖拽。 */
+const canDragQueue = computed(() => queueKeyword.value.trim() === '')
+const dragIndex = ref(-1)
+const dropIndex = ref(-1)
+
+function onQueueItemKeydown(event, entry) {
+  const index = entry?.index
+  if (!Number.isInteger(index)) return
+  if (event.key === 'Enter' || event.key === ' ' || event.key === 'Spacebar') {
+    event.preventDefault()
+    playerStore.playAt(index)
+    return
+  }
+  if (event.key === 'Delete' || event.key === 'Backspace') {
+    event.preventDefault()
+    playerStore.removeAt(index)
+    return
+  }
+  if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && (event.altKey || event.metaKey)) {
+    event.preventDefault()
+    const target = event.key === 'ArrowUp' ? index - 1 : index + 1
+    if (playerStore.moveQueueItem(index, target)) focusQueueItem(target)
+  }
+}
+
+async function focusQueueItem(index) {
+  await nextTick()
+  const rows = typeof document === 'undefined' ? null : document.querySelectorAll('.queue-item')
+  rows?.[index]?.focus?.()
+}
+
+function onQueueDragStart(event, index) {
+  if (!canDragQueue.value) return
+  dragIndex.value = index
+  dropIndex.value = index
+  try {
+    event.dataTransfer?.setData?.('text/plain', String(index))
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
+  } catch { /* jsdom / 旧浏览器没有 dataTransfer */ }
+}
+
+function onQueueDragOver(index) {
+  if (dragIndex.value < 0) return
+  dropIndex.value = index
+}
+
+function onQueueDrop(index) {
+  const from = dragIndex.value
+  if (from < 0 || from === index) {
+    onQueueDragEnd()
+    return
+  }
+  // 优先用 dataTransfer 里的源序号，兼容拖拽期间列表被重新渲染的情况。
+  playerStore.moveQueueItem(from, index)
+  onQueueDragEnd()
+}
+
+function onQueueDragEnd() {
+  dragIndex.value = -1
+  dropIndex.value = -1
+}
 
 function activeAudioElement() {
   return spatialEnabled.value ? spatialAudioRef.value : audioRef.value
@@ -1995,6 +2075,11 @@ watch(() => userStore.isLogin, (loggedIn) => {
   color: var(--text-sub);
   padding: 40px 0;
 }
+.queue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
 .queue-item {
   display: flex;
   align-items: center;
@@ -2002,10 +2087,26 @@ watch(() => userStore.isLogin, (loggedIn) => {
   padding: 8px 10px;
   border-radius: 10px;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background 0.15s, opacity 0.15s, box-shadow 0.15s;
+  outline: none;
 }
 .queue-item:hover {
   background: rgba(148, 163, 184, 0.1);
+}
+.queue-item:focus-visible {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--holo-primary) 70%, transparent);
+}
+.queue-item.dragging {
+  opacity: 0.45;
+}
+.queue-item.drop-target {
+  box-shadow: inset 0 2px 0 0 var(--holo-primary);
+}
+.queue-hint {
+  margin: 8px 0 0;
+  color: var(--text-sub);
+  font-size: 11px;
+  line-height: 1.6;
 }
 .queue-item.active {
   background: color-mix(in srgb, var(--holo-primary) 14%, transparent);

@@ -23,6 +23,32 @@ export const RESUME_MIN_SECONDS = 5
 /** 距离结尾这么近就从头开始，避免续播后立刻切歌。 */
 export const RESUME_TAIL_GUARD_SECONDS = 15
 
+/** 歌词显示偏好：字号档位与缩放系数。 */
+export const LYRIC_FONT_SIZES = Object.freeze([
+  { key: 'small', label: '小', scale: 0.86 },
+  { key: 'medium', label: '中', scale: 1 },
+  { key: 'large', label: '大', scale: 1.2 }
+])
+/** 歌词时间校准：单次步进与上下限（毫秒）。正值＝歌词提前出现。 */
+export const LYRIC_OFFSET_STEP_MS = 500
+export const LYRIC_OFFSET_LIMIT_MS = 5000
+
+/** 把任意输入收敛成合法的歌词显示偏好。 */
+export function normalizeLyricView(saved = {}) {
+  const source = saved && typeof saved === 'object' ? saved : {}
+  const offset = Number(source.offsetMs)
+  return {
+    showTranslation: source.showTranslation !== false,
+    showRomaji: source.showRomaji === true,
+    showVerbatim: source.showVerbatim !== false,
+    immersive: source.immersive === true,
+    fontSize: LYRIC_FONT_SIZES.some((item) => item.key === source.fontSize) ? source.fontSize : 'medium',
+    offsetMs: Number.isFinite(offset)
+      ? Math.max(-LYRIC_OFFSET_LIMIT_MS, Math.min(LYRIC_OFFSET_LIMIT_MS, Math.round(offset / 10) * 10))
+      : 0
+  }
+}
+
 const AUDIO_FILE_EXTENSION = /\.(aac|aif|aiff|flac|m4a|mp3|oga|ogg|opus|wav|weba|webm)$/i
 const sleepTimerHandles = new WeakMap()
 
@@ -123,7 +149,9 @@ function persist(state) {
     playbackRate: normalizePlaybackRate(state.playbackRate),
     // 断点续播只记曲库歌曲：播放器只在曲目非本地、非自定义源时才写入这两个字段。
     resumeSongId: state.resumeSongId ?? null,
-    resumeTime: Math.max(0, Number(state.resumeTime) || 0)
+    resumeTime: Math.max(0, Number(state.resumeTime) || 0),
+    // 歌词显示偏好（译文/罗马音/逐字/沉浸/字号/时间校准）跨会话保留。
+    lyricView: normalizeLyricView(state.lyricView)
   }))
 }
 
@@ -160,6 +188,8 @@ export const usePlayerStore = defineStore('player', {
       resumeSongId: saved.resumeSongId ?? null,
       resumeTime: Number.isFinite(Number(saved.resumeTime)) ? Math.max(0, Number(saved.resumeTime)) : 0,
       mode: MODES.some((mode) => mode.key === saved.mode) ? saved.mode : 'order',
+      /** 原歌词与可选译文歌词 */
+      lyricView: normalizeLyricView(saved.lyricView),
       /** 原歌词与可选译文歌词 */
       lyrics: [],
       lyricTranslations: [],
@@ -662,6 +692,25 @@ export const usePlayerStore = defineStore('player', {
     },
     toggleLyric() {
       this.lyricVisible = !this.lyricVisible
+    },
+    /** 合并歌词显示偏好（译文/罗马音/逐字/沉浸/字号/时间校准），非法值自动收敛。 */
+    setLyricView(patch) {
+      const next = normalizeLyricView({ ...this.lyricView, ...(patch && typeof patch === 'object' ? patch : {}) })
+      this.lyricView = next
+      persist(this)
+      return next
+    },
+    /** 微调歌词时间校准（毫秒，正值＝歌词提前出现），返回校准后的偏移。 */
+    adjustLyricOffset(deltaMs) {
+      const step = Number(deltaMs)
+      if (!Number.isFinite(step)) return this.lyricView.offsetMs
+      const raw = Math.round((this.lyricView.offsetMs + step) / 10) * 10
+      const clamped = Math.max(-LYRIC_OFFSET_LIMIT_MS, Math.min(LYRIC_OFFSET_LIMIT_MS, raw))
+      return this.setLyricView({ offsetMs: clamped }).offsetMs
+    },
+    /** 清除歌词时间校准。 */
+    resetLyricOffset() {
+      return this.setLyricView({ offsetMs: 0 }).offsetMs
     }
   }
 })

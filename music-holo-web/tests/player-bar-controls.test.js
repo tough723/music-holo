@@ -132,4 +132,70 @@ describe('底部播放器交互', () => {
     expect(items()).toEqual(['霓虹海', '云端信使', '全息之恋'])
     expect(store.queue).toHaveLength(3)
   })
+
+  it('队列条目可用键盘操作：回车播放、Delete 移除、Alt+方向键移动', async () => {
+    const store = await mountPlayer()
+    store.playAll([song(1, '霓虹海'), song(2, '云端信使'), song(3, '全息之恋')], 1)
+    await flush()
+    host.querySelector('button[aria-label="播放队列"]').click()
+    await flush()
+
+    const rows = () => Array.from(document.querySelectorAll('.queue-item'))
+    expect(rows()[0].getAttribute('role')).toBe('option')
+    expect(rows()[0].getAttribute('tabindex')).toBe('0')
+    expect(rows()[0].getAttribute('aria-selected')).toBe('true')
+
+    const press = (row, key, init = {}) => row.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, ...init }))
+
+    press(rows()[2], 'Enter')
+    await flush()
+    expect(store.currentSong.title).toBe('全息之恋')
+
+    press(rows()[0], 'Delete')
+    await flush()
+    expect(store.queue.map((item) => item.title)).toEqual(['云端信使', '全息之恋'])
+
+    press(rows()[1], 'ArrowUp', { altKey: true })
+    await flush()
+    expect(store.queue.map((item) => item.title)).toEqual(['全息之恋', '云端信使'])
+    // 移动后焦点跟随到新位置，避免键盘用户丢失上下文。
+    expect(document.activeElement?.textContent).toContain('全息之恋')
+  })
+
+  it('队列条目支持拖拽排序，搜索过滤时禁用拖拽', async () => {
+    const store = await mountPlayer()
+    store.playAll([song(1, '霓虹海'), song(2, '云端信使'), song(3, '全息之恋')], 1)
+    await flush()
+    host.querySelector('button[aria-label="播放队列"]').click()
+    await flush()
+
+    const rows = () => Array.from(document.querySelectorAll('.queue-item'))
+    const fire = (row, type) => {
+      const event = new Event(type, { bubbles: true, cancelable: true })
+      event.dataTransfer = { setData () {}, getData: () => '', effectAllowed: '' }
+      row.dispatchEvent(event)
+      return event
+    }
+
+    expect(rows()[0].getAttribute('draggable')).toBe('true')
+    fire(rows()[0], 'dragstart')
+    await flush()
+    expect(rows()[0].classList.contains('dragging')).toBe(true)
+
+    fire(rows()[2], 'dragover')
+    await flush()
+    expect(rows()[2].classList.contains('drop-target')).toBe(true)
+
+    fire(rows()[2], 'drop')
+    await flush()
+    expect(store.queue.map((item) => item.title)).toEqual(['云端信使', '全息之恋', '霓虹海'])
+    expect(document.querySelectorAll('.queue-item.dragging')).toHaveLength(0)
+
+    const search = document.querySelector('.queue-search input')
+    search.value = '云端'
+    search.dispatchEvent(new Event('input'))
+    await flush()
+    expect(document.querySelector('.queue-item').getAttribute('draggable')).toBe('false')
+    expect(document.querySelector('.queue-hint').textContent).toContain('清空搜索框后可拖动排序')
+  })
 })

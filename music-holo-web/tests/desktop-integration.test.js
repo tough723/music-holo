@@ -25,7 +25,9 @@ function createPlayerStore() {
     get currentSong() { return this.queue[this.currentIndex] },
     next() { this.played = 'next' },
     prev() { this.played = 'prev' },
-    setVolume(value) { this.volume = value }
+    setVolume(value) { this.volume = value },
+    lyricView: { showTranslation: false, showRomaji: true, showVerbatim: true, immersive: false, fontSize: 'large', offsetMs: 800 },
+    adjustLyricOffset(delta) { this.lastOffsetDelta = delta }
   }
 }
 
@@ -65,6 +67,15 @@ describe('桌面系统集成', () => {
     expect(runDesktopCommand(store, 'not-a-command')).toBe(false)
   })
 
+  it('桌面歌词窗的校准请求转发给播放器 store（歌词窗自己不保存偏好）', () => {
+    const store = createPlayerStore()
+    expect(runDesktopCommand(store, 'lyricOffset', { deltaMs: 500 })).toBe(true)
+    expect(store.lastOffsetDelta).toBe(500)
+    // 非法输入按 0 处理，不会把 NaN 写进偏好。
+    runDesktopCommand(store, 'lyricOffset', { deltaMs: 'x' })
+    expect(store.lastOffsetDelta).toBe(0)
+  })
+
   it('推送给歌词窗的字段只有展示所需内容', () => {
     const state = collectDesktopState(createPlayerStore())
     expect(state).toEqual({
@@ -76,7 +87,9 @@ describe('桌面系统集成', () => {
       currentTime: 12,
       duration: 240,
       lyrics: [{ time: 1, text: '今天我' }],
-      translations: [{ time: 1, text: 'today I' }]
+      translations: [{ time: 1, text: 'today I' }],
+      // 桌面歌词窗与站内歌词台共用一套显示偏好（译文/字号/时间校准），只传展示所需字段。
+      lyricView: { showTranslation: false, showRomaji: true, showVerbatim: true, immersive: false, fontSize: 'large', offsetMs: 800 }
     })
     expect(JSON.stringify(state)).not.toContain('audioUrl')
   })

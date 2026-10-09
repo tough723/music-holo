@@ -13,6 +13,20 @@ function defaultPosition(size, screen) {
   }
 }
 
+const LYRIC_FONT_SIZES = new Set(['small', 'medium', 'large'])
+const LYRIC_OFFSET_LIMIT_MS = 5000
+
+/** 只接受白名单内的显示偏好，非法值回落到默认。 */
+function sanitizeLyricView(raw) {
+  const source = raw && typeof raw === 'object' ? raw : {}
+  const offset = Number(source.offsetMs)
+  return {
+    showTranslation: source.showTranslation !== false,
+    fontSize: LYRIC_FONT_SIZES.has(source.fontSize) ? source.fontSize : 'medium',
+    offsetMs: Number.isFinite(offset) ? Math.max(-LYRIC_OFFSET_LIMIT_MS, Math.min(LYRIC_OFFSET_LIMIT_MS, Math.round(offset))) : 0
+  }
+}
+
 class LyricWindowController {
   constructor({ electron, onCommand, appUrl }) {
     this.electron = electron || require('electron')
@@ -82,7 +96,7 @@ class LyricWindowController {
     this.window = null
   }
 
-  /** 歌词窗只接收这些字段，避免把整个应用状态广播给另一个窗口。 */
+/** 歌词窗只接收这些字段，避免把整个应用状态广播给另一个窗口。 */
   sanitize(state) {
     const source = state && typeof state === 'object' ? state : {}
     const lines = Array.isArray(source.lyrics) ? source.lyrics.slice(0, 400) : []
@@ -94,7 +108,9 @@ class LyricWindowController {
       currentTime: Number(source.currentTime) || 0,
       duration: Number(source.duration) || 0,
       lyrics: lines.map((line) => ({ time: Number(line?.time) || 0, text: String(line?.text || '').slice(0, 200) })),
-      translations: Array.isArray(source.translations) ? source.translations.map((line) => ({ time: Number(line?.time) || 0, text: String(line?.text || '').slice(0, 200) })).slice(0, 400) : []
+      translations: Array.isArray(source.translations) ? source.translations.map((line) => ({ time: Number(line?.time) || 0, text: String(line?.text || '').slice(0, 200) })).slice(0, 400) : [],
+      // 与主窗口歌词台共用一套显示偏好：译文开关、字号、时间校准（毫秒，正值＝提前）。
+      lyricView: sanitizeLyricView(source.lyricView)
     }
   }
 
@@ -127,4 +143,4 @@ class LyricWindowController {
   }
 }
 
-module.exports = { LyricWindowController, DEFAULT_SIZE }
+module.exports = { LyricWindowController, DEFAULT_SIZE, sanitizeLyricView }

@@ -96,6 +96,14 @@
               <div class="empty-orbit"><span></span></div>
               <strong>这首歌还没有歌词</strong>
               <span>先享受旋律，歌词准备好后会出现在这里。</span>
+              <el-button
+                v-if="playerStore.currentSong && !playerStore.currentSong.isLocal"
+                size="small"
+                plain
+                round
+                :loading="lyricReloading"
+                @click="reloadLyrics"
+              >重新加载歌词</el-button>
             </div>
             <div v-else class="lyric-lines" :style="{ transform: `translate3d(0, ${offsetY}px, 0)` }">
               <button
@@ -105,7 +113,7 @@
                 :class="{ active: index === activeIndex }"
                 :style="lineStyle(index)"
                 :aria-current="index === activeIndex ? 'true' : undefined"
-                @click="seekTo(line.time)"
+                @click="seekToLine(line)"
               >
                 <span class="line-time">{{ fmtDuration(line.time) }}</span>
                 <span class="line-content">
@@ -136,6 +144,26 @@
         </div>
 
         <footer class="lyric-footer">
+          <div class="lyric-view-tools">
+            <div class="view-tool-group" role="group" aria-label="歌词字号">
+              <button
+                v-for="size in LYRIC_FONT_SIZES"
+                :key="size.key"
+                type="button"
+                class="view-tool"
+                :class="{ active: fontSize === size.key }"
+                :aria-pressed="fontSize === size.key ? 'true' : 'false'"
+                :aria-label="`歌词字号：${size.label}`"
+                @click="setFontSize(size.key)"
+              >{{ size.label }}</button>
+            </div>
+            <div class="view-tool-group" role="group" aria-label="歌词时间校准">
+              <button type="button" class="view-tool" aria-label="歌词提前 0.5 秒" @click="adjustOffset(-LYRIC_OFFSET_STEP_MS)">−0.5s</button>
+              <span class="view-offset" role="status">{{ offsetLabel }}</span>
+              <button type="button" class="view-tool" aria-label="歌词延后 0.5 秒" @click="adjustOffset(LYRIC_OFFSET_STEP_MS)">+0.5s</button>
+              <button type="button" class="view-tool" :disabled="offsetMs === 0" aria-label="重置歌词时间校准" @click="resetOffset">重置</button>
+            </div>
+          </div>
           <div class="lyric-time-row">
             <span>{{ fmtDuration(playerStore.currentTime) }}</span>
             <div class="footer-spectrum" :class="{ active: playerStore.playing }" aria-hidden="true">
@@ -159,7 +187,7 @@
             </el-button>
           </div>
           <div class="lyric-footnote">
-            <span>点击任意歌词即可跳转到对应片段</span>
+            <span>点击任意歌词跳转，[ / ] 校准歌词时间</span>
             <span class="lyric-mode">{{ immersive ? 'IMMERSIVE SPACE' : 'GLASS WINDOW' }}</span>
           </div>
         </footer>
@@ -170,23 +198,40 @@
 
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { usePlayerStore } from '@/store/player'
+import { LYRIC_FONT_SIZES, LYRIC_OFFSET_STEP_MS, usePlayerStore } from '@/store/player'
 import { fmtDuration } from '@/utils/format'
 import HoloProjector from './HoloProjector.vue'
 import Cover from './Cover.vue'
 
 const playerStore = usePlayerStore()
 const bodyRef = ref(null)
-const immersive = ref(false)
-const showTranslation = ref(true)
-const showRomaji = ref(false)
 const offsetY = ref(0)
 const seekPreview = ref(0)
 const scrubbing = ref(false)
+const lyricReloading = ref(false)
 
-/** 当前高亮行：最后一个 time <= currentTime 的行 */
+/** 歌词显示偏好统一放在 store 里：译文/罗马音/逐字/沉浸/字号/时间校准跨会话保留。 */
+const lyricView = computed(() => playerStore.lyricView)
+const immersive = computed({ get: () => lyricView.value.immersive, set: (value) => playerStore.setLyricView({ immersive: Boolean(value) }) })
+const showTranslation = computed({ get: () => lyricView.value.showTranslation, set: (value) => playerStore.setLyricView({ showTranslation: Boolean(value) }) })
+const showRomaji = computed({ get: () => lyricView.value.showRomaji, set: (value) => playerStore.setLyricView({ showRomaji: Boolean(value) }) })
+const showVerbatim = computed({ get: () => lyricView.value.showVerbatim, set: (value) => playerStore.setLyricView({ showVerbatim: Boolean(value) }) })
+const fontSize = computed(() => lyricView.value.fontSize)
+/** 时间校准（毫秒）：正值＝歌词提前出现，用于修正 LRC 与音频的时间差。 */
+const offsetMs = computed(() => lyricView.value.offsetMs)
+const offsetLabel = computed(() => {
+  const value = offsetMs.value
+  if (value === 0) return '校准 0.0s'
+  const seconds = Math.abs(value) / 1000
+  return `校准 ${value > 0 ? '+' : '−'}${seconds.toFixed(1)}s`
+})
+const fontScale = computed(() => LYRIC_FONT_SIZES.find((item) => item.key === fontSize.value)?.scale || 1)
+/** 歌词时间轴：播放进度叠加校准偏移，只影响高亮/逐字判定，不影响真实播放进度。 */
+const lyricTime = computed(() => playerStore.currentTime + offsetMs.value / 1000)
+
+/** 当前高亮行：最后一个 time <= 歌词时间轴的行 */
 const activeIndex = computed(() => {
-  const time = playerStore.currentTime
+  const time = lyricTime.value
   let index = -1
   for (let i = 0; i < playerStore.lyrics.length; i++) {
     if (playerStore.lyrics[i].time <= time) index = i
@@ -211,8 +256,6 @@ function alignLines(originals, extras) {
   })
 }
 
-const showVerbatim = ref(true)
-
 /** 逐字歌词按行首时间索引：[分钟:秒.毫秒]<开始,持续>文字 */
 const verbatimWordsByTime = computed(() => {
   const map = new Map()
@@ -232,7 +275,7 @@ const hasVerbatim = computed(() => (playerStore.lyricVerbatim || []).length > 0)
 const wordProgress = (line, word) => {
   const start = Number(line?.time) + Number(word?.time || 0) / 1000
   const duration = Math.max(0.08, Number(word?.duration || 0) / 1000)
-  const now = playerStore.currentTime
+  const now = lyricTime.value
   if (!Number.isFinite(start) || now <= start) return 0
   if (now >= start + duration) return 100
   return ((now - start) / duration) * 100
@@ -244,8 +287,8 @@ const hasTranslations = computed(() => alignedTranslations.value.some((text) => 
 const hasRomaji = computed(() => alignedRomaji.value.some((text) => String(text || '').trim()))
 const viewportWidth = ref(typeof window === 'undefined' ? 1280 : window.innerWidth)
 const rowHeight = computed(() => {
-  const baseHeight = immersive.value ? (viewportWidth.value <= 640 ? 60 : 78) : 50
-  return baseHeight + (showTranslation.value && hasTranslations.value ? 20 : 0) + (showRomaji.value && hasRomaji.value ? 16 : 0)
+  const baseHeight = (immersive.value ? (viewportWidth.value <= 640 ? 60 : 78) : 50) * fontScale.value
+  return baseHeight + ((showTranslation.value && hasTranslations.value ? 20 : 0) + (showRomaji.value && hasRomaji.value ? 16 : 0)) * fontScale.value
 })
 
 const activeProgress = computed(() => {
@@ -254,7 +297,7 @@ const activeProgress = computed(() => {
   if (!line) return 0
   const next = playerStore.lyrics[index + 1]
   if (!next || next.time <= line.time) return 100
-  return Math.max(0, Math.min(100, ((playerStore.currentTime - line.time) / (next.time - line.time)) * 100))
+  return Math.max(0, Math.min(100, ((lyricTime.value - line.time) / (next.time - line.time)) * 100))
 })
 
 const lineStyle = (index) => {
@@ -299,6 +342,40 @@ const seekTo = (time) => {
   window.dispatchEvent(new CustomEvent('mh-seek', { detail: Number(time) }))
 }
 
+/** 点击歌词行跳转：换算回真实播放时间，保证跳转后这一行正好高亮。 */
+const seekToLine = (line) => {
+  const time = Number(line?.time)
+  if (!Number.isFinite(time)) return
+  seekTo(Math.max(0, time - offsetMs.value / 1000))
+}
+
+const setFontSize = (key) => {
+  playerStore.setLyricView({ fontSize: key })
+  alignActiveLine()
+}
+const adjustOffset = (deltaMs) => {
+  playerStore.adjustLyricOffset(deltaMs)
+  alignActiveLine()
+}
+const resetOffset = () => {
+  playerStore.resetLyricOffset()
+  alignActiveLine()
+}
+/** 歌词为空（加载失败或曲库暂无歌词）时手动重试一次解析。 */
+const reloadLyrics = async () => {
+  const song = playerStore.currentSong
+  if (!song || lyricReloading.value) return
+  lyricReloading.value = true
+  try {
+    // 换一个请求号，避免被上一次仍在飞行中的解析结果覆盖。
+    playerStore.lyricLoadRequestId += 1
+    await playerStore.loadLyrics(song)
+    alignActiveLine()
+  } finally {
+    lyricReloading.value = false
+  }
+}
+
 const onSeekInput = (time) => {
   scrubbing.value = true
   seekPreview.value = Number(time)
@@ -330,9 +407,16 @@ const togglePlay = () => {
 }
 
 const onKeydown = (event) => {
-  if (event.key === 'Escape' && playerStore.lyricVisible) {
+  if (!playerStore.lyricVisible) return
+  if (event.key === 'Escape') {
     event.preventDefault()
     exitOrClose()
+    return
+  }
+  // [ / ] 校准歌词时间，避免手点微小偏移时还要找按钮。
+  if (event.key === '[' || event.key === ']') {
+    event.preventDefault()
+    adjustOffset(event.key === '[' ? -LYRIC_OFFSET_STEP_MS : LYRIC_OFFSET_STEP_MS)
   }
 }
 
@@ -752,6 +836,55 @@ onUnmounted(() => {
   border-top: 1px solid color-mix(in srgb, var(--holo-primary) 14%, var(--border-color));
   background: linear-gradient(0deg, rgba(4, 8, 24, 0.45), rgba(255, 255, 255, 0.025));
   transform: translateZ(18px);
+}
+.lyric-view-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.view-tool-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--holo-primary) 16%, var(--border-color));
+  background: rgba(255, 255, 255, 0.04);
+}
+.view-tool {
+  min-width: 30px;
+  height: 22px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-sub);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.18s ease, background 0.18s ease;
+}
+.view-tool:hover:not(:disabled) {
+  color: var(--holo-primary);
+  background: color-mix(in srgb, var(--holo-primary) 14%, transparent);
+}
+.view-tool.active {
+  color: #fff;
+  background: color-mix(in srgb, var(--holo-primary) 62%, transparent);
+}
+.view-tool:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.view-offset {
+  min-width: 62px;
+  text-align: center;
+  color: var(--text-sub);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
 }
 .lyric-time-row {
   display: flex;
