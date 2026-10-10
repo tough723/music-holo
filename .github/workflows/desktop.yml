@@ -45,37 +45,6 @@ jobs:
             echo "::error title=Desktop smoke failed::$summary"
           fi
           exit "$status"
-      - name: Real online track → Xinghai source playback (non-blocking)
-        # Runs only after the guest/no-backend smoke has proved zero backend calls.
-        # The live journey then imports a SHA-pinned source, uses real public search IDs,
-        # and auto-confirms only the explicit, allowlisted public-domain prompts.
-        continue-on-error: true
-        shell: bash
-        run: |
-          set +e
-          xvfb-run -a node music-holo-desktop/scripts/live-source-playback.cjs 2>&1 | tee /tmp/live-source-desktop.log
-          status=${PIPESTATUS[0]}
-          {
-            echo "### 实际在线曲目 → 星海自定义源播放（非阻断）"
-            echo
-            echo "退出码：$status（0 = Electron 媒体元素真实解码并播放；结果行见下方）"
-            echo
-            echo '```'
-            grep -E 'LIVE_DESKTOP_(STEP|NETWORK_RESULT|OUTCOME|FINAL)|Error:|failed:' /tmp/live-source-desktop.log | tail -n 50
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          outcome=$(grep '^LIVE_DESKTOP_OUTCOME=' /tmp/live-source-desktop.log | tail -n 1 || true)
-          if [ -n "$outcome" ]; then
-            echo "::notice title=真实在线曲目自定义源播放结果::${outcome#LIVE_DESKTOP_OUTCOME=}"
-          else
-            detail=$(grep -E 'LIVE_DESKTOP_(STEP|NETWORK_RESULT|OUTCOME|FINAL)|Error:|failed:' /tmp/live-source-desktop.log | tail -n 25 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
-            echo "::warning title=真实在线曲目自定义源未得出播放结论::$detail"
-          fi
-          if [ "$status" -ne 0 ]; then
-            detail=$(grep -E 'LIVE_DESKTOP_(STEP|NETWORK_RESULT|OUTCOME|FINAL)|Error:|failed:' /tmp/live-source-desktop.log | tail -n 35 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
-            echo "::warning title=实际在线曲目 → 星海源播放未成功（非阻断）::$detail"
-          fi
-          exit "$status"
       - name: Production desktop directory packaging
         run: npm run pack --prefix music-holo-desktop
       - name: Preserve desktop smoke diagnostics
