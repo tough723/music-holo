@@ -461,6 +461,7 @@ import {
 } from '@/utils/localLibrary'
 import {
   deleteCachedDemoAudio,
+  demoAudioPath,
   hasCachedDemoAudio,
   isOwnDemoAudioUrl,
   listCachedDemoAudio,
@@ -1344,6 +1345,29 @@ async function forgetHandle(id) {
   await refreshLocalPanels()
 }
 
+/**
+ * 删除离线副本会 revoke 掉它的 blob URL；如果当前正好在用这个副本播放，
+ * 必须先把音源切回在线地址，否则播放会直接断掉并弹出“加载失败”。
+ */
+async function restorePlaybackAfterCacheRemoval(path) {
+  const song = currentSong.value
+  const audio = activeAudioElement()
+  if (!song || !audio) return false
+  const source = audio.currentSrc || audio.src || ''
+  if (!source.startsWith('blob:')) return false
+  if (demoAudioPath(song.audioUrl, window.location.href) !== path) return false
+  const resumeAt = audio.currentTime || playerStore.currentTime
+  const wasPlaying = playerStore.playing
+  audio.pause()
+  playerStore.currentTime = resumeAt
+  setAudioSource(audio, song.audioUrl, { anonymous: Boolean(song.isCustomSource) })
+  seekAudioWhenReady(audio, resumeAt)
+  syncAudioOutput()
+  if (wasPlaying) safePlay(audio).catch(() => { playerStore.playing = false })
+  ElMessage.info('已删除本机副本，改用在线音频继续播放')
+  return true
+}
+
 async function toggleDemoCache() {
   const song = currentSong.value
   if (!canSaveDemoAudio.value || !song) return
@@ -1352,6 +1376,7 @@ async function toggleDemoCache() {
       const path = new URL(song.audioUrl, window.location.href).pathname
       await deleteCachedDemoAudio(path)
       demoCached.value = false
+      await restorePlaybackAfterCacheRemoval(path)
       ElMessage.success('已删除本机演示副本')
     } else {
       await saveOwnDemoAudio(song, window.location.href)
@@ -1365,8 +1390,13 @@ async function toggleDemoCache() {
 }
 
 async function removeCachedDemo(path) {
-  await deleteCachedDemoAudio(path)
-  await refreshLocalPanels()
+  try {
+    await deleteCachedDemoAudio(path)
+    await refreshLocalPanels()
+    await restorePlaybackAfterCacheRemoval(path)
+  } catch (error) {
+    ElMessage.error(error?.message || '删除离线副本失败')
+  }
 }
 
 async function onLocalFilesSelected(event) {
