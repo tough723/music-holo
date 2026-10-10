@@ -64,6 +64,30 @@ export function isSpatialAudioUrl(audioUrl, baseUrl = globalThis.location?.href)
   }
 }
 
+/** 浏览器是否具备 Web Audio（均衡器 / 空间音效 / 响度归一化都依赖它）。 */
+export function hasWebAudioSupport(scope = globalThis) {
+  return Boolean(scope?.AudioContext || scope?.webkitAudioContext)
+}
+
+/**
+ * 解释「为什么这个音源用不了音频处理链路」。返回 null 表示可用。
+ *
+ * 用途是把静默失效变成可见的置灰 + 原因，而不是让用户点一下才弹个必然失败的错误提示。
+ * @param {{ audioUrl?: string, isCustomSource?: boolean, isLocal?: boolean }} song
+ * @param {{ origin?: string, supportsWebAudio?: boolean }} options
+ * @returns {string|null}
+ */
+export function explainAudioProcessingBlocker(song, options = {}) {
+  const origin = options.origin ?? globalThis.location?.href
+  const supportsWebAudio = options.supportsWebAudio ?? hasWebAudioSupport()
+  if (!song?.audioUrl) return '当前没有可播放的音频'
+  if (!supportsWebAudio) return '当前浏览器不支持 Web Audio，音频处理链路不可用'
+  if (song.isCustomSource) return '自定义源音源不接入音频处理链路（地址是一次性签名地址）'
+  if (song.isLocal && !isSpatialAudioUrl(song.audioUrl, origin)) return '本地文件的地址无法接入音频处理链路'
+  if (!isSpatialAudioUrl(song.audioUrl, origin)) return '跨域音源不接入音频处理链路（拿不到音频采样）'
+  return null
+}
+
 function setGain(gainNode, value, context) {
   const param = gainNode?.gain
   if (!param) return

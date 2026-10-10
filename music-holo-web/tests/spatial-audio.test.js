@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   EQ_BANDS,
+  explainAudioProcessingBlocker,
+  hasWebAudioSupport,
   EQ_GAIN_LIMIT,
   EQ_PRESETS,
   createSpatialAudioGraph,
@@ -242,6 +244,39 @@ describe('响度归一化级', () => {
     // 没有均衡时 dry/wet 直接进响度级
     expect(dryGain.connections.some((entry) => entry.target === masterGain)).toBe(false)
     expect(wetGain.connections.some((entry) => entry.target === masterGain)).toBe(false)
+  })
+})
+
+describe('音频处理链路的降级原因', () => {
+  it('同源与本地 Blob 可用，跨域/自定义源/无音频各有明确原因', () => {
+    const origin = 'https://music-holo.example/home'
+    expect(explainAudioProcessingBlocker({ audioUrl: '/audio/song1.wav' }, { origin, supportsWebAudio: true })).toBeNull()
+    expect(explainAudioProcessingBlocker({ audioUrl: 'blob:https://music-holo.example/x', isLocal: true }, { origin, supportsWebAudio: true })).toBeNull()
+
+    const cross = explainAudioProcessingBlocker({ audioUrl: 'https://cdn.example/song.wav' }, { origin, supportsWebAudio: true })
+    expect(cross).toContain('跨域音源')
+
+    const custom = explainAudioProcessingBlocker({ audioUrl: 'https://cdn.example/song.wav', isCustomSource: true }, { origin, supportsWebAudio: true })
+    expect(custom).toContain('自定义源')
+
+    expect(explainAudioProcessingBlocker({}, { origin, supportsWebAudio: true })).toContain('没有可播放的音频')
+    expect(explainAudioProcessingBlocker(null, { origin, supportsWebAudio: true })).toContain('没有可播放的音频')
+  })
+
+  it('浏览器不支持 Web Audio 时优先给出这个原因，而不是怪音源', () => {
+    const origin = 'https://music-holo.example/home'
+    const message = explainAudioProcessingBlocker(
+      { audioUrl: 'https://cdn.example/song.wav' },
+      { origin, supportsWebAudio: false }
+    )
+    expect(message).toContain('不支持 Web Audio')
+  })
+
+  it('hasWebAudioSupport 只看有没有构造函数', () => {
+    expect(hasWebAudioSupport({ AudioContext: () => {} })).toBe(true)
+    expect(hasWebAudioSupport({ webkitAudioContext: () => {} })).toBe(true)
+    expect(hasWebAudioSupport({})).toBe(false)
+    expect(hasWebAudioSupport(undefined)).toBe(false)
   })
 })
 

@@ -241,11 +241,15 @@
       </el-popover>
       <el-popover v-model:visible="equalizerVisible" placement="top" trigger="click" :width="320">
         <template #reference>
+          <!-- 原生 title 而不是 el-tooltip：在 popover 的 reference 插槽里再套一个 tooltip 会
+               触发「Runtime directive used on component with non-element root node」告警。 -->
           <el-button
             circle
             text
             class="pb-equalizer"
             :class="{ active: playerStore.equalizerActive }"
+            :disabled="Boolean(processingBlocker)"
+            :title="processingBlocker ? `${processingBlocker}（均衡器已置灰）` : '均衡器与音效预设'"
             aria-label="均衡器与音效预设"
             :aria-expanded="equalizerVisible ? 'true' : 'false'"
           >
@@ -284,11 +288,18 @@
               <span class="equalizer-freq">{{ band.label }}</span>
             </div>
           </div>
+          <p v-if="processingBlocker" class="equalizer-note is-blocked">{{ processingBlocker }}，均衡器与 3D 空间音效已置灰，当前保持原声。</p>
           <p class="equalizer-note">均衡器与 3D 空间音效都要经过音频处理链路，跨域/自定义源音源不生效（会保持原声）。</p>
           <div class="loudness-section">
             <div class="loudness-head">
               <span>响度归一化</span>
-              <button type="button" class="loudness-measure" :disabled="loudnessMeasuring || !playerStore.currentSong" @click="measureLoudness">
+              <button
+                type="button"
+                class="loudness-measure"
+                :disabled="loudnessMeasuring || !playerStore.currentSong || Boolean(processingBlocker)"
+                :title="processingBlockerTip"
+                @click="measureLoudness"
+              >
                 {{ loudnessMeasuring ? '测量中…' : '测量当前曲目' }}
               </button>
             </div>
@@ -307,13 +318,16 @@
           </div>
         </div>
       </el-popover>
-      <el-tooltip :content="spatialEnabled ? '关闭 3D 空间音效' : '开启 3D 空间音效（本地/同源音源，耳机体验更明显）'" placement="top">
+      <el-tooltip
+        :content="processingBlocker ? `${processingBlocker}（空间音效已置灰）` : (spatialEnabled ? '关闭 3D 空间音效' : '开启 3D 空间音效（本地/同源音源，耳机体验更明显）')"
+        placement="top"
+      >
         <el-button
           circle
           text
           class="pb-spatial"
           :class="{ active: spatialEnabled }"
-          :disabled="!hasSong || !currentSong?.audioUrl || currentSong?.isCustomSource"
+          :disabled="!hasSong || Boolean(processingBlocker)"
           :aria-label="spatialEnabled ? '关闭 3D 空间音效' : '开启 3D 空间音效'"
           :aria-pressed="spatialEnabled"
           @click="toggleSpatialAudio()"
@@ -392,6 +406,13 @@
           </el-badge>
         </span>
       </el-tooltip>
+      <button
+        v-if="audioContextStalled"
+        type="button"
+        class="pb-audio-retry"
+        title="音频上下文被浏览器挂起：进度在走但没有声音"
+        @click="retryAudioContext"
+      >声音没出来？重试</button>
       <el-popover v-model:visible="statsVisible" placement="top" trigger="click" :width="320">
         <template #reference>
           <el-button circle text class="pb-stats" aria-label="收听统计" :aria-expanded="statsVisible ? 'true' : 'false'">
@@ -735,7 +756,14 @@ import { formatSeconds, formatPercent } from '@/utils/playStats'
 import * as favoriteApi from '@/api/favorite'
 import { fmtDuration } from '@/utils/format'
 import { createMediaSessionController } from '@/utils/mediaSession'
-import { EQ_BANDS, EQ_GAIN_LIMIT, EQ_PRESETS, createSpatialAudioGraph, isSpatialAudioUrl } from '@/utils/spatialAudio'
+import {
+  EQ_BANDS,
+  EQ_GAIN_LIMIT,
+  EQ_PRESETS,
+  createSpatialAudioGraph,
+  explainAudioProcessingBlocker,
+  isSpatialAudioUrl
+} from '@/utils/spatialAudio'
 const SourceSwitchDialog = defineAsyncComponent(() => import('./SourceSwitchDialog.vue'))
 import {
   filesFromGrantedHandles,
@@ -796,6 +824,19 @@ const SHORTCUT_HELP = Object.freeze([
   { keys: 'Q', desc: '打开 / 关闭播放队列' },
   { keys: 'V', desc: '切换播放器形态（标准 / 迷你 / 沉浸）' }
 ])
+
+/**
+ * 音频处理链路（空间音效 / 均衡器 / 响度补偿）为什么用不了。
+ * 有值时相关入口一律置灰并在 tooltip 里说明原因，不再让用户点出个必然失败的提示。
+ * 依赖 currentSong：切歌会重新判定（浏览器能力是静态的，但音源每次都可能不同）。
+ */
+const processingBlocker = computed(() => {
+  void playerStore.currentSong // 显式依赖：切歌即重新判定
+  return explainAudioProcessingBlocker(playerStore.currentSong, { origin: window.location.href })
+})
+const processingBlockerTip = computed(() =>
+  processingBlocker.value ? `${processingBlocker.value}（已置灰）` : ''
+)
 
 // ---- 响度归一化（P2-10）----
 const loudnessStore = useLoudnessStore()
@@ -1867,10 +1908,35 @@ function resumeSpatialAudio() {
   if (!processedEnabled.value || !spatialAudioGraph) return
   const resumed = spatialAudioGraph.resume?.()
   resumed?.catch?.(() => {})
+  return resumed
+}
+
+/**
+ * 自动 resume 也可能失败（系统休眠、策略限制），这时进度在走但没有声音。
+ * 与其让用户自己发现，不如在播放条上给一个可见的重试入口。
+ */
+const audioContextStalled = ref(false)
+
+function refreshAudioContextState() {
+  audioContextStalled.value = Boolean(
+    processedEnabled.value && spatialAudioGraph && spatialAudioGraph.state !== 'running'
+  )
+  return audioContextStalled.value
+}
+
+async function retryAudioContext() {
+  if (!processedEnabled.value || !spatialAudioGraph) return
+  const resumed = await Promise.resolve(spatialAudioGraph.resume?.()).catch(() => false)
+  syncAudioOutput()
+  if (refreshAudioContextState()) {
+    ElMessage.warning('浏览器仍然挂起了音频上下文，点一下页面任意位置后再重试')
+    return
+  }
+  if (resumed) ElMessage.success('音频处理链路已恢复')
 }
 
 function canUseSpatialAudio(song = currentSong.value) {
-  return Boolean(song?.audioUrl) && !song.isCustomSource && isSpatialAudioUrl(song.audioUrl, window.location.href)
+  return !explainAudioProcessingBlocker(song, { origin: window.location.href })
 }
 
 /**
@@ -2004,7 +2070,7 @@ async function syncEqualizer({ notify = false } = {}) {
   if (!processedEnabled.value) {
     if (flat) return false
     const ok = await enableProcessedAudio({ spatial: spatialEnabled.value, silent: !notify })
-    if (!ok && notify) ElMessage.warning('当前音源不经过音频处理链路，均衡器不可用')
+    if (!ok && notify) ElMessage.warning(processingBlocker.value || '当前音源不经过音频处理链路，均衡器不可用')
     return ok
   }
   const applied = Boolean(spatialAudioGraph?.setEqualizer?.(gains))
@@ -2382,6 +2448,7 @@ function onAudioTimeUpdate(event) {
   playerStore.currentTime = audio.currentTime
   statsPosition = Number(audio.currentTime) || 0
   playerStore.checkSleepTimer()
+  refreshAudioContextState()
   syncMediaSessionPosition()
   updateBuffered()
   // 断点续播：每 5 秒记一次进度，避免频繁写 localStorage。
@@ -2549,6 +2616,7 @@ onMounted(() => {
     spatialAudio.addEventListener('progress', onAudioProgress)
   }
   syncAudioOutput()
+  refreshAudioContextState()
   installMediaSession()
   // 均衡器是偏好：等用户手势触发播放时再由 applyRememberedSpatialAudio 一并接入链路。
   if (playerStore.equalizerActive && !playerStore.spatialPreferred) markUserGesture()
@@ -2695,6 +2763,21 @@ watch(() => userStore.isLogin, (loggedIn) => {
   color: #fff;
   background: color-mix(in srgb, var(--holo-primary) 74%, transparent);
   border-color: transparent;
+}
+
+/* ---- 音频上下文挂起的兜底入口 ---- */
+.pb-audio-retry {
+  padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, var(--holo-warning, #f5a623) 55%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--holo-warning, #f5a623) 14%, transparent);
+  color: var(--text-main);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.pb-audio-retry:hover {
+  background: color-mix(in srgb, var(--holo-warning, #f5a623) 24%, transparent);
 }
 
 /* ---- 响度归一化 ---- */
@@ -3016,6 +3099,9 @@ watch(() => userStore.isLogin, (loggedIn) => {
 }
 .equalizer-value {
   font-variant-numeric: tabular-nums;
+}
+.equalizer-note.is-blocked {
+  color: color-mix(in srgb, var(--holo-danger, #ff6b6b) 85%, var(--text-main));
 }
 .equalizer-note {
   color: var(--text-sub);

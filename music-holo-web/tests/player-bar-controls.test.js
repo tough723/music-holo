@@ -669,4 +669,125 @@ describe('底部播放器交互', () => {
     await flush()
     expect(nativeAudio.volume).toBeCloseTo(0.2, 5)
   })
+
+  it('跨域/自定义源音源：空间音效与均衡器置灰，不再点出必然失败的提示', async () => {
+    const store = await mountPlayer()
+    // jsdom 没有 Web Audio：入口先置灰（不能让用户点出个必然失败的提示）
+    store.playAll([song(1, '霓虹海')], 1)
+    await flush()
+    expect(document.querySelector('.pb-spatial').disabled).toBe(true)
+    expect(document.querySelector('.pb-equalizer').disabled).toBe(true)
+
+    // 补上 Web Audio 后同源音源的入口恢复可用
+    class FakeContext {
+      constructor() {
+        this.state = 'running'
+        this.currentTime = 0
+        this.destination = {}
+      }
+      createMediaElementSource() { return { connect () {} } }
+      createChannelSplitter() { return { connect () {} } }
+      createPanner() { return { connect () {}, positionX: { setValueAtTime () {} } } }
+      createGain() { return { connect () {}, disconnect () {}, gain: { value: 1, setTargetAtTime (v) { this.value = v } } } }
+      createBiquadFilter() {
+        return { connect () {}, type: '', frequency: { value: 0 }, Q: { value: 0 }, gain: { value: 0, setTargetAtTime (v) { this.value = v } } }
+      }
+      createDynamicsCompressor() {
+        return {
+          connect () {},
+          threshold: { value: 0 }, knee: { value: 0 }, ratio: { value: 0 }, attack: { value: 0 }, release: { value: 0 }
+        }
+      }
+      resume() { this.state = 'running'; return Promise.resolve() }
+      close() { this.state = 'closed'; return Promise.resolve() }
+    }
+    window.AudioContext = FakeContext
+    store.playAll([song(2, '云端信使')], 2)
+    await flush()
+    await flush()
+    expect(document.querySelector('.pb-spatial').disabled).toBe(false)
+    expect(document.querySelector('.pb-equalizer').disabled).toBe(false)
+
+    // 跨域：两个入口重新置灰
+    store.playAll([{ ...song(9, '跨域曲目'), audioUrl: 'https://cdn.example/song.wav' }], 9)
+    await flush()
+    await flush()
+    expect(document.querySelector('.pb-spatial').disabled).toBe(true)
+    expect(document.querySelector('.pb-equalizer').disabled).toBe(true)
+    // 置灰后点击不会开启空间音效
+    document.querySelector('.pb-spatial').click()
+    await flush()
+    expect(store.spatialPreferred).toBe(false)
+    delete window.AudioContext
+  })
+
+  it('音频上下文被挂起时给出可见的重试入口，点一下恢复', async () => {
+    class SuspendedContext {
+      constructor() {
+        this.state = 'suspended'
+        this.currentTime = 0
+        this.destination = {}
+        this.resumeCalls = 0
+      }
+      createMediaElementSource() { return { connect () {} } }
+      createChannelSplitter() { return { connect () {} } }
+      createPanner() { return { connect () {}, positionX: { setValueAtTime () {} } } }
+      createGain() { return { connect () {}, disconnect () {}, gain: { value: 1, setTargetAtTime (v) { this.value = v } } } }
+      createBiquadFilter() {
+        return { connect () {}, type: '', frequency: { value: 0 }, Q: { value: 0 }, gain: { value: 0, setTargetAtTime (v) { this.value = v } } }
+      }
+      createDynamicsCompressor() {
+        return {
+          connect () {},
+          threshold: { value: 0 }, knee: { value: 0 }, ratio: { value: 0 }, attack: { value: 0 }, release: { value: 0 }
+        }
+      }
+      resume() {
+        this.resumeCalls += 1
+        // 模拟“自动 resume 失败”：只有用户手动点重试（真实手势）之后才拉得起来。
+        if (window.__allowAudioResume) this.state = 'running'
+        return Promise.resolve()
+      }
+      close() { this.state = 'closed'; return Promise.resolve() }
+    }
+    window.AudioContext = SuspendedContext
+    try {
+      const store = await mountPlayer()
+      store.playAll([song(1, '霓虹海')], 1)
+      store.setSpatialPreferred(true)
+      await flush()
+      // 用户手势后自动接入处理链路；上下文是挂起状态
+      store.playing = false
+      await flush()
+      window.dispatchEvent(new Event('pointerdown')) // 手势监听挂在 window 上
+      store.playing = true
+      await flush()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      await flush()
+      // 处理链路启用后当前播放元素是第二个（空间）元素，两个都派发才覆盖得到
+      for (const element of document.querySelectorAll('audio')) element.dispatchEvent(new Event('timeupdate'))
+      await flush()
+      const retry = document.querySelector('.pb-audio-retry')
+      expect(retry).not.toBeNull()
+      // 自动 resume 拉不起来：入口还在，并给出说明
+      retry.click()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      await flush()
+      // 处理链路启用后当前播放元素是第二个（空间）元素，两个都派发才覆盖得到
+      for (const element of document.querySelectorAll('audio')) element.dispatchEvent(new Event('timeupdate'))
+      await flush()
+      expect(document.querySelector('.pb-audio-retry')).not.toBeNull()
+      // 用户真实手势后再点一次：恢复成功，入口消失
+      window.__allowAudioResume = true
+      document.querySelector('.pb-audio-retry').click()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      await flush()
+      // 处理链路启用后当前播放元素是第二个（空间）元素，两个都派发才覆盖得到
+      for (const element of document.querySelectorAll('audio')) element.dispatchEvent(new Event('timeupdate'))
+      await flush()
+      expect(document.querySelector('.pb-audio-retry')).toBeNull()
+    } finally {
+      delete window.AudioContext
+    }
+  })
 })
