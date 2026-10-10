@@ -594,6 +594,9 @@
             <el-icon><Upload /></el-icon> 导入本地音乐
           </el-button>
         </el-tooltip>
+        <el-button size="small" class="queue-save-playlist" plain :disabled="playerStore.queue.length === 0" @click="saveQueueAsPlaylist">
+          存为歌单
+        </el-button>
         <el-button size="small" type="danger" plain :disabled="playerStore.queue.length === 0" @click="clearQueue">
           清空队列
         </el-button>
@@ -736,7 +739,7 @@
 <script setup>
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   CROSSFADE_OPTIONS,
   PLAYER_DOCKS,
@@ -754,9 +757,15 @@ import { useLoudnessStore } from '@/store/loudness'
 import { LOUDNESS_TARGETS, applyGainToVolume, describeLufs, measureAudioLoudness } from '@/utils/loudness'
 import { formatSeconds, formatPercent } from '@/utils/playStats'
 import * as favoriteApi from '@/api/favorite'
+import * as playlistApi from '@/api/playlist'
 import { fmtDuration } from '@/utils/format'
 import { MEDIA_ERR_NETWORK, isPlaybackStalled, isTransientAudioError, nextRetryDelay, hasProgress } from '@/utils/audioRetry'
 import { nextPreloadIndex, shouldPreloadNext } from '@/utils/audioPreload'
+import {
+  describeQueueSaveResult,
+  partitionQueueForPlaylist,
+  suggestQueuePlaylistName
+} from '@/utils/queueToPlaylist'
 import { createMediaSessionController } from '@/utils/mediaSession'
 import {
   EQ_BANDS,
@@ -2477,6 +2486,55 @@ async function onLocalFilesSelected(event) {
     if (result.skipped > 0) ElMessage.warning(`另有 ${result.skipped} 个文件未能导入`)
   } catch {
     ElMessage.error('本地音乐导入失败，请检查文件格式后重试')
+  }
+}
+
+/** 把当前播放队列存成一个新歌单（本地文件与自定义源不会上传）。 */
+async function saveQueueAsPlaylist() {
+  if (!userStore.isLogin) {
+    ElMessage.warning('请先登录后再保存歌单')
+    return
+  }
+  const { ids, skipped } = partitionQueueForPlaylist(playerStore.queue)
+  if (ids.length === 0) {
+    ElMessage.warning(
+      skipped.length > 0
+        ? '队列里只有本地文件或自定义源歌曲，这些不会上传到服务器，无法存为歌单'
+        : '队列是空的，先添加几首歌吧'
+    )
+    return
+  }
+  const hint = skipped.length > 0 ? `${skipped.length} 首本地/自定义源歌曲不会上传，将被跳过。` : ''
+  let name = ''
+  try {
+    const { value } = await ElMessageBox.prompt(
+      `将队列里的 ${ids.length} 首歌存入新歌单。${hint}`,
+      '存为歌单',
+      {
+        inputValue: suggestQueuePlaylistName(playerStore.queue),
+        inputPlaceholder: '歌单名称',
+        inputValidator: (input) => (String(input || '').trim() ? true : '歌单名称不能为空'),
+        confirmButtonText: '保存',
+        cancelButtonText: '取消'
+      }
+    )
+    name = String(value || '').trim()
+  } catch {
+    return // 用户取消
+  }
+  if (!name) return
+  try {
+    const created = await playlistApi.save({ name })
+    const added = await playlistApi.addSongs(created?.id, ids)
+    const summary = describeQueueSaveResult({
+      name,
+      requested: ids.length,
+      added,
+      skippedCount: skipped.length
+    })
+    ElMessage({ type: summary.type, message: summary.text })
+  } catch (e) {
+    ElMessage.error(e?.message || '保存歌单失败，请稍后再试')
   }
 }
 

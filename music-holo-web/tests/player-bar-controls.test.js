@@ -8,6 +8,16 @@ import PlayerBar from '../src/components/PlayerBar.vue'
 import { usePlayerStore, setSessionSongResolver } from '../src/store/player.js'
 import { useStatsStore } from '../src/store/stats.js'
 import { useLoudnessStore } from '../src/store/loudness.js'
+import { useUserStore } from '../src/store/user.js'
+
+const { playlistCalls } = vi.hoisted(() => ({ playlistCalls: { save: [], addSongs: [], added: null } }))
+vi.mock('@/api/playlist', () => ({
+  save: async (data) => { playlistCalls.save.push(data); return { id: 99, name: data.name } },
+  addSongs: async (id, ids) => {
+    playlistCalls.addSongs.push([id, ids])
+    return typeof playlistCalls.added === 'number' ? playlistCalls.added : ids.length
+  }
+}))
 
 /**
  * 底部播放器是全局组件，这里用真实组件挂载（jsdom）验证它的交互而不是 store 本身：
@@ -44,6 +54,7 @@ async function mountPlayer() {
 }
 
 const flush = async () => { await nextTick(); await nextTick() }
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** 冷启动模拟：抹掉持久化的曲目对象，只留下会话快照（曲目得靠解析器重新取）。 */
 function dropPersistedQueue() {
@@ -932,6 +943,80 @@ describe('底部播放器交互', () => {
       delete window.navigator.connection
     } finally {
       window.Audio = RealAudio
+    }
+  })
+})
+
+describe('队列存为歌单', () => {
+  beforeEach(() => {
+    playlistCalls.save.length = 0
+    playlistCalls.addSongs.length = 0
+    playlistCalls.added = null
+  })
+
+  it('登录后把队列存成新歌单，本地与自定义源歌曲不上传', async () => {
+    const store = await mountPlayer()
+    const user = useUserStore()
+    user.token = 'fake-token'
+    try {
+      store.playAll([
+        song(1, '霓虹海', 240),
+        song(2, '云端信使', 240),
+        { id: 3, title: '本地文件', artist: '本机', duration: 100, audioUrl: 'blob:x', isLocal: true },
+        song(1, '霓虹海', 240) // 重复项
+      ], 1)
+      await flush()
+      host.querySelector('button[aria-label="播放队列"]').click()
+      await flush()
+
+      document.querySelector('.queue-save-playlist').click()
+      await flush()
+      // 弹出命名框：默认名带时间，改成自己想要的名字后确认
+      const box = document.querySelector('.el-message-box')
+      expect(box).toBeTruthy()
+      const input = box.querySelector('input')
+      input.value = '我的深夜队列'
+      input.dispatchEvent(new Event('input'))
+      await flush()
+      box.querySelector('.el-button--primary').click()
+      await flush()
+      await flush()
+
+      expect(playlistCalls.save).toEqual([{ name: '我的深夜队列' }])
+      expect(playlistCalls.addSongs).toEqual([[99, [1, 2]]]) // 去重、且不含本地文件
+      await wait(60)
+      expect(document.querySelector('.el-message-box')).toBeNull() // 确认后关闭，不留残留在页面上
+    } finally {
+      user.token = ''
+    }
+  })
+
+  it('未登录或队列里没有可保存的歌曲时不发请求', async () => {
+    await wait(60) // 等上一个用例的命名框动画收干净
+    expect(document.querySelector('.el-message-box')).toBeNull()
+    const store = await mountPlayer()
+    store.playAll([song(1, '霓虹海', 240)], 1)
+    await flush()
+    host.querySelector('button[aria-label="播放队列"]').click()
+    await flush()
+    document.querySelector('.queue-save-playlist').click()
+    await flush()
+    expect(document.querySelector('.el-message-box')).toBeNull() // 未登录：只提示，不弹命名框
+    expect(playlistCalls.save).toHaveLength(0)
+
+    const user = useUserStore()
+    user.token = 'fake-token'
+    try {
+      store.playAll([
+        { id: 5, title: '本地文件', artist: '本机', duration: 100, audioUrl: 'blob:x', isLocal: true }
+      ], 5)
+      await flush()
+      document.querySelector('.queue-save-playlist').click()
+      await flush()
+      expect(document.querySelector('.el-message-box')).toBeNull()
+      expect(playlistCalls.save).toHaveLength(0)
+    } finally {
+      user.token = ''
     }
   })
 })
