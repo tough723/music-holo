@@ -111,8 +111,15 @@ export function createSpatialAudioGraph(audioElement, AudioContextConstructor) {
   let masterGain
   // 均衡器串在 dry/wet 混合之后、总音量之前；空间处理与均衡互不干扰。
   let eqInput = null
+  let eqTail = null
   let eqFilters = []
   let equalizerGains = EQ_FLAT_GAINS.slice()
+  // 响度归一化串在均衡之后、总音量之前：decrease 过高响度时不会把均衡的曲线拧回去。
+  let loudnessIn = null
+  let loudnessTrim = null
+  let compressor = null
+  let loudnessEnabled = false
+  let loudnessTrimValue = 1
 
   try {
     source = context.createMediaElementSource(audioElement)
@@ -153,6 +160,69 @@ export function createSpatialAudioGraph(audioElement, AudioContextConstructor) {
   }
 
   /**
+   * 把「当前信号源」接到「当前末端」：末端可能是均衡链，也可能是响度级，
+   * 两者都启用时顺序固定为 均衡 → 响度 → 总音量，重复调用是幂等的。
+   */
+  function applyTailRouting() {
+    // 均衡链启用时末端是最后一个滤波器，否则是 dry/wet 两路。
+    const heads = eqTail ? [eqTail] : [dryGain, wetGain]
+    const tail = loudnessIn || masterGain
+    for (const head of heads) {
+      try {
+        head.disconnect(masterGain)
+      } catch {
+        // 还没有连过：disconnect(目标) 会抛错，忽略即可。
+      }
+      try {
+        head.disconnect(loudnessIn)
+      } catch {
+        // 同上。
+      }
+      head.connect(tail)
+    }
+  }
+
+  /**
+   * 惰性串接响度归一化：一个增益（补偿）+ 一个压缩器（动态兜底）。
+   * 浏览器没有 DynamicsCompressor 时只保留增益补偿，不影响空间音效与原声。
+   */
+  function ensureLoudness() {
+    if (loudnessIn) return true
+    if (typeof context.createGain !== 'function') return false
+    try {
+      loudnessIn = context.createGain()
+      loudnessTrim = context.createGain()
+      loudnessTrim.gain.value = 1
+      loudnessIn.connect(loudnessTrim)
+      // 压缩器只是动态兜底：拿不到（或拿到但不能配置）时退回纯增益补偿，不影响播放。
+      try {
+        if (typeof context.createDynamicsCompressor === 'function') {
+          const node = context.createDynamicsCompressor()
+          // 温和的阈值/比例：只压掉过头的高响度，不做明显的“泵感”。
+          node.threshold.value = -18
+          node.knee.value = 12
+          node.ratio.value = 3
+          node.attack.value = 0.01
+          node.release.value = 0.25
+          loudnessTrim.connect(node)
+          node.connect(masterGain)
+          compressor = node
+        }
+      } catch {
+        compressor = null
+      }
+      if (!compressor) loudnessTrim.connect(masterGain)
+      applyTailRouting()
+      return true
+    } catch {
+      loudnessIn = null
+      loudnessTrim = null
+      compressor = null
+      return false
+    }
+  }
+
+  /**
    * 惰性串接均衡器：把 dry/wet 的汇入点从 masterGain 改到滤波器链。
    * 浏览器没有 BiquadFilter 时保持直通，不影响空间音效与原声。
    */
@@ -173,7 +243,9 @@ export function createSpatialAudioGraph(audioElement, AudioContextConstructor) {
         node = filter
         filters.push(filter)
       }
-      node.connect(masterGain)
+      eqFilters = filters
+      eqTail = node
+      // dry/wet 改道进均衡链；均衡之后再统一交给末端（可能还有响度级）。
       try {
         dryGain.disconnect(masterGain)
         wetGain.disconnect(masterGain)
@@ -184,11 +256,12 @@ export function createSpatialAudioGraph(audioElement, AudioContextConstructor) {
       }
       dryGain.connect(eqInput)
       wetGain.connect(eqInput)
-      eqFilters = filters
+      applyTailRouting()
       return true
     } catch {
       eqFilters = []
       eqInput = null
+      eqTail = null
       return false
     }
   }
@@ -220,6 +293,32 @@ export function createSpatialAudioGraph(audioElement, AudioContextConstructor) {
     setVolume(volume) {
       const normalized = Math.min(1, Math.max(0, Number(volume) || 0))
       setGain(masterGain, normalized, context)
+    },
+    /** 响度归一化是否真的接进了音频链路（不支持的浏览器返回 false）。 */
+    supportsLoudness() {
+      return ensureLoudness()
+    },
+    /**
+     * 设置响度归一化。
+     * @param {{ enabled: boolean, trim?: number }} options trim 为线性补偿倍数（1 = 不补偿）
+     * @returns {boolean} 是否生效
+     */
+    setLoudness(options = {}) {
+      const enabled = options.enabled !== false
+      const trim = Math.max(0, Math.min(4, Number(options.trim) || 0)) || 1
+      loudnessEnabled = enabled
+      loudnessTrimValue = trim
+      if (!enabled) {
+        // 关掉时恢复成 1 倍直通，保留节点以免频繁重连。
+        if (loudnessTrim) setGain(loudnessTrim, 1, context)
+        return Boolean(loudnessTrim)
+      }
+      if (!ensureLoudness()) return false
+      setGain(loudnessTrim, trim, context)
+      return true
+    },
+    getLoudness() {
+      return { enabled: loudnessEnabled, trim: loudnessTrimValue, supportsCompressor: Boolean(compressor) }
     },
     /** 均衡器是否真的接进了音频链路（跨域音源与不支持的浏览器会返回 false）。 */
     supportsEqualizer() {

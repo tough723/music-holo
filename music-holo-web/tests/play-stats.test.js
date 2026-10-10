@@ -12,6 +12,7 @@ import {
   summarize
 } from '../src/utils/playStats.js'
 import { useStatsStore } from '../src/store/stats.js'
+import { useLoudnessStore } from '../src/store/loudness.js'
 
 const at = (dayOffset = 0, hour = 10) => {
   const date = new Date(2026, 0, 1 + dayOffset, hour, 0, 0)
@@ -84,6 +85,75 @@ describe('收听统计聚合', () => {
     expect(formatSeconds(95)).toBe('1 分 35 秒')
     expect(formatSeconds(3725)).toBe('1 小时 2 分')
     expect(formatSeconds(undefined)).toBe('0 分 0 秒')
+  })
+})
+
+describe('响度归一化仓库', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    setActivePinia(createPinia())
+  })
+
+  it('默认标准档，关闭档不启用，非法档位回落', () => {
+    const store = useLoudnessStore()
+    expect(store.target).toBe('streaming')
+    expect(store.enabled).toBe(true)
+    expect(store.goal).toBe(-16)
+    expect(store.setTarget('off')).toBe('off')
+    expect(store.enabled).toBe(false)
+    expect(store.goal).toBeNull()
+    expect(store.setTarget('nope')).toBe('streaming')
+  })
+
+  it('没有实测值时不做补偿，有实测值按目标算增益', () => {
+    const store = useLoudnessStore()
+    expect(store.gainFor(1)).toBe(1)
+    expect(store.labelFor(1)).toBe('未测量')
+
+    store.recordMeasurement(1, { lufs: -26, peak: 0.2 })
+    expect(store.measuredFor(1).lufs).toBe(-26)
+    // -26 → -16 需要 +10dB，峰值 0.2 还有余量
+    expect(store.gainFor(1)).toBeCloseTo(Math.pow(10, 10 / 20), 5)
+    expect(store.labelFor(1)).toContain('-26.0 LUFS')
+    expect(store.labelFor(1)).toContain('+10.0dB')
+
+    // 关闭归一化后不再补偿，但实测值保留
+    store.setTarget('off')
+    expect(store.gainFor(1)).toBe(1)
+    expect(store.labelFor(1)).toBe('未启用')
+    store.setTarget('streaming')
+
+    // 峰值顶到上限时会标出来
+    store.recordMeasurement(2, { lufs: -30, peak: 0.95 })
+    expect(store.labelFor(2)).toContain('峰值上限')
+  })
+
+  it('实测值落盘、能被新实例读出，脏数据降级为空', () => {
+    const store = useLoudnessStore()
+    store.recordMeasurement(7, { lufs: -19.5, peak: 0.4 })
+    setActivePinia(createPinia())
+    const reloaded = useLoudnessStore()
+    expect(reloaded.measuredFor(7).lufs).toBe(-19.5)
+    expect(reloaded.measuredFor('7')).toBeTruthy()
+    expect(reloaded.measuredFor(8)).toBeNull()
+
+    localStorage.setItem('mh_loudness_v1', '{oops')
+    setActivePinia(createPinia())
+    const fallback = useLoudnessStore()
+    expect(fallback.tracks).toEqual({})
+    expect(fallback.target).toBe('streaming')
+  })
+
+  it('丢弃与清空：只影响目标曲目 / 全部记录', () => {
+    const store = useLoudnessStore()
+    store.recordMeasurement(1, { lufs: -20, peak: 0.3 })
+    store.recordMeasurement(2, { lufs: -21, peak: 0.3 })
+    store.forgetMeasurement(1)
+    expect(store.measuredFor(1)).toBeNull()
+    expect(store.measuredFor(2)).not.toBeNull()
+    store.clear()
+    expect(store.tracks).toEqual({})
+    expect(store.gainFor(2)).toBe(1)
   })
 })
 

@@ -162,6 +162,15 @@
               <span class="view-offset" role="status">{{ offsetLabel }}</span>
               <button type="button" class="view-tool" aria-label="歌词延后 0.5 秒" @click="adjustOffset(LYRIC_OFFSET_STEP_MS)">+0.5s</button>
               <button type="button" class="view-tool" :disabled="offsetMs === 0" aria-label="重置歌词时间校准" @click="resetOffset">重置</button>
+              <button
+                type="button"
+                class="view-tool"
+                :class="{ active: Boolean(savedCorrection) }"
+                :disabled="submittingOffset"
+                aria-label="提交歌词时间校正"
+                @click="submitCorrection"
+              >提交校正</button>
+              <span v-if="correctionLabel" class="view-correction" role="status">{{ correctionLabel }}</span>
             </div>
           </div>
           <div class="lyric-time-row">
@@ -199,11 +208,15 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { LYRIC_FONT_SIZES, LYRIC_OFFSET_STEP_MS, usePlayerStore } from '@/store/player'
+import { LYRIC_FIX_MIN_REPORTS, useLyricFixStore } from '@/store/lyricFix'
+import { fetchLyricOffset, submitLyricOffset, withdrawLyricOffset } from '@/api/lyric'
+import { ElMessage } from 'element-plus'
 import { fmtDuration } from '@/utils/format'
 import HoloProjector from './HoloProjector.vue'
 import Cover from './Cover.vue'
 
 const playerStore = usePlayerStore()
+const lyricFixStore = useLyricFixStore()
 const bodyRef = ref(null)
 const offsetY = ref(0)
 const seekPreview = ref(0)
@@ -357,10 +370,90 @@ const adjustOffset = (deltaMs) => {
   playerStore.adjustLyricOffset(deltaMs)
   alignActiveLine()
 }
+/** 记录当前偏移是不是由“已知校正”套用的，切到没有校正的歌时才把偏移归零。 */
+let appliedSongId = null
+
 const resetOffset = () => {
   playerStore.resetLyricOffset()
+  appliedSongId = playerStore.currentSong?.id ?? null
   alignActiveLine()
 }
+
+// ---- 歌词时间轴校正：本机账本 + 众包提交（P2-9）----
+const submittingOffset = ref(false)
+
+const currentSongId = computed(() => playerStore.currentSong?.id ?? null)
+const savedCorrection = computed(() => (currentSongId.value === null ? null : lyricFixStore.correctionFor(currentSongId.value)))
+const correctionLabel = computed(() => {
+  const saved = savedCorrection.value
+  if (!saved) return ''
+  if (saved.submitted) return '已提交'
+  return saved.offsetMs === 0 ? '已归零' : '本机已存'
+})
+
+/**
+ * 提交校正：先落本机账本（网络不通也不丢），再尝试提交到服务端。
+ * 失败时可重试，pending 列表保留着没提交成功的部分。
+ */
+async function submitCorrection() {
+  const song = playerStore.currentSong
+  if (!song) return
+  const offset = offsetMs.value
+  lyricFixStore.saveCorrection({
+    songId: song.id,
+    title: song.title || '',
+    artist: song.singerName || song.artist || '',
+    offsetMs: offset
+  })
+  if (submittingOffset.value) return
+  submittingOffset.value = true
+  try {
+    if (offset === 0) {
+      await withdrawLyricOffset(song.id)
+      lyricFixStore.markSubmitted(song.id)
+      ElMessage.success('已撤回这首歌词的时间校正')
+    } else {
+      await submitLyricOffset(song.id, offset)
+      lyricFixStore.markSubmitted(song.id)
+      ElMessage.success('校正已提交，感谢帮忙对齐时间轴')
+    }
+  } catch (error) {
+    // 登录态缺失或后端不可用：本地账本已经落盘，明确告知还没同步。
+    ElMessage.warning('校正已保存在本机，提交到服务器失败，稍后可在同一入口重试')
+  } finally {
+    submittingOffset.value = false
+  }
+}
+
+/**
+ * 切歌时套用已知校正：本机校正优先，其次是服务端众包结果（达到生效门槛才下发）。
+ * 两种情况都没命中、且上一次偏移是校正套用的，才把偏移归零。
+ */
+watch(currentSongId, async (songId) => {
+  if (songId === null || songId === undefined) return
+  const local = lyricFixStore.correctionFor(songId)
+  if (local) {
+    playerStore.setLyricView({ offsetMs: local.offsetMs })
+    appliedSongId = songId
+    return
+  }
+  try {
+    const remote = await fetchLyricOffset(songId)
+    const agreed = Number(remote?.offsetMs)
+    const reports = Number(remote?.count) || 0
+    if (Number.isFinite(agreed) && reports >= LYRIC_FIX_MIN_REPORTS) {
+      playerStore.setLyricView({ offsetMs: agreed })
+      appliedSongId = songId
+      return
+    }
+  } catch {
+    // 未登录 / 后端不可用：不影响歌词显示，忽略。
+  }
+  if (appliedSongId !== null) {
+    playerStore.resetLyricOffset()
+    appliedSongId = null
+  }
+})
 /** 歌词为空（加载失败或曲库暂无歌词）时手动重试一次解析。 */
 const reloadLyrics = async () => {
   const song = playerStore.currentSong
@@ -878,6 +971,11 @@ onUnmounted(() => {
 .view-tool:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+.view-correction {
+  color: var(--text-sub);
+  font-size: 11px;
+  white-space: nowrap;
 }
 .view-offset {
   min-width: 62px;

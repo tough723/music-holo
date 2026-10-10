@@ -7,6 +7,7 @@ import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import PlayerBar from '../src/components/PlayerBar.vue'
 import { usePlayerStore, setSessionSongResolver } from '../src/store/player.js'
 import { useStatsStore } from '../src/store/stats.js'
+import { useLoudnessStore } from '../src/store/loudness.js'
 
 /**
  * 底部播放器是全局组件，这里用真实组件挂载（jsdom）验证它的交互而不是 store 本身：
@@ -639,5 +640,33 @@ describe('底部播放器交互', () => {
     panel.querySelector('.stats-clear').click()
     await flush()
     expect(useStatsStore().events).toEqual([])
+  })
+
+  it('响度归一化：默认不补偿，实测后按目标响度缩放音量', async () => {
+    const store = await mountPlayer()
+    const loudness = useLoudnessStore()
+    loudness.clear()
+    loudness.setTarget('streaming')
+    store.playAll([song(1, '霓虹海', 240), song(2, '云端信使', 240)], 1)
+    await flush()
+
+    const [nativeAudio] = document.querySelectorAll('audio')
+    // 没有实测值：不做任何补偿，音量保持用户设置
+    expect(nativeAudio.volume).toBeCloseTo(store.volume, 5)
+
+    // 实测 -26 LUFS、峰值有余量 → 目标 -16 需要 +10dB（×3.16），会顶到 1
+    loudness.recordMeasurement(1, { lufs: -26, peak: 0.2 })
+    await flush()
+    expect(nativeAudio.volume).toBeCloseTo(1, 5) // 0.8 × 3.16 被夹到 1
+
+    // 音量本身调小时补偿按比例缩放
+    store.setVolume(0.2)
+    await flush()
+    expect(nativeAudio.volume).toBeCloseTo(0.2 * Math.pow(10, 10 / 20), 4)
+
+    // 关掉归一化后恢复原始音量
+    loudness.setTarget('off')
+    await flush()
+    expect(nativeAudio.volume).toBeCloseTo(0.2, 5)
   })
 })

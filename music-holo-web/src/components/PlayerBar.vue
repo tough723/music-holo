@@ -285,6 +285,26 @@
             </div>
           </div>
           <p class="equalizer-note">均衡器与 3D 空间音效都要经过音频处理链路，跨域/自定义源音源不生效（会保持原声）。</p>
+          <div class="loudness-section">
+            <div class="loudness-head">
+              <span>响度归一化</span>
+              <button type="button" class="loudness-measure" :disabled="loudnessMeasuring || !playerStore.currentSong" @click="measureLoudness">
+                {{ loudnessMeasuring ? '测量中…' : '测量当前曲目' }}
+              </button>
+            </div>
+            <div class="loudness-targets">
+              <button
+                v-for="option in LOUDNESS_TARGETS"
+                :key="option.key"
+                type="button"
+                class="loudness-target"
+                :class="{ active: loudnessStore.target === option.key }"
+                :aria-pressed="loudnessStore.target === option.key ? 'true' : 'false'"
+                @click="loudnessStore.setTarget(option.key)"
+              >{{ option.label }}</button>
+            </div>
+            <p class="loudness-note">{{ currentLoudnessLabel }}</p>
+          </div>
         </div>
       </el-popover>
       <el-tooltip :content="spatialEnabled ? '关闭 3D 空间音效' : '开启 3D 空间音效（本地/同源音源，耳机体验更明显）'" placement="top">
@@ -709,6 +729,8 @@ import { useUserStore } from '@/store/user'
 import { useDislikeStore } from '@/store/dislike'
 import { useDownloadStore } from '@/store/downloads'
 import { useStatsStore } from '@/store/stats'
+import { useLoudnessStore } from '@/store/loudness'
+import { LOUDNESS_TARGETS, applyGainToVolume, describeLufs, measureAudioLoudness } from '@/utils/loudness'
 import { formatSeconds, formatPercent } from '@/utils/playStats'
 import * as favoriteApi from '@/api/favorite'
 import { fmtDuration } from '@/utils/format'
@@ -774,6 +796,38 @@ const SHORTCUT_HELP = Object.freeze([
   { keys: 'Q', desc: '打开 / 关闭播放队列' },
   { keys: 'V', desc: '切换播放器形态（标准 / 迷你 / 沉浸）' }
 ])
+
+// ---- 响度归一化（P2-10）----
+const loudnessStore = useLoudnessStore()
+const loudnessMeasuring = ref(false)
+
+/** 当前曲目的补偿增益（线性倍数）：没有实测值时为 1，只走动态处理。 */
+const currentLoudnessGain = computed(() =>
+  loudnessStore.enabled ? loudnessStore.gainFor(playerStore.currentSong?.id) : 1
+)
+const currentLoudnessLabel = computed(() => loudnessStore.labelFor(playerStore.currentSong?.id))
+
+/**
+ * 实测当前曲目的响度。只有拿得到 PCM 的音源才能测（同源/本地/离线副本），
+ * 跨域流媒体测不到——这时明确提示，继续沿用动态处理。
+ */
+async function measureLoudness() {
+  const song = playerStore.currentSong
+  if (!song?.audioUrl || loudnessMeasuring.value) return
+  loudnessMeasuring.value = true
+  try {
+    const measured = await measureAudioLoudness(song.audioUrl)
+    if (!measured || !Number.isFinite(measured.lufs)) {
+      ElMessage.info('这首曲子拿不到音频采样，无法实测响度，已保持动态处理')
+      return
+    }
+    loudnessStore.recordMeasurement(song.id, { lufs: measured.lufs, peak: measured.peak })
+    syncAudioOutput()
+    ElMessage.success(`实测 ${describeLufs(measured.lufs)}，已按目标响度补偿`)
+  } finally {
+    loudnessMeasuring.value = false
+  }
+}
 
 // ---- 收听统计（P2-8，纯本地）----
 const statsStore = useStatsStore()
@@ -1674,15 +1728,18 @@ function syncAudioOutput({ skipCrossfade = false } = {}) {
   const rate = Number(playerStore.playbackRate) || 1
   const nativeAudio = audioRef.value
   const spatialAudio = spatialAudioRef.value
+  // 响度补偿：原声模式只能缩放元素音量，处理链路里交给增益节点。
+  const gain = currentLoudnessGain.value
+  const nativeVolume = applyGainToVolume(volume, gain)
   // 交叉淡入期间音量由淡变器接管，这里不能抢，否则会把淡入/淡出的音量曲线打乱。
   if (!crossfading || !skipCrossfade) {
     if (nativeAudio) {
-      nativeAudio.volume = volume
+      nativeAudio.volume = nativeVolume
       nativeAudio.muted = playerStore.muted
       nativeAudio.playbackRate = rate
     }
     if (spatialAudio && !processedEnabled.value) {
-      spatialAudio.volume = volume
+      spatialAudio.volume = nativeVolume
       spatialAudio.muted = playerStore.muted
       spatialAudio.playbackRate = rate
     }
@@ -1694,6 +1751,10 @@ function syncAudioOutput({ skipCrossfade = false } = {}) {
     spatialAudio.playbackRate = rate
   }
   spatialAudioGraph?.setVolume(playerStore.muted ? 0 : volume)
+  spatialAudioGraph?.setLoudness({
+    enabled: loudnessStore.enabled,
+    trim: loudnessStore.enabled ? gain : 1
+  })
 }
 
 function cycleRate() {
@@ -2287,7 +2348,10 @@ watch(playing, (isPlaying) => {
 
 watch(
   () => [playerStore.volume, playerStore.muted, playerStore.playbackRate],
-  () => syncAudioOutput()
+  () => {
+    if (crossfading) return
+    syncAudioOutput()
+  }
 )
 
 /**
@@ -2545,6 +2609,16 @@ watch(() => playerStore.equalizerGains.join(','), () => {
   syncEqualizer({ notify: false }).catch(() => {})
 })
 
+// 响度补偿跟着曲目与目标档位走：切歌或改档位都重新下发一次。
+watch(
+  () => [currentLoudnessGain.value, playerStore.currentSong?.id, loudnessStore.target],
+  () => {
+    // 交叉淡入期间音量归淡变器管，这里插手会把淡入曲线打平。
+    if (crossfading) return
+    syncAudioOutput()
+  }
+)
+
 watch(() => playerStore.playerViewMode, (mode) => {
   applyViewMode(mode)
   syncViewportClass(mode)
@@ -2618,6 +2692,54 @@ watch(() => userStore.isLogin, (loggedIn) => {
   color: #fff;
   background: color-mix(in srgb, var(--holo-primary) 74%, transparent);
   border-color: transparent;
+}
+
+/* ---- 响度归一化 ---- */
+.loudness-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-color);
+}
+.loudness-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+}
+.loudness-measure {
+  padding: 3px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-sub);
+  font-size: 11px;
+  cursor: pointer;
+}
+.loudness-targets {
+  display: flex;
+  gap: 6px;
+}
+.loudness-target {
+  flex: 1;
+  padding: 4px 0;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-sub);
+  font-size: 11px;
+  cursor: pointer;
+}
+.loudness-target.active {
+  color: #fff;
+  background: color-mix(in srgb, var(--holo-primary) 62%, transparent);
+  border-color: transparent;
+}
+.loudness-note {
+  color: var(--text-sub);
+  font-size: 11px;
 }
 
 /* ---- 收听统计 ---- */

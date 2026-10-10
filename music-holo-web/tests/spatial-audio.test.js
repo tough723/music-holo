@@ -130,6 +130,121 @@ describe('均衡器', () => {
   })
 })
 
+describe('响度归一化级', () => {
+  function fakeContextFactory({ withCompressor = true, withBiquad = true } = {}) {
+    class FakeParam {
+      constructor(value = 0) { this.value = value }
+      setValueAtTime(value) { this.value = value }
+      setTargetAtTime(value) { this.value = value }
+    }
+    class FakeNode {
+      constructor() { this.connections = [] }
+      connect(target, ...args) { this.connections.push({ target, args }) }
+      disconnect(target) {
+        if (!target) { this.connections = []; return }
+        this.connections = this.connections.filter((entry) => entry.target !== target)
+      }
+    }
+    class FakeGain extends FakeNode {
+      constructor() { super(); this.gain = new FakeParam(1) }
+    }
+    class FakeBiquad extends FakeNode {
+      constructor() {
+        super()
+        this.type = 'lowpass'
+        this.frequency = new FakeParam(350)
+        this.Q = new FakeParam(1)
+        this.gain = new FakeParam(0)
+      }
+    }
+    class FakeCompressor extends FakeNode {
+      constructor() {
+        super()
+        this.threshold = new FakeParam(-24)
+        this.knee = new FakeParam(30)
+        this.ratio = new FakeParam(12)
+        this.attack = new FakeParam(0.003)
+        this.release = new FakeParam(0.25)
+      }
+    }
+    class FakeContext {
+      constructor() {
+        this.currentTime = 0
+        this.state = 'running'
+        this.destination = new FakeNode()
+        this.gains = []
+        this.filters = []
+        this.compressors = []
+      }
+      createMediaElementSource() { return new FakeNode() }
+      createChannelSplitter() { return new FakeNode() }
+      createPanner() { return { connect () {}, positionX: { setValueAtTime () {} } } }
+      createGain() { const gain = new FakeGain(); this.gains.push(gain); return gain }
+      createBiquadFilter() {
+        if (!withBiquad) throw new Error('unsupported')
+        const filter = new FakeBiquad()
+        this.filters.push(filter)
+        return filter
+      }
+      createDynamicsCompressor() {
+        if (!withCompressor) throw new Error('unsupported')
+        const compressor = new FakeCompressor()
+        this.compressors.push(compressor)
+        return compressor
+      }
+      resume() { this.state = 'running'; return Promise.resolve() }
+      close() { this.state = 'closed'; return Promise.resolve() }
+    }
+    return FakeContext
+  }
+
+  it('响度级串在均衡之后、总音量之前，补偿增益生效', () => {
+    const graph = createSpatialAudioGraph({}, fakeContextFactory())
+    expect(graph.supportsLoudness()).toBe(true)
+    const gains = graph.context.gains
+    const [, dryGain, wetGain, masterGain] = gains
+    // 末两个增益依次是响度级的入口与补偿增益（中间还有均衡的入口）
+    const loudnessTrim = gains[gains.length - 1]
+    const loudnessIn = gains[gains.length - 2]
+    // dry/wet 不再直连 masterGain，均衡尾部接到响度级
+    expect(dryGain.connections.some((entry) => entry.target === masterGain)).toBe(false)
+    expect(wetGain.connections.some((entry) => entry.target === masterGain)).toBe(false)
+    expect(loudnessIn.connections.some((entry) => entry.target === loudnessTrim)).toBe(true)
+    expect(loudnessTrim.connections.some((entry) => entry.target === graph.context.compressors[0])).toBe(true)
+    expect(graph.context.compressors[0].connections.some((entry) => entry.target === masterGain)).toBe(true)
+
+    expect(graph.setLoudness({ enabled: true, trim: 0.5 })).toBe(true)
+    expect(graph.getLoudness()).toMatchObject({ enabled: true, trim: 0.5, supportsCompressor: true })
+    expect(loudnessTrim.gain.value).toBe(0.5)
+
+    // 关掉只是回到 1 倍直通，不拆链路，避免频繁重连
+    expect(graph.setLoudness({ enabled: false })).toBe(true)
+    expect(loudnessTrim.gain.value).toBe(1)
+    expect(graph.getLoudness().enabled).toBe(false)
+  })
+
+  it('均衡与响度同时开启时顺序固定：均衡 → 响度 → 总音量', () => {
+    const graph = createSpatialAudioGraph({}, fakeContextFactory())
+    expect(graph.supportsEqualizer()).toBe(true)
+    expect(graph.supportsLoudness()).toBe(true)
+    const lastFilter = graph.context.filters[graph.context.filters.length - 1]
+    const loudnessIn = graph.context.gains[graph.context.gains.length - 2]
+    expect(lastFilter.connections.some((entry) => entry.target === loudnessIn)).toBe(true)
+  })
+
+  it('没有 DynamicsCompressor 时降级为纯增益补偿，不报错', () => {
+    const graph = createSpatialAudioGraph({}, fakeContextFactory({ withCompressor: false, withBiquad: false }))
+    expect(graph.supportsEqualizer()).toBe(false)
+    expect(graph.supportsLoudness()).toBe(true)
+    expect(graph.setLoudness({ enabled: true, trim: 1.5 })).toBe(true)
+    expect(graph.getLoudness().supportsCompressor).toBe(false)
+    const [, dryGain, wetGain, masterGain] = graph.context.gains
+    // 没有均衡时 dry/wet 直接进响度级
+    expect(dryGain.connections.some((entry) => entry.target === masterGain)).toBe(false)
+    expect(wetGain.connections.some((entry) => entry.target === masterGain)).toBe(false)
+  })
+})
+
 describe('空间音效工具', () => {
   it('只允许同源和本地 Blob 音频接入 Web Audio', () => {
     const origin = 'https://music-holo.example/home'
