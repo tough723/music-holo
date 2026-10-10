@@ -16,9 +16,8 @@ import { test, expect } from '@playwright/test'
  * 这样即使 CI 日志主机不在白名单里，也能通过 API 读到结论。
  *
  * 候选曲目取自 docs/xinghai-validation.md 的真实解析记录：
- *   - mg（咪咕）songmid=1135162566 / 320k：实测返回 **https** 直链，是唯一有机会在网页端真播的组合；
- *   - wy（网易）songmid=347230 / 320k：聚合后端实测返回明文 http 直链（会被 HTTPS 安全边界拒绝），
- *     降级到 GD 时可能拿到 https，因此作为第二个候选。
+ *   - wy（网易）songmid=347230 / 320k：已在此前 CI run `38060067706` 中经 GD HTTPS fallback 真正解码播放；
+ *   - mg（咪咕）songmid=1135162566 / 320k：§4 实测返回 https 直链，作为第二个候选。
  * 按顺序尝试，第一个真正播起来的就作为结论；都没播起来时，逐个核对「必须有明确提示」。
  *
  * 与真实脚本相关的两个额外交互（夹具旅程里不会出现）：
@@ -33,8 +32,10 @@ const SOURCE_URL = 'https://zrcdy.dpdns.org/lx/xinghai-music-sourcev2.3.15.js'
 const SOURCE_SHA256 = '807d6157e4fd7cdd05b8727efd73778b54a3b05a0b5e4c6bb28dedc0668e94e9'
 
 const CANDIDATES = [
-  { platform: 'mg', platformIds: '{"songmid":"1135162566"}', quality: '320k', why: 'mg 实测返回 https 直链' },
-  { platform: 'wy', platformIds: '{"songmid":"347230"}', quality: '320k', why: 'wy 后端多为明文 http，GD 降级可能给 https' }
+  // The pinned source declares wy first, so the default selection is already
+  // correct; this known-good ID exercises the GD HTTPS fallback that played in CI.
+  { platform: 'wy', platformIds: '{"songmid":"347230"}', quality: '320k', why: 'wy 真实曲目 ID；GD 降级返回 https 直链' },
+  { platform: 'mg', platformIds: '{"songmid":"1135162566"}', quality: '320k', why: 'mg 实测返回 https 直链' }
 ]
 
 const FAILURE_HINT = /失败|不安全|拒绝|不支持|http|错误|超时|无法|未能/
@@ -133,7 +134,11 @@ async function attemptCandidate(page, candidate) {
   const approvals = await initializeSource(page, dialog)
 
   // 4. 显式选平台（脚本声明多个平台，默认选第一个，不是我们要的那个）
-  const platform = await pickFromSelect(page, dialog, 0, (labels) => labels.find((label) => label.includes(`(${candidate.platform})`)))
+  const platformSelect = dialog.locator('.source-playback-fields .el-select').nth(0)
+  const currentPlatform = (await platformSelect.innerText()).trim()
+  const platform = candidate.platform === 'wy' && currentPlatform.includes('网易云音乐')
+    ? { picked: currentPlatform.includes('(wy)') ? currentPlatform : `${currentPlatform} (wy)`, labels: [], alreadySelected: true }
+    : await pickFromSelect(page, dialog, 0, (labels) => labels.find((label) => label.includes(`(${candidate.platform})`)))
   const quality = await pickFromSelect(page, dialog, 1, (labels) => (labels.includes(candidate.quality) ? candidate.quality : labels[0]))
   console.log(`LIVE_STEP 平台=${platform.picked} 可选=${platform.labels.join('/') || '已是目标值'}｜音质=${quality.picked} 可选=${quality.labels.join('/')}`)
   expect(platform.picked, `音源应声明 ${candidate.platform} 平台`).toContain(`(${candidate.platform})`)
