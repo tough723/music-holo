@@ -432,6 +432,14 @@
       <span class="queue-count">
         共 {{ playerStore.queue.length }} 首<template v-if="playerStore.queueDuration"> · {{ fmtDuration(playerStore.queueDuration) }}</template>
       </span>
+      <el-button
+        size="small"
+        text
+        class="queue-select-toggle"
+        :type="queueSelectMode ? 'primary' : 'default'"
+        :aria-pressed="queueSelectMode ? 'true' : 'false'"
+        @click="toggleQueueSelectMode"
+      >{{ queueSelectMode ? '退出多选' : '多选' }}</el-button>
       <div class="queue-tools">
         <el-tooltip content="随机重排队列，正在播放的曲目保持不动" placement="top">
           <el-button size="small" plain :disabled="playerStore.queue.length < 2" aria-label="随机打乱播放队列" @click="shuffleQueue">
@@ -499,7 +507,21 @@
     />
     <div v-if="playerStore.queue.length === 0" class="queue-empty">队列空空如也，点上方“导入本地音乐”选择文件，或去曲库挑几首歌吧～</div>
     <div v-else-if="filteredQueue.length === 0" class="queue-empty">没有匹配「{{ queueKeyword }}」的曲目</div>
-    <ul v-else class="queue-list" role="listbox" aria-label="播放队列（可拖拽排序、支持键盘操作）">
+    <div v-if="queueSelectMode && playerStore.queue.length > 0" class="queue-batch">
+      <div class="queue-batch-actions">
+        <el-button size="small" round :disabled="selectedQueueIndices.length === 0" @click="setSelectedAsNext">排到下一首</el-button>
+        <el-button size="small" round :disabled="selectedQueueIndices.length === 0" @click="moveSelectedToTop">移到队首</el-button>
+        <el-button size="small" round type="danger" plain :disabled="selectedQueueIndices.length === 0" @click="removeSelected">移除所选</el-button>
+        <el-button size="small" text @click="clearQueueSelection">清空选择</el-button>
+      </div>
+      <p class="queue-batch-note">已选 {{ selectedQueueIndices.length }} 首<template v-if="selectedQueueIndices.length > 0"> · 可用 Ctrl/⌘ + 点击 或 Shift + 点击 连选</template></p>
+    </div>
+    <ul
+      v-if="filteredQueue.length > 0"
+      class="queue-list"
+      role="listbox"
+      aria-label="播放队列（可拖拽排序、支持键盘操作）"
+    >
       <li
         v-for="entry in filteredQueue"
         :key="`${entry.index}-${entry.song.id}`"
@@ -508,20 +530,30 @@
         :class="{
           active: entry.index === playerStore.currentIndex,
           dragging: dragIndex === entry.index,
-          'drop-target': dropIndex === entry.index && dragIndex !== entry.index
+          'drop-target': dropIndex === entry.index && dragIndex !== entry.index,
+          selected: isQueueIndexSelected(entry.index)
         }"
         role="option"
         tabindex="0"
         :aria-selected="entry.index === playerStore.currentIndex ? 'true' : 'false'"
         :aria-label="`第 ${entry.index + 1} 首：${entry.song.title}`"
         :draggable="canDragQueue ? 'true' : 'false'"
-        @click="playerStore.playAt(entry.index)"
+        @click="onQueueItemClick($event, entry.index)"
         @keydown="onQueueItemKeydown($event, entry)"
         @dragstart="onQueueDragStart($event, entry.index)"
         @dragover.prevent="onQueueDragOver(entry.index)"
         @drop.prevent="onQueueDrop(entry.index)"
         @dragend="onQueueDragEnd"
       >
+        <input
+          v-if="queueSelectMode"
+          type="checkbox"
+          class="queue-checkbox"
+          :checked="isQueueIndexSelected(entry.index)"
+          :aria-label="`选择《${entry.song.title}》`"
+          @click.stop
+          @change="toggleQueueSelection(entry.index, $event)"
+        />
       <div class="queue-cover"><Cover :src="entry.song.cover" :text="entry.song.title" :size="36" :anonymous="Boolean(entry.song.isCustomSource)" /></div>
       <div class="queue-meta">
         <div class="queue-title">{{ entry.song.title }}</div>
@@ -823,6 +855,83 @@ const canDislikeCurrent = computed(() => {
 })
 const currentDisliked = computed(() => Boolean(canDislikeCurrent.value && dislikeStore.hasSong(currentSong.value.id)))
 const canDownloadCurrent = computed(() => Boolean(currentSong.value?.audioUrl && !currentSong.value.isLocal))
+
+// ---- 队列多选与批量操作 ----
+const queueSelectMode = ref(false)
+const selectedQueueIndices = ref([])
+let lastQueueSelectionAnchor = null
+
+function isQueueIndexSelected(index) {
+  return selectedQueueIndices.value.includes(index)
+}
+
+function toggleQueueSelectMode() {
+  queueSelectMode.value = !queueSelectMode.value
+  selectedQueueIndices.value = []
+  lastQueueSelectionAnchor = null
+}
+
+function clearQueueSelection() {
+  selectedQueueIndices.value = []
+  lastQueueSelectionAnchor = null
+}
+
+function toggleQueueSelection(index, event) {
+  const checked = Boolean(event?.target?.checked)
+  const next = new Set(selectedQueueIndices.value)
+  if (checked) next.add(index)
+  else next.delete(index)
+  selectedQueueIndices.value = [...next].sort((a, b) => a - b)
+  lastQueueSelectionAnchor = index
+}
+
+/** 行点击：多选模式下按 Shift 连选、Ctrl/⌘ 加选，否则照常播放。 */
+function onQueueItemClick(event, index) {
+  if (!queueSelectMode.value) {
+    playerStore.playAt(index)
+    return
+  }
+  const selected = new Set(selectedQueueIndices.value)
+  if (event?.shiftKey && Number.isInteger(lastQueueSelectionAnchor)) {
+    const from = Math.min(lastQueueSelectionAnchor, index)
+    const to = Math.max(lastQueueSelectionAnchor, index)
+    for (let i = from; i <= to; i++) selected.add(i)
+  } else if (event?.ctrlKey || event?.metaKey) {
+    if (selected.has(index)) selected.delete(index)
+    else selected.add(index)
+  } else {
+    if (selected.has(index)) selected.delete(index)
+    else selected.add(index)
+  }
+  selectedQueueIndices.value = [...selected].sort((a, b) => a - b)
+  lastQueueSelectionAnchor = index
+}
+
+/** 把所选曲目排到当前曲目之后（第一首顶掉“下一首优先”）。 */
+function setSelectedAsNext() {
+  const indices = selectedQueueIndices.value
+  if (indices.length === 0) return
+  const target = Math.max(0, playerStore.currentIndex)
+  playerStore.moveQueueItems(indices, target)
+  ElMessage.success(`已把 ${indices.length} 首排到当前曲目之后`)
+  clearQueueSelection()
+}
+
+function moveSelectedToTop() {
+  const indices = selectedQueueIndices.value
+  if (indices.length === 0) return
+  playerStore.moveQueueItems(indices, -1)
+  ElMessage.success(`已把 ${indices.length} 首移到队首`)
+  clearQueueSelection()
+}
+
+function removeSelected() {
+  const indices = selectedQueueIndices.value
+  if (indices.length === 0) return
+  playerStore.removeQueueItems(indices)
+  ElMessage.success(`已移除 ${indices.length} 首`)
+  clearQueueSelection()
+}
 
 // ---- 队列搜索 / 排序 ----
 const filteredQueue = computed(() => {
@@ -1764,6 +1873,8 @@ function clearQueue() {
 watch(queueVisible, async (open) => {
   if (!open) return
   queueKeyword.value = ''
+  clearQueueSelection()
+  queueSelectMode.value = false
   await refreshLocalPanels()
   // 打开抽屉时把正在播放的曲目滚到视野里。
   await nextTick()
@@ -2721,6 +2832,35 @@ watch(() => userStore.isLogin, (loggedIn) => {
   text-align: center;
   color: var(--text-sub);
   padding: 40px 0;
+}
+.queue-batch {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--holo-primary) 22%, var(--border-color));
+  background: rgba(148, 163, 184, 0.08);
+}
+.queue-batch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.queue-batch-note {
+  color: var(--text-sub);
+  font-size: 11px;
+}
+.queue-checkbox {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  accent-color: var(--holo-primary);
+  cursor: pointer;
+}
+.queue-item.selected {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--holo-primary) 55%, transparent);
 }
 .queue-list {
   list-style: none;

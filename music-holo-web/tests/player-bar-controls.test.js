@@ -416,4 +416,66 @@ describe('底部播放器交互', () => {
       vi.useRealTimers()
     }
   })
+
+  it('队列多选：连选、批量排到下一首、移到队首与移除', async () => {
+    const store = await mountPlayer()
+    store.playAll([song(1, '霓虹海'), song(2, '云端信使'), song(3, '全息之恋'), song(4, '极光列车')], 1)
+    await flush()
+    host.querySelector('button[aria-label="播放队列"]').click()
+    await flush()
+
+    const rows = () => Array.from(document.querySelectorAll('.queue-item'))
+    expect(document.querySelector('.queue-select-toggle')).toBeTruthy()
+    // 非多选模式下点行仍然是播放。
+    rows()[2].click()
+    await flush()
+    expect(store.currentSong.title).toBe('全息之恋')
+
+    document.querySelector('.queue-select-toggle').click()
+    await flush()
+    expect(document.querySelectorAll('.queue-checkbox')).toHaveLength(4)
+    expect(document.querySelector('.queue-batch')).toBeTruthy()
+
+    // Shift 连选：从第 1 首连到第 3 首。
+    rows()[0].click()
+    rows()[2].dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true }))
+    await flush()
+    expect(document.querySelector('.queue-batch-note').textContent).toContain('已选 3 首')
+    expect(document.querySelectorAll('.queue-item.selected')).toHaveLength(3)
+
+    document.querySelector('.queue-batch .el-button--danger').click()
+    await flush()
+    // 所选为前 3 首，移除后只剩第 4 首。
+    expect(store.queue.map((item) => item.title)).toEqual(['极光列车'])
+    expect(document.querySelector('.queue-batch-note').textContent).toContain('已选 0 首')
+
+    // 退出多选后恢复普通点击播放。
+    document.querySelector('.queue-select-toggle').click()
+    await flush()
+    expect(document.querySelectorAll('.queue-checkbox')).toHaveLength(0)
+    expect(document.querySelector('.queue-batch')).toBeNull()
+    rows()[0].click()
+    await flush()
+    expect(store.currentSong.title).toBe('极光列车')
+  })
+
+  it('批量“排到下一首”把所选插到当前曲目之后', async () => {
+    const store = await mountPlayer()
+    store.playAll([song(1, '霓虹海'), song(2, '云端信使'), song(3, '全息之恋'), song(4, '极光列车')], 1)
+    await flush()
+    host.querySelector('button[aria-label="播放队列"]').click()
+    await flush()
+    document.querySelector('.queue-select-toggle').click()
+    await flush()
+
+    const rows = () => Array.from(document.querySelectorAll('.queue-item'))
+    // 选中第 4 首（下标 3），排到当前曲目（霓虹海，下标 0）之后。
+    rows()[3].click()
+    await flush()
+    const nextButton = [...document.querySelectorAll('.queue-batch-actions .el-button')]
+      .find((button) => button.textContent.trim() === '排到下一首')
+    nextButton.click()
+    await flush()
+    expect(store.queue.map((item) => item.title)).toEqual(['霓虹海', '极光列车', '云端信使', '全息之恋'])
+  })
 })

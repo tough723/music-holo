@@ -173,6 +173,79 @@ describe('均衡器偏好', () => {
   })
 })
 
+describe('队列批量操作', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    setActivePinia(createPinia())
+  })
+
+  const build = () => {
+    const store = usePlayerStore()
+    store.playAll([1, 2, 3, 4, 5].map((id) => song(id, `s${id}`)), 1)
+    return store
+  }
+  const titles = (store) => store.queue.map((item) => item.title)
+
+  it('批量移到队首：保持所选之间的相对顺序', () => {
+    const store = build()
+    expect(store.moveQueueItems([3, 1], -1)).toBe(2)
+    expect(titles(store)).toEqual(['s2', 's4', 's1', 's3', 's5'])
+    // 当前曲目仍然是可播放的那首。
+    expect(store.currentSong.title).toBe('s1')
+  })
+
+  it('批量排到当前曲目之后（当前曲目本身不被移动）', () => {
+    const store = build()
+    expect(store.moveQueueItems([3, 4], 0)).toBe(2)
+    expect(titles(store)).toEqual(['s1', 's4', 's5', 's2', 's3'])
+
+    // 当前曲目在队列中间时，所选整组紧跟其后。
+    const second = build()
+    second.playAt(2)
+    second.moveQueueItems([0], 2)
+    expect(titles(second)).toEqual(['s2', 's3', 's1', 's4', 's5'])
+    expect(second.currentSong.title).toBe('s3')
+  })
+
+  it('目标项本身被选中时，结果仍符合直觉', () => {
+    const store = build()
+    // 选了 0/1，目标也是 0：整组移动到队首。
+    store.moveQueueItems([0, 1], 0)
+    expect(titles(store)).toEqual(['s1', 's2', 's3', 's4', 's5'])
+  })
+
+  it('批量移除：当前曲目跟着走，越界与重复下标被忽略', () => {
+    const store = build()
+    expect(store.removeQueueItems([0, 2, 2, 99, -1, 'x'])).toBe(2)
+    expect(titles(store)).toEqual(['s2', 's4', 's5'])
+    expect(store.currentSong).toBeNull()
+
+    const second = build()
+    second.playAt(3)
+    second.removeQueueItems([0])
+    expect(second.currentSong.title).toBe('s4')
+    expect(second.currentIndex).toBe(2)
+  })
+
+  it('空选择与非法输入不改动队列', () => {
+    const store = build()
+    expect(store.moveQueueItems([], 0)).toBe(0)
+    expect(store.moveQueueItems(null, 0)).toBe(0)
+    expect(store.removeQueueItems([])).toBe(0)
+    expect(store.removeQueueItems('nope')).toBe(0)
+    expect(titles(store)).toEqual(['s1', 's2', 's3', 's4', 's5'])
+  })
+
+  it('批量操作后随机袋重开一轮', () => {
+    const store = build()
+    store.setMode('shuffle')
+    store.next()
+    expect(store.shuffleBag.length).toBeGreaterThan(0)
+    store.removeQueueItems([0])
+    expect(store.shuffleBag).toEqual([])
+  })
+})
+
 describe('播放器形态：标准 / 迷你 / 沉浸', () => {
   beforeEach(() => {
     localStorage.clear()

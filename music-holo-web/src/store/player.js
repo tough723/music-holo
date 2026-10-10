@@ -554,6 +554,48 @@ export const usePlayerStore = defineStore('player', {
       }
     },
     /** 清空播放队列 */
+    /**
+     * 批量移动：把多个队列位置移到目标位置之后（保持它们的相对顺序）。
+     * @param {number[]} indices 要移动的下标
+     * @param {number} targetIndex 插入到它之后；传 -1 表示移到队首
+     */
+    moveQueueItems(indices, targetIndex) {
+      const list = Array.isArray(indices) ? indices.filter((index) => Number.isInteger(index)) : []
+      if (list.length === 0) return 0
+      const target = Number(targetIndex)
+      const activeSong = this.currentSong
+      const unique = [...new Set(list)].sort((a, b) => a - b)
+      const moving = unique.filter((index) => index >= 0 && index < this.queue.length).map((index) => this.queue[index])
+      if (moving.length === 0) return 0
+
+      const rest = this.queue.filter((_, index) => !unique.includes(index))
+      // 目标项本身被移动时它不在 rest 里，此时整组放回队首（相对顺序不变）。
+      const anchor = Number.isInteger(target) && target >= 0 ? this.queue[target] : null
+      const anchorInRest = anchor ? rest.indexOf(anchor) : -1
+      const insertAt = anchor ? anchorInRest + 1 : 0
+      this.queue = [...rest.slice(0, insertAt), ...moving, ...rest.slice(insertAt)]
+      this.currentIndex = activeSong ? this.queue.indexOf(activeSong) : -1
+      this.priorityNextSongId = null
+      this.shuffleBag = []
+      persist(this)
+      return moving.length
+    },
+    /** 批量移除队列位置。 */
+    removeQueueItems(indices) {
+      const list = Array.isArray(indices) ? indices.filter((index) => Number.isInteger(index)) : []
+      if (list.length === 0) return 0
+      const unique = new Set(list.filter((index) => index >= 0 && index < this.queue.length))
+      if (unique.size === 0) return 0
+      const activeSong = this.currentSong
+      const removed = this.queue.filter((_, index) => unique.has(index))
+      this.queue = this.queue.filter((_, index) => !unique.has(index))
+      this.currentIndex = activeSong ? this.queue.indexOf(activeSong) : -1
+      this.priorityNextSongId = null
+      this.shuffleBag = []
+      persist(this)
+      releaseLocalSongs(removed)
+      return removed.length
+    },
     clearQueue() {
       this.cancelSleepTimer()
       const previousQueue = this.queue
