@@ -98,7 +98,8 @@ async function runLiveJourney(page, testInfo) {
   const played = results.find((item) => item.played)
   if (played) {
     return `PLAYED ${played.candidate.platform}/${played.candidate.quality} https 直链已解码播放，` +
-      `进度 ${played.position.toFixed(2)}s，主机 ${hostOf(played.src)}（${results.length} 个候选中第 ${results.indexOf(played) + 1} 个成功）`
+      `进度 ${played.position.toFixed(2)}s，paused=${played.paused}，readyState=${played.readyState}，` +
+      `主机 ${hostOf(played.src)}（${results.length} 个候选中第 ${results.indexOf(played) + 1} 个成功）`
   }
 
   const details = results.map((item) => {
@@ -243,18 +244,27 @@ async function resolveAndCollect(page, dialog, audio, timeoutMs) {
 /** 真实直链落地后，无头 Chromium 也会真解码：等进度前进；出错就把错误带回去。 */
 async function waitForPlayback(audio, timeoutMs) {
   const deadline = Date.now() + timeoutMs
+  let lastState = null
   while (Date.now() < deadline) {
     const state = await audio.evaluate((element) => ({
       time: element.currentTime,
+      paused: element.paused,
+      readyState: element.readyState,
       error: element.error ? `media error ${element.error.code}:${element.error.message}` : ''
     })).catch(() => null)
     if (state) {
+      lastState = state
       if (state.error) return { played: false, error: state.error }
-      if (state.time > 0) return { played: true, position: state.time }
+      if (state.time > 0 && !state.paused) {
+        return { played: true, position: state.time, paused: state.paused, readyState: state.readyState }
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 400))
   }
-  return { played: false, error: `${timeoutMs}ms 内进度没有前进` }
+  return {
+    played: false,
+    error: `${timeoutMs}ms 内未能保持播放（currentTime=${lastState?.time ?? 0}, paused=${lastState?.paused ?? 'unknown'}, readyState=${lastState?.readyState ?? 0}）`
+  }
 }
 
 /** 出现就点掉一个按钮（用于不影响判定、只影响进度的确认框）。 */
