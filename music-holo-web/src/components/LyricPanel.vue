@@ -426,10 +426,27 @@ async function submitCorrection() {
 }
 
 /**
+ * 众包校正只对曲库曲目有意义：本地文件与自定义源的 id 不是库内主键，
+ * 拿去查只会得到一个必然失败的请求（离线/桌面场景下还会弹“连不上后端”的提示）。
+ */
+/** 上一次偏移是校正套用的，现在这首没有已知校正：把偏移归零，避免串到下一首。 */
+function resetAppliedOffset() {
+  if (appliedSongId === null) return
+  playerStore.resetLyricOffset()
+  appliedSongId = null
+}
+
+function isLibrarySongId(songId) {
+  if (songId === null || songId === undefined || songId === '') return false
+  if (typeof songId === 'number') return Number.isInteger(songId)
+  return /^\d+$/.test(String(songId))
+}
+
+/**
  * 切歌时套用已知校正：本机校正优先，其次是服务端众包结果（达到生效门槛才下发）。
  * 两种情况都没命中、且上一次偏移是校正套用的，才把偏移归零。
  */
-watch(currentSongId, async (songId) => {
+watch(currentSongId, (songId) => {
   if (songId === null || songId === undefined) return
   const local = lyricFixStore.correctionFor(songId)
   if (local) {
@@ -437,22 +454,26 @@ watch(currentSongId, async (songId) => {
     appliedSongId = songId
     return
   }
-  try {
-    const remote = await fetchLyricOffset(songId)
-    const agreed = Number(remote?.offsetMs)
-    const reports = Number(remote?.count) || 0
-    if (Number.isFinite(agreed) && reports >= LYRIC_FIX_MIN_REPORTS) {
-      playerStore.setLyricView({ offsetMs: agreed })
-      appliedSongId = songId
-      return
-    }
-  } catch {
-    // 未登录 / 后端不可用：不影响歌词显示，忽略。
+  if (!isLibrarySongId(songId)) {
+    resetAppliedOffset()
+    return
   }
-  if (appliedSongId !== null) {
-    playerStore.resetLyricOffset()
-    appliedSongId = null
-  }
+  fetchLyricOffset(songId)
+    .then((remote) => {
+      const agreed = Number(remote?.offsetMs)
+      const reports = Number(remote?.count) || 0
+      // 组件可能已经切到别的歌，只在还停在这首时套用。
+      if (currentSongId.value !== songId) return
+      if (Number.isFinite(agreed) && reports >= LYRIC_FIX_MIN_REPORTS) {
+        playerStore.setLyricView({ offsetMs: agreed })
+        appliedSongId = songId
+        return
+      }
+      resetAppliedOffset()
+    })
+    .catch(() => {
+      // 未登录 / 后端不可用：不影响歌词显示，也不打断播放。
+    })
 })
 /** 歌词为空（加载失败或曲库暂无歌词）时手动重试一次解析。 */
 const reloadLyrics = async () => {

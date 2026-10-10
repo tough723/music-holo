@@ -824,6 +824,9 @@ async function measureLoudness() {
     loudnessStore.recordMeasurement(song.id, { lufs: measured.lufs, peak: measured.peak })
     syncAudioOutput()
     ElMessage.success(`实测 ${describeLufs(measured.lufs)}，已按目标响度补偿`)
+  } catch (error) {
+    // 测量失败（跨域拿不到采样、解码失败）只提示，不影响播放。
+    ElMessage.info('这首曲子暂时测不出响度，已保持动态处理')
   } finally {
     loudnessMeasuring.value = false
   }
