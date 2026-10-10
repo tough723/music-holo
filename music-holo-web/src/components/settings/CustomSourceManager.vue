@@ -297,6 +297,7 @@ import {
   validateCustomSourceMediaUrl
 } from '@/utils/customSourceRuntime'
 import { createCustomSourceRequestBridge } from '@/utils/customSourceConsent'
+import { settleOptionalRequest } from '@/utils/optionalTimeout'
 import {
   fetchPlatformChartTracks,
   fetchPlatformTrackExtras,
@@ -810,40 +811,64 @@ async function resolveAudition() {
     if (controller.signal.aborted) throw new Error('隔离试听已取消')
     const media = validateCustomSourceMediaUrl(rawMediaUrl)
     let lyricBundle = { lines: [], translationLines: [], romajiLines: [], verbatimLines: [] }
+    let sessionUsable = true
     if (runtimePlatform.actions.includes('lyric')) {
-      try {
-        const lyricResult = await session.request({
-          source: runtimePlatform.key,
-          action: 'lyric',
-          info: { musicInfo }
-        })
-        lyricBundle = parseCustomSourceLyricBundle(lyricResult)
-      } catch {
-        // 歌词是可选能力；失败不影响已解析的音频。
+      const lyricResult = await settleOptionalRequest(session.request({
+        source: runtimePlatform.key,
+        action: 'lyric',
+        info: { musicInfo }
+      }), {
+        timeoutMs: 8_000,
+        onTimeout: () => {
+          // Audio already resolved: a stalled lyrics callback must never hold the
+          // playable track hostage. Destroy the isolated script session before
+          // continuing so late network callbacks/prompts cannot leak behind playback.
+          sessionUsable = false
+          session.destroy()
+          if (activeAuditionSession === session) activeAuditionSession = null
+        }
+      })
+      if (!lyricResult.timedOut && !lyricResult.error) {
+        try { lyricBundle = parseCustomSourceLyricBundle(lyricResult.value) } catch { /* optional */ }
       }
     }
-    // 与曲库解析一致：先按协议调用脚本的 pic 动作；脚本未返回时再用平台适配器补齐。
+    // The picture action is also optional. If the lyric timeout destroyed the
+    // worker session, skip it and continue with catalog/song cover metadata.
     let coverUrl = ''
-    if (runtimePlatform.actions.includes('pic')) {
-      try {
-        const picResult = await session.request({ source: runtimePlatform.key, action: 'pic', info: { musicInfo } })
-        if (typeof picResult === 'string' && picResult.trim()) coverUrl = picResult.trim()
-      } catch {
-        // 封面是可选能力；失败不影响已解析的音频。
+    if (sessionUsable && runtimePlatform.actions.includes('pic')) {
+      const picResult = await settleOptionalRequest(session.request({
+        source: runtimePlatform.key,
+        action: 'pic',
+        info: { musicInfo }
+      }), {
+        timeoutMs: 8_000,
+        onTimeout: () => {
+          sessionUsable = false
+          session.destroy()
+          if (activeAuditionSession === session) activeAuditionSession = null
+        }
+      })
+      if (!picResult.timedOut && !picResult.error && typeof picResult.value === 'string' && picResult.value.trim()) {
+        coverUrl = picResult.value.trim()
       }
     }
-    try {
-      const catalogTrack = selectedCatalogTrack.value && selectedCatalogTrack.value.platform === runtimePlatform.key
-        ? { ...selectedCatalogTrack.value, musicInfo }
-        : { musicInfo }
-      const extras = await fetchPlatformTrackExtras(runtimePlatform.key, catalogTrack, { signal: controller.signal })
-      if (!lyricBundle.lines.length && extras?.lyric) {
-        lyricBundle = parseCustomSourceLyricBundle({ lyric: extras.lyric })
-      }
-      if (!coverUrl && extras?.coverUrl) coverUrl = String(extras.coverUrl)
-    } catch {
-      // 附加信息是可选能力；失败不影响已解析的音频。
+    const catalogTrack = selectedCatalogTrack.value && selectedCatalogTrack.value.platform === runtimePlatform.key
+      ? { ...selectedCatalogTrack.value, musicInfo }
+      : { musicInfo }
+    const extrasController = new AbortController()
+    const abortExtras = () => extrasController.abort()
+    if (controller.signal.aborted) extrasController.abort()
+    else controller.signal.addEventListener('abort', abortExtras, { once: true })
+    const extrasResult = await settleOptionalRequest(
+      fetchPlatformTrackExtras(runtimePlatform.key, catalogTrack, { signal: extrasController.signal }),
+      { timeoutMs: 8_000, onTimeout: abortExtras }
+    )
+    controller.signal.removeEventListener('abort', abortExtras)
+    const extras = extrasResult.timedOut || extrasResult.error ? null : extrasResult.value
+    if (!lyricBundle.lines.length && extras?.lyric) {
+      try { lyricBundle = parseCustomSourceLyricBundle({ lyric: extras.lyric }) } catch { /* optional */ }
     }
+    if (!coverUrl && extras?.coverUrl) coverUrl = String(extras.coverUrl)
     if (controller.signal.aborted) throw new Error('隔离试听已取消')
     await ElMessageBox.confirm(
       isDesktop ? `音频来自 ${media.origin}。桌面将再次确认域名，并通过不带 Cookie 的受控媒体流加载。HTTP 为明文传输。请确认你有权试听。` : `音频来自 ${media.origin}。播放器将使用 crossorigin=anonymous（不发送 Cookie/登录态）；若该站未允许 CORS，浏览器将阻止播放。请确认你有权试听。`,

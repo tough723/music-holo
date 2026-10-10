@@ -71,6 +71,7 @@ async function main() {
       const https = requireFromMain('node:https')
       globalThis.liveSourceApprovals = []
       globalThis.liveSourceRequests = []
+      globalThis.liveSourceResponses = []
       globalThis.liveBackendRequests = []
 
       // CI auto-confirms only known public endpoints for this pinned source/chart
@@ -110,33 +111,45 @@ async function main() {
       // Audit header NAMES only (never store request values). The main-process
       // transport must strip cookies, authorization, referrer and app tokens.
       const auditRequest = (protocol, args) => {
-        let url = ''
+        let rawUrl = ''
         let options = args[0]
         try {
           if (args[0] instanceof URL) {
-            url = args[0].href
+            rawUrl = args[0].href
             options = args[1]
           } else if (typeof args[0] === 'string') {
-            url = new URL(args[0], `${protocol}//invalid.local`).href
+            rawUrl = new URL(args[0], `${protocol}//invalid.local`).href
             options = args[1]
           } else if (args[0] && typeof args[0] === 'object') {
             options = args[0]
-            url = `${options.protocol || protocol}//${options.hostname || options.host || ''}${options.path || '/'}`
+            rawUrl = `${options.protocol || protocol}//${options.hostname || options.host || ''}${options.path || '/'}`
           }
-        } catch { url = '(unparsed request)' }
+        } catch { rawUrl = '(unparsed request)' }
+        let url = rawUrl
+        try {
+          const parsed = new URL(rawUrl)
+          url = `${parsed.origin}${parsed.pathname}` // retain neither query tokens nor signatures
+        } catch { /* keep the redacted parse marker */ }
         const headerNames = Object.keys(options?.headers || {}).map((name) => name.toLowerCase())
-        globalThis.liveSourceRequests.push({ url, headerNames })
+        globalThis.liveSourceRequests.push({ url, method: String(options?.method || 'GET').toUpperCase(), headerNames })
+        return url
       }
-      const originalHttpRequest = http.request
-      const originalHttpsRequest = https.request
-      http.request = function (...args) {
-        auditRequest('http:', args)
-        return Reflect.apply(originalHttpRequest, this, args)
+      const wrapRequest = (module, protocol) => {
+        const original = module.request
+        module.request = function (...args) {
+          const url = auditRequest(protocol, args)
+          const request = Reflect.apply(original, this, args)
+          request.once('response', (response) => {
+            globalThis.liveSourceResponses.push({ url, statusCode: response.statusCode })
+          })
+          request.once('error', (error) => {
+            globalThis.liveSourceResponses.push({ url, error: String(error?.message || error).slice(0, 120) })
+          })
+          return request
+        }
       }
-      https.request = function (...args) {
-        auditRequest('https:', args)
-        return Reflect.apply(originalHttpsRequest, this, args)
-      }
+      wrapRequest(http, 'http:')
+      wrapRequest(https, 'https:')
 
       const preferences = BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences()
       if (!preferences.contextIsolation || !preferences.sandbox || preferences.nodeIntegration || !preferences.webSecurity) {
@@ -301,6 +314,15 @@ async function main() {
     expect(errors, '页面不应有未处理的渲染进程错误').toEqual([])
   } catch (error) {
     let uiState = null
+    let networkState = null
+    try {
+      networkState = await application?.evaluate(() => ({
+        approvals: (globalThis.liveSourceApprovals || []).map(({ host, permitted }) => ({ host, permitted })).slice(-16),
+        requests: (globalThis.liveSourceRequests || []).slice(-16),
+        responses: (globalThis.liveSourceResponses || []).slice(-16),
+        backend: globalThis.liveBackendRequests || []
+      }))
+    } catch { /* the app may already be closing */ }
     try {
       uiState = await page?.evaluate(() => {
         const visible = (element) => {
@@ -317,7 +339,7 @@ async function main() {
         }
       })
     } catch { /* the page may already be closing */ }
-    outcome = `ERROR ${compactOneLine(error?.message || error, 500)} UI=${compactOneLine(JSON.stringify(uiState), 1100)}`
+    outcome = `ERROR ${compactOneLine(error?.message || error, 450)} UI=${compactOneLine(JSON.stringify(uiState), 700)} NET=${compactOneLine(JSON.stringify(networkState), 1000)}`
     console.log(`LIVE_DESKTOP_OUTCOME=${outcome}`)
     try {
       await page?.screenshot({ path: path.join(artifacts, 'live-source-failure.png') })
