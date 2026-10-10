@@ -247,7 +247,7 @@ async function main() {
         actualQuality = await selectQuality(page, audition, '320k')
         console.log(`LIVE_DESKTOP_STEP ${provider.label} 搜索结果 ${index + 1}/${maxCandidates}：${catalogLabel}；平台 ID ${musicInfo.id || musicInfo.songmid}；音质 ${actualQuality}`)
 
-        const resolution = await resolveAndApproveMedia(page, audition, 90_000)
+        const resolution = await resolveAndApproveMedia(page, audition, 90_000, application)
         if (!resolution.ready) {
           const failure = `${provider.key} ${catalogLabel}（ID=${musicInfo.id || musicInfo.songmid}）：${resolution.error}`
           failures.push(failure)
@@ -411,7 +411,7 @@ async function selectQuality(page, audition, desired) {
   return quality
 }
 
-async function resolveAndApproveMedia(page, audition, timeoutMs) {
+async function resolveAndApproveMedia(page, audition, timeoutMs, application) {
   await audition.getByRole('button', { name: '解析音频' }).click()
   await page.getByRole('button', { name: '我信任并解析' }).click()
   const deadline = Date.now() + timeoutMs
@@ -432,7 +432,17 @@ async function resolveAndApproveMedia(page, audition, timeoutMs) {
     if (warning) lastMessage = compactOneLine(warning, 240)
     await page.waitForTimeout(200)
   }
-  return { ready: false, error: lastMessage || `等待媒体确认超时（${timeoutMs}ms）` }
+  const network = await application.evaluate(() => ({
+    approvals: (globalThis.liveSourceApprovals || []).map(({ host, permitted }) => `${host || 'ui'}=${permitted}`).slice(-12),
+    requests: (globalThis.liveSourceRequests || []).map((request) => `${request.method} ${request.url}`).slice(-12),
+    responses: (globalThis.liveSourceResponses || []).map((response) => `${response.url} ${response.statusCode || response.error || ''}`).slice(-12)
+  })).catch(() => null)
+  const networkSummary = compactOneLine(JSON.stringify(network), 1200)
+  console.log(`LIVE_DESKTOP_NETWORK_RESULT=${networkSummary}`)
+  return {
+    ready: false,
+    error: `${lastMessage || `等待媒体确认超时（${timeoutMs}ms）`}；network=${networkSummary}`
+  }
 }
 
 function startUpdatePromptDismissal(page) {
