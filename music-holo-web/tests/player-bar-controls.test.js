@@ -6,6 +6,7 @@ import ElementPlus from 'element-plus'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import PlayerBar from '../src/components/PlayerBar.vue'
 import { usePlayerStore, setSessionSongResolver } from '../src/store/player.js'
+import { useStatsStore } from '../src/store/stats.js'
 
 /**
  * 底部播放器是全局组件，这里用真实组件挂载（jsdom）验证它的交互而不是 store 本身：
@@ -584,5 +585,59 @@ describe('底部播放器交互', () => {
     expect(second.currentSong.title).toBe('云端信使')
     expect(document.querySelector('.session-resume')).toBeNull()
     setSessionSongResolver(null)
+  })
+
+  it('收听统计：起播/切走/播完/失败分别入账，面板展示并可清空', async () => {
+    const store = await mountPlayer()
+    const stats = useStatsStore()
+    stats.clear()
+    store.playAll([song(1, '霓虹海', 240), song(2, '云端信使', 240), song(3, '极光列车', 240)], 1)
+    await flush()
+    expect(stats.events.filter((item) => item.type === 'play')).toHaveLength(1)
+    expect(stats.events[0]).toMatchObject({ type: 'play', title: '霓虹海', duration: 240 })
+
+    // 中途切走：按实际进度记 skip（jsdom 里 currentTime 为 0，模拟听到 30 秒）
+    const [nativeAudio] = document.querySelectorAll('audio')
+    nativeAudio.currentTime = 30
+    nativeAudio.dispatchEvent(new Event('timeupdate'))
+    await flush()
+    store.next()
+    await flush()
+    expect(stats.events.filter((item) => item.type === 'skip')).toHaveLength(1)
+    expect(stats.events.find((item) => item.type === 'skip')).toMatchObject({ title: '霓虹海', position: 30 })
+    expect(stats.events.filter((item) => item.type === 'play')).toHaveLength(2)
+
+    // 自然播完：记 complete，且不会同时被记成 skip
+    store.playSong?.(song(9, '收尾曲', 100))
+    store.playAll([song(9, '收尾曲', 100)], 9)
+    await flush()
+    const [audio2] = document.querySelectorAll('audio')
+    audio2.dispatchEvent(new Event('ended'))
+    await flush()
+    const completes = stats.events.filter((item) => item.type === 'complete')
+    expect(completes).toHaveLength(1)
+    expect(completes[0].title).toBe('收尾曲')
+    expect(stats.events.filter((item) => item.type === 'skip' && item.title === '收尾曲')).toHaveLength(0)
+
+    // 播放失败：记 error 并带上来源标签
+    audio2.dispatchEvent(new Event('error'))
+    await flush()
+    const errors = stats.events.filter((item) => item.type === 'error')
+    expect(errors.length).toBeGreaterThan(0)
+    expect(errors.at(-1).source).toBeTruthy()
+
+    // 统计面板：累计时长与 Top 曲目渲染出来，清空后归零
+    const statsButton = document.querySelector('.pb-stats')
+    expect(statsButton).not.toBeNull()
+    statsButton.click()
+    await flush()
+    await flush()
+    const panel = document.querySelector('.stats-panel')
+    expect(panel).not.toBeNull()
+    expect(panel.textContent).toContain('累计')
+    expect(panel.textContent).toContain('听得最多的曲目')
+    panel.querySelector('.stats-clear').click()
+    await flush()
+    expect(useStatsStore().events).toEqual([])
   })
 })

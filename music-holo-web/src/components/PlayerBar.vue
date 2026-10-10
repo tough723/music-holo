@@ -372,6 +372,56 @@
           </el-badge>
         </span>
       </el-tooltip>
+      <el-popover v-model:visible="statsVisible" placement="top" trigger="click" :width="320">
+        <template #reference>
+          <el-button circle text class="pb-stats" aria-label="收听统计" :aria-expanded="statsVisible ? 'true' : 'false'">
+            <el-icon><DataAnalysis /></el-icon>
+          </el-button>
+        </template>
+        <div class="stats-panel">
+          <div class="stats-row">
+            <div class="stats-block">
+              <div class="stats-label">今日</div>
+              <div class="stats-value">{{ formatSeconds(statsStore.today.seconds) }}</div>
+              <div class="stats-sub">{{ statsStore.today.effectivePlays }} 首听完 · 跳过率 {{ formatPercent(statsStore.today.skipRate) }}</div>
+            </div>
+            <div class="stats-block">
+              <div class="stats-label">累计</div>
+              <div class="stats-value">{{ formatSeconds(statsStore.total.seconds) }}</div>
+              <div class="stats-sub">{{ statsStore.total.plays }} 次起播 · 完成率 {{ formatPercent(statsStore.total.completionRate) }}</div>
+            </div>
+          </div>
+          <div class="stats-trend" aria-label="近 7 天收听趋势">
+            <div v-for="day in statsStore.trend" :key="day.day" class="stats-trend-col">
+              <div class="stats-trend-bar" :style="{ height: trendHeight(day.seconds) }" :title="`${day.day}：${formatSeconds(day.seconds)}`" />
+              <div class="stats-trend-day">{{ day.day.slice(5) }}</div>
+            </div>
+          </div>
+          <div v-if="statsStore.total.topSongs.length" class="stats-section">
+            <div class="stats-label">听得最多的曲目</div>
+            <div v-for="item in statsStore.total.topSongs" :key="item.title" class="stats-line">
+              <span class="stats-line-name">{{ item.title }}</span>
+              <span class="stats-line-value">{{ formatSeconds(item.seconds) }}</span>
+            </div>
+          </div>
+          <div v-if="statsStore.total.topArtists.length" class="stats-section">
+            <div class="stats-label">听得最多的艺人</div>
+            <div v-for="item in statsStore.total.topArtists" :key="item.artist" class="stats-line">
+              <span class="stats-line-name">{{ item.artist }}</span>
+              <span class="stats-line-value">{{ formatSeconds(item.seconds) }}</span>
+            </div>
+          </div>
+          <div v-if="statsStore.total.sourceErrors.length" class="stats-section">
+            <div class="stats-label">播放失败来源</div>
+            <div v-for="item in statsStore.total.sourceErrors" :key="item.source" class="stats-line">
+              <span class="stats-line-name">{{ item.source }}</span>
+              <span class="stats-line-value">{{ item.count }} 次</span>
+            </div>
+          </div>
+          <p class="stats-note">统计只存在这台设备的浏览器里，不上报；近 7 天 {{ formatSeconds(statsStore.last7Days.seconds) }}。</p>
+          <button type="button" class="stats-clear" @click="statsStore.clear()">清空统计</button>
+        </div>
+      </el-popover>
       <el-popover v-model:visible="crossfadeVisible" placement="top" trigger="click" :width="220">
         <template #reference>
           <el-button
@@ -658,6 +708,8 @@ import {
 import { useUserStore } from '@/store/user'
 import { useDislikeStore } from '@/store/dislike'
 import { useDownloadStore } from '@/store/downloads'
+import { useStatsStore } from '@/store/stats'
+import { formatSeconds, formatPercent } from '@/utils/playStats'
 import * as favoriteApi from '@/api/favorite'
 import { fmtDuration } from '@/utils/format'
 import { createMediaSessionController } from '@/utils/mediaSession'
@@ -723,6 +775,42 @@ const SHORTCUT_HELP = Object.freeze([
   { keys: 'V', desc: '切换播放器形态（标准 / 迷你 / 沉浸）' }
 ])
 
+// ---- 收听统计（P2-8，纯本地）----
+const statsStore = useStatsStore()
+const statsVisible = ref(false)
+let statsPosition = 0
+let statsSkipGuard = false
+
+/** 当前曲目的来源标签：用于把播放失败归因到具体音源。 */
+function songSourceLabel(song) {
+  if (!song) return '未知来源'
+  if (song.isLocal) return '本地文件'
+  if (song.isCustomSource) return '自定义源'
+  if (song.sourceLabel) return song.sourceLabel
+  if (song.source) return String(song.source)
+  return '未知来源'
+}
+
+function recordStats(type, song, extra = {}) {
+  if (!song) return
+  statsStore.record({
+    type,
+    songId: song.id ?? null,
+    title: song.title || song.name || '',
+    artist: song.artist || song.singerName || '',
+    source: songSourceLabel(song),
+    duration: Number(song.duration) || 0,
+    position: Math.max(0, Number(extra.position ?? statsPosition) || 0)
+  })
+}
+
+/** 趋势条高度：按近 7 天最大值归一化，全 0 时保持一条底线。 */
+function trendHeight(seconds) {
+  const max = Math.max(...statsStore.trend.map((day) => day.seconds), 1)
+  const ratio = Math.max(0, Math.min(1, Number(seconds) / max))
+  return `${Math.round(8 + ratio * 52)}px`
+}
+
 // ---- 交叉淡入淡出 ----
 const crossfadeVisible = ref(false)
 
@@ -785,6 +873,7 @@ function persistSession({ force = false } = {}) {
 
 function handlePageHide() {
   persistSession({ force: true })
+  statsStore.flush()
 }
 
 // ---- 迷你 / 沉浸形态的停靠与自动隐藏 ----
@@ -2201,10 +2290,30 @@ watch(
   () => syncAudioOutput()
 )
 
+/**
+ * 切换曲目时给上一首记一次结果：自然播完已经在 onAudioEnded 记过（guard），
+ * 其余都是「中途切走」；听满 90% 以上按听完算，不计跳过。
+ */
+watch(
+  () => currentSong.value?.id,
+  (id, previousId) => {
+    const outgoing = previousId === undefined || previousId === null ? null : playerStore.queue.find((song) => song?.id === previousId)
+    if (outgoing && !statsSkipGuard) {
+      const duration = Number(outgoing.duration) || 0
+      const ratio = duration > 0 ? statsPosition / duration : 0
+      recordStats(ratio >= 0.9 ? 'complete' : 'skip', outgoing, { position: statsPosition })
+    }
+    statsSkipGuard = false
+    statsPosition = 0
+    if (id !== undefined && id !== null) recordStats('play', currentSong.value, { position: 0 })
+  }
+)
+
 function onAudioTimeUpdate(event) {
   const audio = event.currentTarget
   if (audio !== activeAudioElement()) return
   playerStore.currentTime = audio.currentTime
+  statsPosition = Number(audio.currentTime) || 0
   playerStore.checkSleepTimer()
   syncMediaSessionPosition()
   updateBuffered()
@@ -2254,6 +2363,9 @@ function onAudioEnded(event) {
   if (endedSong && !endedSong.isLocal && !endedSong.isCustomSource) {
     playerStore.recordPlayEvent(endedSong.id, 'completed')
   }
+  // 自然播完：统计里记 complete，并阻止切歌 watch 再记一次 skip。
+  statsSkipGuard = true
+  recordStats('complete', endedSong, { position: Number(endedSong?.duration) || statsPosition })
   if (playerStore.checkSleepTimer()) return
   if (playerStore.handleSleepTimerTrackEnd(currentSong.value?.id)) return
   if (playerStore.mode === 'single' && playerStore.priorityNextSongId === null) {
@@ -2267,6 +2379,9 @@ function onAudioEnded(event) {
 function onAudioError(event) {
   if (event.currentTarget !== activeAudioElement()) return
   buffering.value = false
+  // 播放失败归因到音源：不记 skip（用户没主动切走），也不算听完。
+  statsSkipGuard = true
+  if (currentSong.value) recordStats('error', currentSong.value)
   if (event.currentTarget === spatialAudioRef.value && processedEnabled.value) {
     const nativeAudio = audioRef.value
     const spatialAudio = spatialAudioRef.value
@@ -2332,6 +2447,7 @@ function onVisibilityChange() {
   }
   // 切到后台/最小化时把整份队列落盘，回来或下次冷启动都能续播。
   persistSession({ force: true })
+  statsStore.flush()
 }
 
 onMounted(() => {
@@ -2413,6 +2529,7 @@ onUnmounted(() => {
   document.removeEventListener('visibilitychange', onVisibilityChange)
   clearSleepClock()
   persistSession({ force: true })
+  statsStore.flush()
   window.removeEventListener('beforeunload', handlePageHide)
 })
 
@@ -2501,6 +2618,91 @@ watch(() => userStore.isLogin, (loggedIn) => {
   color: #fff;
   background: color-mix(in srgb, var(--holo-primary) 74%, transparent);
   border-color: transparent;
+}
+
+/* ---- 收听统计 ---- */
+.stats-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.stats-row {
+  display: flex;
+  gap: 12px;
+}
+.stats-block {
+  flex: 1;
+}
+.stats-label {
+  color: var(--text-sub);
+  font-size: 11px;
+}
+.stats-value {
+  font-size: 17px;
+  font-weight: 600;
+  margin: 2px 0;
+}
+.stats-sub {
+  color: var(--text-sub);
+  font-size: 11px;
+}
+.stats-trend {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  height: 78px;
+}
+.stats-trend-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.stats-trend-bar {
+  width: 100%;
+  min-height: 2px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, var(--holo-primary), color-mix(in srgb, var(--holo-primary) 25%, transparent));
+}
+.stats-trend-day {
+  color: var(--text-sub);
+  font-size: 10px;
+}
+.stats-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.stats-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+}
+.stats-line-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.stats-line-value {
+  color: var(--text-sub);
+  flex-shrink: 0;
+}
+.stats-note {
+  color: var(--text-sub);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.stats-clear {
+  align-self: flex-start;
+  padding: 4px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-sub);
+  font-size: 11px;
+  cursor: pointer;
 }
 
 /* ---- 交叉淡入淡出 ---- */
@@ -2715,6 +2917,7 @@ watch(() => userStore.isLogin, (loggedIn) => {
 .player-bar.is-compact .pb-spatial,
 .player-bar.is-compact .pb-volume,
 .player-bar.is-compact .pb-volume-value,
+.player-bar.is-compact .pb-stats,
 .player-bar.is-compact .pb-rate,
 .player-bar.is-compact .pb-crossfade,
 .player-bar.is-compact .pb-equalizer,
