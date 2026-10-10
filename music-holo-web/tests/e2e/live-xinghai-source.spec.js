@@ -259,30 +259,60 @@ async function selectVerifiedSearchResult(page, dialog, candidate) {
 async function pickFromSelect(page, dialog, index, picker, fieldsSelector) {
   const selectLabel = index === 0 ? '音源平台下拉框' : '音质下拉框'
   const select = dialog.locator(`${fieldsSelector} .el-select`).nth(index)
-  console.log(`LIVE_ACTION 开始：点击${selectLabel}`)
-  await clickWithApprovals(page, select, selectLabel)
-  const options = page.locator('.el-select-dropdown__item:visible')
-  const opened = Date.now() + 15_000
-  while (Date.now() < opened) {
-    if (await options.first().isVisible().catch(() => false)) break
-    await drainApprovals(page)
-    await page.waitForTimeout(200)
+  await closeSelectDropdown(page, dialog)
+
+  let labels = []
+  let picked = ''
+  for (let attempt = 0; attempt < 2 && !picked; attempt += 1) {
+    console.log(`LIVE_ACTION 开始：点击${selectLabel}（尝试 ${attempt + 1} 次）`)
+    await clickWithApprovals(page, select, selectLabel)
+    const deadline = Date.now() + 15_000
+    while (Date.now() < deadline) {
+      await drainApprovals(page)
+      const dropdowns = page.locator('.el-select-dropdown:visible')
+      if (await dropdowns.count()) {
+        const options = dropdowns.last().locator('.el-select-dropdown__item:visible')
+        labels = (await options.allInnerTexts()).map((text) => text.trim()).filter(Boolean)
+        if (labels.length) {
+          picked = picker(labels) || ''
+          break
+        }
+      }
+      await page.waitForTimeout(200)
+    }
+    if (!picked) await closeSelectDropdown(page, dialog)
   }
-  const labels = (await options.allInnerTexts()).map((text) => text.trim()).filter(Boolean)
   if (!labels.length) throw new Error(`第 ${index + 1} 个下拉框没有任何可选项`)
-  const picked = picker(labels)
-  if (!picked) throw new Error(`下拉框没有目标选项：${labels.join(' / ')}`)
-  const selectedOption = page.locator('.el-select-dropdown__item.is-selected:visible').first()
+  if (!picked) throw new Error(`${selectLabel}没有目标选项：${labels.join(' / ')}`)
+
+  const dropdowns = page.locator('.el-select-dropdown:visible')
+  const selectedOption = dropdowns.last().locator('.el-select-dropdown__item.is-selected:visible').first()
   const selectedLabel = (await selectedOption.innerText().catch(() => '')).trim()
   if (selectedLabel === picked) {
-    await page.keyboard.press('Escape')
+    await closeSelectDropdown(page, dialog)
     console.log(`LIVE_ACTION 「${picked}」已经选中，不重复点击`)
     return { picked, labels, alreadySelected: true }
   }
   console.log(`LIVE_ACTION 下拉项：${labels.join(' / ')}，准备选择「${picked}」`)
   await clickWithApprovals(page, page.getByRole('option', { name: picked, exact: true }).first(), `下拉选项 ${picked}`)
-  await page.waitForTimeout(200)
+  await expect(select).toContainText(picked)
+  await closeSelectDropdown(page, dialog)
   return { picked, labels, alreadySelected: false }
+}
+
+async function closeSelectDropdown(page, dialog) {
+  const dropdowns = page.locator('.el-select-dropdown:visible')
+  if (!(await dropdowns.count())) return
+  await page.keyboard.press('Escape').catch(() => {})
+  if (await dropdowns.count()) {
+    await clickWithApprovals(
+      page,
+      dialog.locator('.source-audition > .el-alert'),
+      '关闭已打开的平台下拉框',
+      3_000
+    )
+  }
+  await expect(dropdowns).toHaveCount(0, { timeout: 3_000 })
 }
 
 async function resolveAuditionAndCollect(page, dialog, initialApprovals, timeoutMs = 90_000) {
