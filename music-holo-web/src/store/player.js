@@ -48,6 +48,7 @@ export function normalizePlayerDock(value) {
 export const PLAYER_VIEW_MODES = Object.freeze([
   { key: 'standard', label: '标准', desc: '完整播放条：全部控件与进度条' },
   { key: 'mini', label: '迷你', desc: '收窄成一条，只留播放控制与进度' },
+  { key: 'stage', label: '播放页', desc: '全屏播放页：大封面 + 当前队列' },
   { key: 'immersive', label: '沉浸', desc: '全屏歌词舞台 + 极简控制条' }
 ])
 const PLAYER_VIEW_MODE_KEYS = PLAYER_VIEW_MODES.map((mode) => mode.key)

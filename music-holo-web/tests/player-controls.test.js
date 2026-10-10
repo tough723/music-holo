@@ -179,10 +179,11 @@ describe('播放器形态：标准 / 迷你 / 沉浸', () => {
     setActivePinia(createPinia())
   })
 
-  it('形态按 标准 → 迷你 → 沉浸 → 标准 循环，非法值回落到标准', () => {
+  it('形态按 标准 → 迷你 → 播放页 → 沉浸 → 标准 循环，非法值回落到标准', () => {
     const store = usePlayerStore()
     expect(store.playerViewMode).toBe('standard')
     expect(store.cyclePlayerViewMode()).toBe('mini')
+    expect(store.cyclePlayerViewMode()).toBe('stage')
     expect(store.cyclePlayerViewMode()).toBe('immersive')
     expect(store.cyclePlayerViewMode()).toBe('standard')
 

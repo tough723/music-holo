@@ -5,6 +5,7 @@
       'is-compact': isCompactView,
       'is-mini': viewMode === 'mini',
       'is-immersive': viewMode === 'immersive',
+      'is-stage': viewMode === 'stage',
       'dock-left': docked && dock === 'left',
       'dock-right': docked && dock === 'right',
       'is-faded': barFaded
@@ -412,6 +413,19 @@
     <audio ref="spatialAudioRef" preload="none"></audio>
   </div>
 
+  <!-- 全屏正在播放页（第四种形态）：大封面 + 当前队列，歌词仍只有歌词面板一处渲染 -->
+  <NowPlayingStage
+    v-if="viewMode === 'stage'"
+    :is-favorite="isFav"
+    :disliked="currentDisliked"
+    @close="playerStore.setPlayerViewMode('standard')"
+    @toggle-favorite="toggleFavorite"
+    @download="downloadCurrent"
+    @dislike="toggleDislikeCurrent"
+    @switch-source="switchDialogVisible = true"
+    @open-queue="openQueue"
+  />
+
   <!-- 播放队列抽屉 -->
   <el-drawer v-model="queueVisible" title="播放队列" :size="queueDrawerSize" append-to-body>
     <div class="queue-toolbar">
@@ -588,6 +602,7 @@ import {
   saveOwnDemoAudio
 } from '@/utils/demoAudioCache'
 import HoloProjector from './HoloProjector.vue'
+import NowPlayingStage from './NowPlayingStage.vue'
 import Cover from './Cover.vue'
 
 const playerStore = usePlayerStore()
@@ -742,7 +757,8 @@ function applyViewMode(mode) {
 function syncViewportClass(mode) {
   if (typeof document === 'undefined') return
   const root = document.documentElement
-  const compact = mode !== 'standard'
+  // 播放页是全屏浮层，播放条收窄但页面本身仍需要底部留白（浮层自己避让播放条）。
+  const compact = mode === 'mini' || mode === 'immersive'
   root.classList.toggle('mh-player-mini', compact)
   const dockKey = compact ? playerStore.playerBarDock : 'bottom'
   root.classList.toggle('mh-player-dock-left', dockKey === 'left')
@@ -1221,6 +1237,11 @@ function onPlayerShortcut(event) {
   if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && event.altKey === false) {
     event.preventDefault()
     playerStore.setVolume(Math.max(0, Math.min(1, playerStore.volume + (event.key === 'ArrowUp' ? 0.05 : -0.05))))
+    return
+  }
+  if (event.key === 'Escape' && viewMode.value === 'stage') {
+    event.preventDefault()
+    playerStore.setPlayerViewMode('standard')
     return
   }
   if (event.key.toLowerCase() === 'l' && hasSong.value) {

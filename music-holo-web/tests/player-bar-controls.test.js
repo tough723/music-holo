@@ -263,6 +263,13 @@ describe('底部播放器交互', () => {
 
     modeButton().click()
     await flush()
+    // 第三种形态是全屏播放页：大封面 + 当前队列，播放条仍然收窄。
+    expect(store.playerViewMode).toBe('stage')
+    expect(bar().classList.contains('is-stage')).toBe(true)
+    expect(host.querySelector('.now-playing')).toBeTruthy()
+
+    modeButton().click()
+    await flush()
     expect(store.playerViewMode).toBe('immersive')
     expect(bar().classList.contains('is-immersive')).toBe(true)
     // 沉浸形态自动打开沉浸式歌词舞台。
@@ -272,6 +279,7 @@ describe('底部播放器交互', () => {
     modeButton().click()
     await flush()
     expect(store.playerViewMode).toBe('standard')
+    expect(host.querySelector('.now-playing')).toBeNull()
     expect(store.lyricView.immersive).toBe(false)
     expect(store.lyricVisible).toBe(false)
     expect(document.documentElement.classList.contains('mh-player-mini')).toBe(false)
@@ -287,12 +295,40 @@ describe('底部播放器交互', () => {
     expect(store.playerViewMode).toBe('mini')
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'V', bubbles: true }))
     await flush()
+    expect(store.playerViewMode).toBe('stage')
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', bubbles: true }))
+    await flush()
     expect(store.playerViewMode).toBe('immersive')
 
     // 模拟歌词面板里按 Esc 退出沉浸：播放器形态必须跟着回退，否则状态会打架。
     store.setLyricView({ immersive: false })
     await flush()
     expect(store.playerViewMode).toBe('standard')
+  })
+
+  it('播放页显示大封面与当前队列，可点队列切歌，Esc 退出', async () => {
+    const store = await mountPlayer()
+    store.playAll([song(1, '霓虹海'), song(2, '云端信使'), song(3, '全息之恋')], 1)
+    await flush()
+    store.setPlayerViewMode('stage')
+    await flush()
+
+    const stage = host.querySelector('.now-playing')
+    expect(stage).toBeTruthy()
+    expect(stage.querySelector('.np-title').textContent.trim()).toBe('霓虹海')
+    const rows = Array.from(stage.querySelectorAll('.np-queue-item'))
+    expect(rows).toHaveLength(3)
+    expect(rows[0].classList.contains('active')).toBe(true)
+    expect(rows[0].textContent).toContain('霓虹海')
+
+    rows[2].querySelector('.np-queue-play').click()
+    await flush()
+    expect(store.currentSong.title).toBe('全息之恋')
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flush()
+    expect(store.playerViewMode).toBe('standard')
+    expect(host.querySelector('.now-playing')).toBeNull()
   })
 
   it('迷你形态隐藏次要控件、保留核心控制与形态切换入口', async () => {
