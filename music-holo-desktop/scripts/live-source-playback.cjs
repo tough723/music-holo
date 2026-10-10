@@ -1,4 +1,4 @@
-// Non-blocking CI journey: obtain a real track from a public platform chart,
+// Non-blocking CI journey: obtain a real track from the public platform search adapter,
 // resolve it through the real Xinghai LX source, and wait for Electron's media
 // element to decode/play it. The app backend remains absent; only an explicit
 // source import/consent flow may access the allowlisted public hosts below.
@@ -176,18 +176,15 @@ async function main() {
     await expect(platformSelects.first()).toBeVisible({ timeout: 15_000 })
     console.log('LIVE_DESKTOP_STEP 平台选择控件已就绪')
 
-    // Select the same Netease provider declared by the script, then fetch a
-    // genuine online Netease leaderboard and its actual song IDs via the host adapter.
+    // Select the Netease provider declared by the source, then use the host's
+    // verified credential-free public search adapter to obtain a real song ID.
+    // (Some Netease chart responses are empty on CI networks; search is the
+    // product's supported online-listening path and returns actual provider metadata.)
     await selectOption(page, audition.locator('.source-audition-fields .el-select').nth(0), 'wy')
     const selectedPlatformText = await audition.locator('.source-audition-fields .el-select').nth(0).innerText()
     expect(selectedPlatformText).toContain('(wy)')
-    const loadCharts = audition.getByRole('button', { name: '加载榜单' })
-    await expect(loadCharts).toBeEnabled()
-    await loadCharts.click()
-
-    const chartSelect = audition.locator('.source-audition-chart-select')
-    await expect(chartSelect).toBeVisible({ timeout: 30_000 })
-    await selectFirstVisibleOption(page, chartSelect)
+    await audition.getByLabel('平台曲目搜索').fill('海阔天空')
+    await audition.getByRole('button', { name: '搜索平台' }).click()
     const trackButtons = audition.locator('[aria-label="平台曲目结果"] button')
     await expect(trackButtons.first()).toBeVisible({ timeout: 60_000 })
 
@@ -213,7 +210,7 @@ async function main() {
       expect(String(musicInfo.id || musicInfo.songmid || '')).not.toBe('')
 
       actualQuality = await selectQuality(page, audition, '320k')
-      console.log(`LIVE_DESKTOP_STEP 在线榜单曲目 ${index + 1}/${maxCandidates}：${catalogLabel}；平台 ID ${musicInfo.id || musicInfo.songmid}；音质 ${actualQuality}`)
+      console.log(`LIVE_DESKTOP_STEP 在线搜索结果 ${index + 1}/${maxCandidates}：${catalogLabel}；平台 ID ${musicInfo.id || musicInfo.songmid}；音质 ${actualQuality}`)
 
       const resolution = await resolveAndApproveMedia(page, audition, 90_000)
       if (!resolution.ready) {
@@ -262,7 +259,7 @@ async function main() {
         }
       }
 
-      outcome = `PLAYED 平台排行榜「${playedTrack.chartLabel}」 → 星海自定义源 → ${playedTrack.title} / ${playedTrack.singer} ` +
+      outcome = `PLAYED 网易云公开搜索 → 星海自定义源 → ${playedTrack.title} / ${playedTrack.singer} ` +
         `(platform=wy, id=${playedTrack.id}, quality=${actualQuality}, media=${new URL(mediaOrigin).host}, ` +
         `currentTime=${state.currentTime.toFixed(2)}s, paused=${state.paused}, readyState=${state.readyState})`
       console.log(`LIVE_DESKTOP_OUTCOME=${outcome}`)
@@ -325,15 +322,6 @@ async function selectOption(page, select, matchingText) {
     return label
   }
   await selected.click()
-  return label
-}
-
-async function selectFirstVisibleOption(page, select) {
-  await select.click()
-  const first = page.locator('.el-select-dropdown__item:visible').first()
-  await expect(first).toBeVisible({ timeout: 15_000 })
-  const label = (await first.innerText()).trim()
-  await first.click()
   return label
 }
 
