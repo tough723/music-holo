@@ -109,6 +109,27 @@ describe('播放器控制：倍速 / 静音 / 断点续播', () => {
   })
 })
 
+describe('输出偏好：空间音效记忆', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    setActivePinia(createPinia())
+  })
+
+  it('空间音效开关会被记住，且跨会话保留', () => {
+    const store = usePlayerStore()
+    expect(store.spatialPreferred).toBe(false)
+    expect(store.setSpatialPreferred(true)).toBe(true)
+    expect(JSON.parse(localStorage.getItem('mh_player')).spatialPreferred).toBe(true)
+
+    const reloaded = usePlayerStore(createPinia())
+    expect(reloaded.spatialPreferred).toBe(true)
+
+    // 只有显式传入才会改写：脏值一律当关闭处理。
+    expect(reloaded.setSpatialPreferred('no')).toBe(false)
+    expect(reloaded.spatialPreferred).toBe(false)
+  })
+})
+
 describe('播放队列：打乱 / 去重 / 总时长', () => {
   beforeEach(() => {
     localStorage.clear()

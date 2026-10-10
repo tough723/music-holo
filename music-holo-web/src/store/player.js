@@ -151,7 +151,9 @@ function persist(state) {
     resumeSongId: state.resumeSongId ?? null,
     resumeTime: Math.max(0, Number(state.resumeTime) || 0),
     // 歌词显示偏好（译文/罗马音/逐字/沉浸/字号/时间校准）跨会话保留。
-    lyricView: normalizeLyricView(state.lyricView)
+    lyricView: normalizeLyricView(state.lyricView),
+    // 空间音效是输出偏好：记住用户上次的开关，下一次用户手势触发播放时自动套用。
+    spatialPreferred: Boolean(state.spatialPreferred)
   }))
 }
 
@@ -190,6 +192,8 @@ export const usePlayerStore = defineStore('player', {
       mode: MODES.some((mode) => mode.key === saved.mode) ? saved.mode : 'order',
       /** 原歌词与可选译文歌词 */
       lyricView: normalizeLyricView(saved.lyricView),
+      /** 上次是否开着 3D 空间音效（只是偏好，实际是否生效取决于音源与浏览器）。 */
+      spatialPreferred: saved.spatialPreferred === true,
       /** 原歌词与可选译文歌词 */
       lyrics: [],
       lyricTranslations: [],
@@ -711,6 +715,12 @@ export const usePlayerStore = defineStore('player', {
     /** 清除歌词时间校准。 */
     resetLyricOffset() {
       return this.setLyricView({ offsetMs: 0 }).offsetMs
+    },
+    /** 记住空间音效开关；音源不支持时不清除偏好，下次遇到可用音源仍会套用。 */
+    setSpatialPreferred(preferred) {
+      this.spatialPreferred = preferred === true
+      persist(this)
+      return this.spatialPreferred
     }
   }
 })

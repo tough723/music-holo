@@ -46,10 +46,18 @@ const flush = async () => { await nextTick(); await nextTick() }
 describe('底部播放器交互', () => {
   beforeEach(() => {
     localStorage.clear()
-    // jsdom 不实现媒体播放，桩掉这三个方法避免“Not implemented”噪声。
-    HTMLMediaElement.prototype.play = () => Promise.resolve()
-    HTMLMediaElement.prototype.pause = () => {}
+    // jsdom 不实现媒体播放，桩掉这三个方法避免“Not implemented”噪声；顺带统计调用次数。
+    HTMLMediaElement.prototype.play = function () {
+      this.__playCalls = (this.__playCalls || 0) + 1
+      return Promise.resolve()
+    }
+    HTMLMediaElement.prototype.pause = function () {
+      this.__pauseCalls = (this.__pauseCalls || 0) + 1
+    }
     HTMLMediaElement.prototype.load = () => {}
+    // jsdom 没有 Web Audio，空间音效应当优雅回退到原声而不是崩掉。
+    delete window.AudioContext
+    delete window.webkitAudioContext
   })
   afterEach(() => {
     app?.unmount()
@@ -197,5 +205,41 @@ describe('底部播放器交互', () => {
     await flush()
     expect(document.querySelector('.queue-item').getAttribute('draggable')).toBe('false')
     expect(document.querySelector('.queue-hint').textContent).toContain('清空搜索框后可拖动排序')
+  })
+
+  it('空间音效不可用时回退原声，且不会因为一次失败就丢掉记住的偏好', async () => {
+    const store = await mountPlayer()
+    store.setSpatialPreferred(true)
+    store.playAll([song(1, '霓虹海')], 1)
+    await flush()
+
+    // 手动点一次：不支持就提示，但偏好仍然保留（换设备/环境后还能自动套用）。
+    host.querySelector('button[aria-label="开启 3D 空间音效"]').click()
+    await flush()
+    expect(store.spatialPreferred).toBe(true)
+    expect(host.querySelector('button[aria-label="开启 3D 空间音效"]')).toBeTruthy()
+
+    // 用户手势之后的播放会尝试自动套用：失败也必须用原声继续播。
+    const [nativeAudio, spatialAudio] = document.querySelectorAll('audio')
+    store.playing = false
+    await flush()
+    window.dispatchEvent(new Event('pointerdown'))
+    store.playing = true
+    await flush()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await flush()
+
+    expect(nativeAudio.__playCalls || 0).toBeGreaterThan(0)
+    expect(spatialAudio.__playCalls || 0).toBe(0)
+    expect(store.spatialPreferred).toBe(true)
+    expect(store.playing).toBe(true)
+  })
+
+  it('关掉空间音效会同时清掉偏好，下次不会再自动套用', async () => {
+    const store = await mountPlayer()
+    store.setSpatialPreferred(true)
+    expect(JSON.parse(localStorage.getItem('mh_player')).spatialPreferred).toBe(true)
+    store.setSpatialPreferred(false)
+    expect(JSON.parse(localStorage.getItem('mh_player')).spatialPreferred).toBe(false)
   })
 })

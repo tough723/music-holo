@@ -11,6 +11,48 @@ describe('空间音效工具', () => {
     expect(isSpatialAudioUrl('', origin)).toBe(false)
   })
 
+  it('音频上下文被浏览器挂起后可以重新拉起（后台标签页回来不会只走进度不出声）', async () => {
+    class FakeContext {
+      constructor() {
+        this.currentTime = 0
+        this.state = 'suspended'
+        this.destination = {}
+        this.resumeCalls = 0
+        this.failResume = false
+      }
+      createMediaElementSource() { return { connect () {} } }
+      createChannelSplitter() { return { connect () {} } }
+      createPanner() { return { connect () {}, positionX: { setValueAtTime () {} } } }
+      createGain() { return { connect () {}, gain: { value: 1, setTargetAtTime () {} } } }
+      resume() {
+        this.resumeCalls += 1
+        if (this.failResume) return Promise.reject(new Error('blocked'))
+        this.state = 'running'
+        return Promise.resolve()
+      }
+      close() {
+        this.state = 'closed'
+        return Promise.resolve()
+      }
+    }
+
+    const graph = createSpatialAudioGraph({}, FakeContext)
+    expect(graph.state).toBe('suspended')
+    expect(await graph.resume()).toBe(true)
+    expect(graph.state).toBe('running')
+    // 已经在跑了就不需要再 resume，避免无意义的调用与手势消耗。
+    expect(await graph.resume()).toBe(false)
+    expect(graph.context.resumeCalls).toBe(1)
+
+    graph.context.state = 'suspended'
+    graph.context.failResume = true
+    expect(await graph.resume()).toBe(false)
+    await graph.close()
+    expect(graph.state).toBe('closed')
+    // 关闭后的上下文不能再被拉起。
+    expect(await graph.resume()).toBe(false)
+  })
+
   it('建立左右 HRTF 虚拟声场，并可平滑开关与控制总音量', async () => {
     class FakeParam {
       constructor(value = 0) { this.value = value }

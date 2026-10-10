@@ -102,6 +102,24 @@ export function createSpatialAudioGraph(audioElement, AudioContextConstructor) {
 
   return {
     context,
+    get state() {
+      return context.state
+    },
+    /**
+     * 重新拉起被浏览器挂起的音频上下文。
+     * 后台标签页、系统休眠或长时间空闲都会让浏览器 suspend 掉 AudioContext，
+     * 此时媒体元素仍在播放但经过 Web Audio 的声音会完全静音，必须显式 resume。
+     * @returns {Promise<boolean>} 是否真的执行了 resume
+     */
+    resume() {
+      if (context.state === 'closed' || context.state === 'running') return Promise.resolve(false)
+      if (typeof context.resume !== 'function') return Promise.resolve(false)
+      try {
+        return Promise.resolve(context.resume()).then(() => true).catch(() => false)
+      } catch {
+        return Promise.resolve(false)
+      }
+    },
     setEnabled(enabled) {
       setGain(dryGain, enabled ? SPATIAL_DRY_MIX : 1, context)
       setGain(wetGain, enabled ? SPATIAL_WET_MIX : 0, context)

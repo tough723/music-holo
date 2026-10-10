@@ -209,7 +209,7 @@
           :disabled="!hasSong || !currentSong?.audioUrl || currentSong?.isCustomSource"
           :aria-label="spatialEnabled ? '关闭 3D 空间音效' : '开启 3D 空间音效'"
           :aria-pressed="spatialEnabled"
-          @click="toggleSpatialAudio"
+          @click="toggleSpatialAudio()"
         >
           <el-icon><Headset /></el-icon>
         </el-button>
@@ -1039,6 +1039,7 @@ function handlePlayFailure(audio, error) {
 /** 统一的 play()：区分“浏览器拦截自动播放”和真正的加载失败。 */
 function playActiveAudio(audio) {
   if (!audio) return
+  resumeSpatialAudio()
   safePlay(audio).catch((error) => handlePlayFailure(audio, error))
 }
 
@@ -1100,7 +1101,45 @@ function scrollQueueToCurrent() {
   queueCurrentItemRef.value?.scrollIntoView?.({ block: 'center' })
 }
 
-async function toggleSpatialAudio() {
+/** 用户手势时间戳：自动套用空间音效必须在手势之后，否则 AudioContext 会被自动播放策略挡住。 */
+let lastUserGestureAt = 0
+/** 自动套用只针对同一首歌尝试一次，避免每次切歌失败都弹提示。 */
+let spatialAutoTriedFor = ''
+
+function markUserGesture() {
+  lastUserGestureAt = Date.now()
+}
+
+function hadRecentUserGesture(windowMs = 1500) {
+  return Date.now() - lastUserGestureAt < windowMs
+}
+
+/** 浏览器挂起音频上下文后（后台标签页/休眠），恢复播放前必须重新 resume，否则只有画面在走、声音是静的。 */
+function resumeSpatialAudio() {
+  if (!spatialEnabled.value || !spatialAudioGraph) return
+  const resumed = spatialAudioGraph.resume?.()
+  resumed?.catch?.(() => {})
+}
+
+function canUseSpatialAudio(song = currentSong.value) {
+  return Boolean(song?.audioUrl) && !song.isCustomSource && isSpatialAudioUrl(song.audioUrl, window.location.href)
+}
+
+/**
+ * 记住的空间音效偏好在用户手势触发播放时自动套用。
+ * 失败时只关掉本次会话，不清除偏好：换一首可用的歌还会再试。
+ */
+async function applyRememberedSpatialAudio() {
+  if (!playerStore.spatialPreferred || spatialEnabled.value) return
+  if (!hadRecentUserGesture() || !canUseSpatialAudio()) return
+  const song = currentSong.value
+  const key = `${song?.id || ''}|${song?.audioUrl || ''}`
+  if (spatialAutoTriedFor === key) return
+  spatialAutoTriedFor = key
+  await toggleSpatialAudio({ silent: true })
+}
+
+async function toggleSpatialAudio(options = {}) {
   const nativeAudio = audioRef.value
   const spatialAudio = spatialAudioRef.value
   const song = currentSong.value
@@ -1117,15 +1156,17 @@ async function toggleSpatialAudio() {
     }
     spatialAudioGraph?.setEnabled(false)
     spatialEnabled.value = false
+    if (options.remember !== false) playerStore.setSpatialPreferred(false)
     if (playerStore.playing) {
       safePlay(nativeAudio).catch(() => { playerStore.playing = false })
     }
-    ElMessage.info('已关闭 3D 空间音效，切回原声播放')
+    if (options.silent !== true) ElMessage.info('已关闭 3D 空间音效，切回原声播放')
     return
   }
 
   if (!isSpatialAudioUrl(song.audioUrl, window.location.href)) {
-    ElMessage.warning('该音源不支持空间处理，当前保持原声播放')
+    // 音源本身不支持：不改写偏好，换一首同源的歌仍然会按偏好自动套用。
+    if (options.silent !== true) ElMessage.warning('该音源不支持空间处理，当前保持原声播放')
     return
   }
 
@@ -1140,6 +1181,7 @@ async function toggleSpatialAudio() {
     graph.setVolume(playerStore.volume)
     graph.setEnabled(true)
     spatialEnabled.value = true
+    playerStore.setSpatialPreferred(true)
     nativeAudio.pause()
     if (playerStore.playing) {
       try {
@@ -1153,12 +1195,13 @@ async function toggleSpatialAudio() {
         throw error
       }
     }
-    ElMessage.success('已开启 3D 空间音效，使用耳机体验更明显')
+    if (options.silent !== true) ElMessage.success('已开启 3D 空间音效，使用耳机体验更明显')
   } catch {
     spatialAudio.pause()
     spatialAudioGraph?.setEnabled(false)
     spatialEnabled.value = false
-    ElMessage.warning('空间音效无法启动，已保持原声播放')
+    // 启动失败（浏览器不支持/上下文被拒）不改写偏好，下次遇到可用环境再试。
+    if (options.silent !== true) ElMessage.warning('空间音效无法启动，已保持原声播放')
   }
 }
 
@@ -1350,6 +1393,7 @@ function clearQueue() {
   playerStore.clearQueue()
   spatialEnabled.value = false
   spatialAudioGraph?.setEnabled(false)
+  spatialAutoTriedFor = ''
   for (const audio of [audioRef.value, spatialAudioRef.value]) {
     if (!audio) continue
     audio.pause()
@@ -1448,6 +1492,9 @@ watch(playing, (isPlaying) => {
   const audio = activeAudioElement()
   if (!audio || !currentSong.value) return
   if (isPlaying) {
+    // 恢复播放时按需拉起被挂起的音频上下文，并在用户手势后套用记住的空间音效偏好。
+    resumeSpatialAudio()
+    applyRememberedSpatialAudio().catch(() => {})
     playActiveAudio(audio)
   } else {
     audio.pause()
@@ -1577,7 +1624,11 @@ function onViewportResize() {
 }
 
 function onVisibilityChange() {
-  if (document.visibilityState === 'visible') playerStore.checkSleepTimer()
+  if (document.visibilityState === 'visible') {
+    playerStore.checkSleepTimer()
+    // 回到前台：AudioContext 可能已被浏览器挂起，不 resume 就会只走进度不出声。
+    resumeSpatialAudio()
+  }
 }
 
 onMounted(() => {
@@ -1615,6 +1666,8 @@ onMounted(() => {
   installMediaSession()
   window.addEventListener('mh-seek', onLyricSeek)
   window.addEventListener('keydown', onPlayerShortcut)
+  window.addEventListener('keydown', markUserGesture)
+  window.addEventListener('pointerdown', markUserGesture)
   window.addEventListener('resize', onViewportResize)
   document.addEventListener('visibilitychange', onVisibilityChange)
   loadFavorites()
@@ -1644,6 +1697,8 @@ onUnmounted(() => {
   }
   window.removeEventListener('mh-seek', onLyricSeek)
   window.removeEventListener('keydown', onPlayerShortcut)
+  window.removeEventListener('keydown', markUserGesture)
+  window.removeEventListener('pointerdown', markUserGesture)
   window.removeEventListener('resize', onViewportResize)
   document.removeEventListener('visibilitychange', onVisibilityChange)
   clearSleepClock()
