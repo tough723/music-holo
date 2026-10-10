@@ -129,9 +129,8 @@
             <el-icon><ChatDotRound /></el-icon>
           </el-button>
         </el-tooltip>
-        <el-tooltip content="使用本机自定义源解析并播放" placement="top">
+        <el-tooltip v-if="hasCustomSources" content="使用本机自定义源解析并播放" placement="top">
           <el-button
-            v-if="hasCustomSources"
             circle
             size="small"
             :aria-label="`使用自定义源播放《${row.title}》`"
@@ -149,6 +148,22 @@
         <el-tooltip content="加入播放队列" placement="top">
           <el-button circle size="small" :aria-label="`加入播放队列《${row.title}》`" @click.stop="emit('add-queue', row)">
             <el-icon><Plus /></el-icon>
+          </el-button>
+        </el-tooltip>
+        <el-tooltip content="快速换源：换一个可用的音源播放" placement="top">
+          <el-button circle size="small" :aria-label="`切换音源：《${row.title}》`" @click.stop="switchSource(row)">
+            <el-icon><Switch /></el-icon>
+          </el-button>
+        </el-tooltip>
+        <el-tooltip :content="downloadTooltip(row)" placement="top">
+          <el-button
+            circle
+            size="small"
+            :aria-label="`下载《${row.title}》`"
+            :data-testid="`download-song-${row.id}`"
+            @click.stop="downloadSong(row)"
+          >
+            <el-icon><Download /></el-icon>
           </el-button>
         </el-tooltip>
         <slot name="actions" :row="row" :index="$index"></slot>
@@ -175,6 +190,7 @@
     v-model="customSourceDialogVisible"
     :song="customSourceSong"
   />
+  <SourceSwitchDialog v-model="switchDialogVisible" :song="switchDialogSong" />
   </div>
 </template>
 
@@ -185,6 +201,7 @@ import { useRouter } from 'vue-router'
 import { usePlayerStore } from '@/store/player'
 import { useUserStore } from '@/store/user'
 import { useDislikeStore } from '@/store/dislike'
+import { useDownloadStore } from '@/store/downloads'
 import ReviewPanel from './ReviewPanel.vue'
 import { fmtDuration, fmtCount, fmtDateTime } from '@/utils/format'
 import { pageSelectionState } from '@/utils/songSelection'
@@ -192,6 +209,7 @@ import { customSourceStorageKeyForOwner, readCustomSources } from '@/utils/custo
 import Cover from './Cover.vue'
 
 const CustomSourcePlaybackDialog = defineAsyncComponent(() => import('./CustomSourcePlaybackDialog.vue'))
+const SourceSwitchDialog = defineAsyncComponent(() => import('./SourceSwitchDialog.vue'))
 
 const props = defineProps({
   songs: { type: Array, default: () => [] },
@@ -216,6 +234,7 @@ const emit = defineEmits(['play', 'toggle-favorite', 'add-queue', 'toggle-select
 const playerStore = usePlayerStore()
 const userStore = useUserStore()
 const dislikeStore = useDislikeStore()
+const downloadStore = useDownloadStore()
 const router = useRouter()
 const sourceOwner = computed(() => userStore.userInfo?.id ?? userStore.userInfo?.username ?? 'local')
 const sourceStorageKey = computed(() => customSourceStorageKeyForOwner(sourceOwner.value))
@@ -262,6 +281,36 @@ function openCustomSourcePlayback(song) {
   if (!hasCustomSources.value) return
   customSourceSong.value = song
   customSourceDialogVisible.value = true
+}
+
+const switchDialogVisible = ref(false)
+const switchDialogSong = ref(null)
+
+/** 换源不要求已有地址：即使当前曲目失效，也可以重新找可用音源。 */
+function switchSource(row) {
+  switchDialogSong.value = row
+  switchDialogVisible.value = true
+}
+
+/** 下载必须先有可播放地址：优先自定义源解析结果，其次曲库音频地址。 */
+function downloadTooltip(row) {
+  return row?.audioUrl ? `下载《${row.title}》` : `《${row.title}》还没有可下载地址，可先用自定义源解析后再下载`
+}
+
+function downloadSong(row) {
+  if (!row?.audioUrl) {
+    ElMessage.warning('这首歌还没有音频地址；请先用自定义源解析播放，或选择已有直链的曲目')
+    return
+  }
+  const created = downloadStore.enqueue({
+    song: { ...row },
+    url: row.audioUrl,
+    quality: row.sourceQuality || row.quality || '',
+    sourcePlatform: row.sourcePlatform || '',
+    sourceName: row.sourceName || ''
+  })
+  if (created.length) ElMessage.success(`已加入下载队列：${row.title}`)
+  else ElMessage.warning(downloadStore.statusMessage || '无法加入下载队列')
 }
 
 function canDislike(row) {

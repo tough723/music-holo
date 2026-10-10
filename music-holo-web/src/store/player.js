@@ -2,7 +2,9 @@ import { defineStore } from 'pinia'
 import * as songApi from '@/api/song'
 import * as lyricApi from '@/api/lyric'
 import { useDislikeStore } from '@/store/dislike'
-import { findAdvanceIndex } from '@/utils/dislikeSkip'
+import { findAdvanceIndex, isSkippedByDislike } from '@/utils/dislikeSkip'
+import { heartWeight, nextHeartIndex, nextShuffleIndex, shuffleList } from '@/utils/playMode'
+import { EQ_FLAT_GAINS, EQ_PRESETS, matchEqualizerPreset, normalizeEqualizerGains, presetGains } from '@/utils/spatialAudio'
 
 const PLAYER_KEY = 'mh_player'
 
@@ -11,12 +13,171 @@ export const MODES = [
   { key: 'order', label: '顺序播放' },
   { key: 'loop', label: '列表循环' },
   { key: 'single', label: '单曲循环' },
-  { key: 'random', label: '随机播放' }
+  { key: 'random', label: '随机播放' },
+  { key: 'shuffle', label: '不重复随机' },
+  { key: 'heart', label: '心动模式' }
 ]
+/** 需要额外状态（随机袋 / 权重）的模式。 */
+export const STATEFUL_MODES = Object.freeze(['shuffle', 'heart'])
 
 export const SLEEP_TIMER_MINUTES = [15, 30, 45, 60]
+
+/** 交叉淡入淡出时长（毫秒）：默认关闭，开启后切歌时旧音轨淡出、新音轨淡入。 */
+export const CROSSFADE_OFF = 0
+export const CROSSFADE_OPTIONS = Object.freeze([0, 30, 60, 120])
+export const CROSSFADE_MAX_MS = 120
+
+export function normalizeCrossfade(ms) {
+  const value = Number(ms)
+  if (!Number.isFinite(value)) return CROSSFADE_OFF
+  const matched = CROSSFADE_OPTIONS.find((option) => Math.abs(option - value) < 0.5)
+  return matched ?? CROSSFADE_OFF
+}
+
+/** 可选播放速度；只接受这些档位，避免异常倍速把音频解码器拖垮。 */
+export const PLAYBACK_RATES = Object.freeze([0.5, 0.75, 1, 1.25, 1.5, 1.75, 2])
+/** 短于这个进度不值得续播（大概率只听了片头）。 */
+export const RESUME_MIN_SECONDS = 5
+/** 距离结尾这么近就从头开始，避免续播后立刻切歌。 */
+export const RESUME_TAIL_GUARD_SECONDS = 15
+
+/** 迷你/沉浸形态的停靠位置：吸底 / 靠左 / 靠右。 */
+export const PLAYER_DOCKS = Object.freeze([
+  { key: 'bottom', label: '吸底' },
+  { key: 'left', label: '靠左' },
+  { key: 'right', label: '靠右' }
+])
+const PLAYER_DOCK_KEYS = PLAYER_DOCKS.map((item) => item.key)
+
+/**
+ * 会话恢复需要一个「按 id 取曲目」的解析器（曲库/歌单数据在各页面手上，store 不持有曲库）。
+ * 注册后「继续上次的收听」才能把队列拼回来；未注册时续播入口会给出明确提示而不是假装成功。
+ */
+let sessionSongResolver = null
+
+export function setSessionSongResolver(resolver) {
+  sessionSongResolver = typeof resolver === 'function' ? resolver : null
+}
+
+export function getSessionSongResolver() {
+  return sessionSongResolver
+}
+
+/** 会话快照：整份队列 + 播放位置 + 模式 + 倍速，冷启动后可询问“继续上次的收听”。 */
+export const SESSION_SNAPSHOT_VERSION = 1
+/** 快照有效期（毫秒）：超过就当作陈旧，不再提示续播。 */
+export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
+
+export function normalizeSessionSnapshot(saved = {}) {
+  const source = saved && typeof saved === 'object' ? saved : {}
+  if (Number(source.version) !== SESSION_SNAPSHOT_VERSION) return null
+  const ids = Array.isArray(source.queueIds) ? source.queueIds.filter((id) => id != null).slice(0, 500) : []
+  if (ids.length === 0) return null
+  const savedAt = Number(source.savedAt)
+  if (!Number.isFinite(savedAt) || savedAt <= 0) return null
+  return {
+    version: SESSION_SNAPSHOT_VERSION,
+    queueIds: ids,
+    currentSongId: source.currentSongId ?? null,
+    position: Math.max(0, Number(source.position) || 0),
+    mode: MODES.some((item) => item.key === source.mode) ? source.mode : 'order',
+    playbackRate: normalizePlaybackRate(source.playbackRate ?? 1),
+    savedAt
+  }
+}
+
+export function isSessionSnapshotFresh(snapshot, now = Date.now()) {
+  if (!snapshot) return false
+  const savedAt = Number(snapshot.savedAt)
+  return Number.isFinite(savedAt) && now - savedAt >= 0 && now - savedAt < SESSION_TTL_MS
+}
+
+export function normalizePlayerDock(value) {
+  return PLAYER_DOCK_KEYS.includes(value) ? value : 'bottom'
+}
+
+/**
+ * 播放器形态：标准（完整播放条）/ 迷你（收成一条，只留核心控制）/ 沉浸（全屏歌词舞台 + 极简条）。
+ * 只影响界面布局，不改变播放行为；桌面端可据此调整窗口，Web 端只改浮层形态。
+ */
+export const PLAYER_VIEW_MODES = Object.freeze([
+  { key: 'standard', label: '标准', desc: '完整播放条：全部控件与进度条' },
+  { key: 'mini', label: '迷你', desc: '收窄成一条，只留播放控制与进度' },
+  { key: 'stage', label: '播放页', desc: '全屏播放页：大封面 + 当前队列' },
+  { key: 'immersive', label: '沉浸', desc: '全屏歌词舞台 + 极简控制条' }
+])
+const PLAYER_VIEW_MODE_KEYS = PLAYER_VIEW_MODES.map((mode) => mode.key)
+
+export function normalizePlayerViewMode(value) {
+  return PLAYER_VIEW_MODE_KEYS.includes(value) ? value : 'standard'
+}
+
+/** 播放统计只保留最近/最常听的一批，避免 localStorage 无限增长。 */
+export const PLAY_STATS_LIMIT = 300
+
+export function normalizePlayStats(saved = {}) {
+  const source = saved && typeof saved === 'object' ? saved : {}
+  const entries = Object.entries(source)
+    .filter(([id, value]) => id && value && typeof value === 'object')
+    .map(([id, value]) => [String(id), {
+      count: Math.max(0, Number(value.count) || 0),
+      completed: Math.max(0, Number(value.completed) || 0),
+      skipped: Math.max(0, Number(value.skipped) || 0),
+      updatedAt: Number(value.updatedAt) || 0
+    }])
+  entries.sort((a, b) => (b[1].updatedAt || 0) - (a[1].updatedAt || 0))
+  return Object.fromEntries(entries.slice(0, PLAY_STATS_LIMIT))
+}
+
+/** 均衡器偏好：预设键 + 增益数组，非法值回落到原声。 */
+export function normalizeEqualizerState(saved = {}) {
+  const source = saved && typeof saved === 'object' ? saved : {}
+  const preset = EQ_PRESETS.some((item) => item.key === source.preset) ? source.preset : 'custom'
+  const gains = preset === 'custom'
+    ? normalizeEqualizerGains(source.gains)
+    : presetGains(preset)
+  return { preset: matchEqualizerPreset(gains), gains }
+}
+
+/** 歌词显示偏好：字号档位与缩放系数。 */
+export const LYRIC_FONT_SIZES = Object.freeze([
+  { key: 'small', label: '小', scale: 0.86 },
+  { key: 'medium', label: '中', scale: 1 },
+  { key: 'large', label: '大', scale: 1.2 }
+])
+/** 歌词时间校准：单次步进与上下限（毫秒）。正值＝歌词提前出现。 */
+export const LYRIC_OFFSET_STEP_MS = 500
+export const LYRIC_OFFSET_LIMIT_MS = 5000
+
+/** 把任意输入收敛成合法的歌词显示偏好。 */
+export function normalizeLyricView(saved = {}) {
+  const source = saved && typeof saved === 'object' ? saved : {}
+  const offset = Number(source.offsetMs)
+  return {
+    showTranslation: source.showTranslation !== false,
+    showRomaji: source.showRomaji === true,
+    showVerbatim: source.showVerbatim !== false,
+    immersive: source.immersive === true,
+    fontSize: LYRIC_FONT_SIZES.some((item) => item.key === source.fontSize) ? source.fontSize : 'medium',
+    offsetMs: Number.isFinite(offset)
+      ? Math.max(-LYRIC_OFFSET_LIMIT_MS, Math.min(LYRIC_OFFSET_LIMIT_MS, Math.round(offset / 10) * 10))
+      : 0
+  }
+}
+
 const AUDIO_FILE_EXTENSION = /\.(aac|aif|aiff|flac|m4a|mp3|oga|ogg|opus|wav|weba|webm)$/i
 const sleepTimerHandles = new WeakMap()
+
+/** 把任意输入收敛到受支持的倍速档位。 */
+export function normalizePlaybackRate(rate) {
+  const value = Number(rate)
+  if (!Number.isFinite(value) || value <= 0) return 1
+  let closest = PLAYBACK_RATES[0]
+  for (const candidate of PLAYBACK_RATES) {
+    if (Math.abs(candidate - value) < Math.abs(closest - value)) closest = candidate
+  }
+  return closest
+}
 
 function clearSleepTimerTimeout(store) {
   const handle = sleepTimerHandles.get(store)
@@ -99,7 +260,25 @@ function persist(state) {
     currentIndex,
     priorityNextSongId,
     mode: state.mode,
-    volume: state.volume
+    volume: state.volume,
+    muted: Boolean(state.muted),
+    playbackRate: normalizePlaybackRate(state.playbackRate),
+    // 断点续播只记曲库歌曲：播放器只在曲目非本地、非自定义源时才写入这两个字段。
+    resumeSongId: state.resumeSongId ?? null,
+    resumeTime: Math.max(0, Number(state.resumeTime) || 0),
+    // 歌词显示偏好（译文/罗马音/逐字/沉浸/字号/时间校准）跨会话保留。
+    lyricView: normalizeLyricView(state.lyricView),
+    // 空间音效是输出偏好：记住用户上次的开关，下一次用户手势触发播放时自动套用。
+    spatialPreferred: Boolean(state.spatialPreferred),
+    crossfadeMs: normalizeCrossfade(state.crossfadeMs),
+    sessionSnapshot: normalizeSessionSnapshot(state.sessionSnapshot),
+    playerViewMode: normalizePlayerViewMode(state.playerViewMode),
+    playerBarDock: normalizePlayerDock(state.playerBarDock),
+    playerBarAutoHide: state.playerBarAutoHide !== false,
+    autoSkipOnError: state.autoSkipOnError === true,
+    equalizer: normalizeEqualizerState(state.equalizer),
+    shuffleBag: (state.shuffleBag || []).slice(0, 500),
+    playStats: normalizePlayStats(state.playStats)
   }))
 }
 
@@ -128,11 +307,41 @@ export const usePlayerStore = defineStore('player', {
       priorityNextSongId,
       playing: false,
       volume: typeof saved.volume === 'number' && Number.isFinite(saved.volume) ? Math.max(0, Math.min(1, saved.volume)) : 0.8,
+      /** 静音时保留静音前的音量，取消静音可原样恢复。 */
+      muted: saved.muted === true,
+      /** 播放速度：只取受支持的档位。 */
+      playbackRate: normalizePlaybackRate(saved.playbackRate ?? 1),
+      /** 断点续播：歌曲 id + 上次进度（秒）。 */
+      resumeSongId: saved.resumeSongId ?? null,
+      resumeTime: Number.isFinite(Number(saved.resumeTime)) ? Math.max(0, Number(saved.resumeTime)) : 0,
       mode: MODES.some((mode) => mode.key === saved.mode) ? saved.mode : 'order',
+      /** 原歌词与可选译文歌词 */
+      lyricView: normalizeLyricView(saved.lyricView),
+      /** 上次是否开着 3D 空间音效（只是偏好，实际是否生效取决于音源与浏览器）。 */
+      spatialPreferred: saved.spatialPreferred === true,
+      /** 切歌交叉淡入淡出时长（毫秒，0 = 关闭）。 */
+      crossfadeMs: normalizeCrossfade(saved.crossfadeMs),
+      /** 上次收听的会话快照（队列 id + 位置 + 模式 + 倍速），只在用户确认后恢复。 */
+      sessionSnapshot: normalizeSessionSnapshot(saved.sessionSnapshot),
+      /** 播放器形态：standard / mini / immersive。 */
+      playerViewMode: normalizePlayerViewMode(saved.playerViewMode),
+      /** 迷你/沉浸形态的停靠位置与贴边自动隐藏。 */
+      playerBarDock: normalizePlayerDock(saved.playerBarDock),
+      playerBarAutoHide: saved.playerBarAutoHide !== false,
+      autoSkipOnError: saved.autoSkipOnError === true,
+      /** 均衡器：预设名 + 实际增益（dB，按 EQ_BANDS 顺序）。 */
+      equalizer: normalizeEqualizerState(saved.equalizer),
+      /** 不重复随机的剩余曲目（存歌曲 id，队列增删后自动失效重洗）。 */
+      shuffleBag: Array.isArray(saved.shuffleBag) ? saved.shuffleBag.filter((id) => id != null).slice(0, 500) : [],
+      /** 本机播放统计（只是一份本地偏好，不上传服务端）：{ [songId]: { count, completed, skipped } } */
+      playStats: normalizePlayStats(saved.playStats),
+      /** 当前账号的收藏歌曲 id（由播放器写入，只用于心动模式加权，不持久化）。 */
+      favoriteIds: [],
       /** 原歌词与可选译文歌词 */
       lyrics: [],
       lyricTranslations: [],
       lyricRomaji: [],
+      lyricVerbatim: [],
       lyricLoadRequestId: 0,
       lyricVisible: false,
       /** 播放进度（秒，由播放器组件实时更新） */
@@ -149,7 +358,15 @@ export const usePlayerStore = defineStore('player', {
     currentSong: (state) => (state.currentIndex >= 0 && state.currentIndex < state.queue.length
       ? state.queue[state.currentIndex]
       : null),
-    modeLabel: (state) => MODES.find((m) => m.key === state.mode)?.label || '顺序播放'
+    modeLabel: (state) => MODES.find((m) => m.key === state.mode)?.label || '顺序播放',
+    /** 队列总时长（秒）；本地文件未读到元数据时按 0 计。 */
+    queueDuration: (state) => (state.queue || []).reduce((total, song) => total + Math.max(0, Number(song?.duration) || 0), 0),
+    /** 均衡器当前增益（dB）。 */
+    equalizerGains: (state) => normalizeEqualizerGains(state.equalizer?.gains),
+    /** 均衡器是否处于非原声状态（决定是否值得为此接入音频处理链路）。 */
+    equalizerActive() {
+      return this.equalizerGains.some((value) => Math.abs(value) >= 0.01)
+    }
   },
   actions: {
     /** 将用户选择的音频文件加入本地队列；文件只留在浏览器内，不上传服务器。 */
@@ -374,6 +591,7 @@ export const usePlayerStore = defineStore('player', {
         this.lyrics = []
         this.lyricTranslations = []
         this.lyricRomaji = []
+        this.lyricVerbatim = []
         persist(this)
         return
       }
@@ -394,10 +612,53 @@ export const usePlayerStore = defineStore('player', {
           this.lyrics = []
           this.lyricTranslations = []
           this.lyricRomaji = []
+          this.lyricVerbatim = []
         }
       }
     },
     /** 清空播放队列 */
+    /**
+     * 批量移动：把多个队列位置移到目标位置之后（保持它们的相对顺序）。
+     * @param {number[]} indices 要移动的下标
+     * @param {number} targetIndex 插入到它之后；传 -1 表示移到队首
+     */
+    moveQueueItems(indices, targetIndex) {
+      const list = Array.isArray(indices) ? indices.filter((index) => Number.isInteger(index)) : []
+      if (list.length === 0) return 0
+      const target = Number(targetIndex)
+      const activeSong = this.currentSong
+      const unique = [...new Set(list)].sort((a, b) => a - b)
+      const moving = unique.filter((index) => index >= 0 && index < this.queue.length).map((index) => this.queue[index])
+      if (moving.length === 0) return 0
+
+      const rest = this.queue.filter((_, index) => !unique.includes(index))
+      // 目标项本身被移动时它不在 rest 里，此时整组放回队首（相对顺序不变）。
+      const anchor = Number.isInteger(target) && target >= 0 ? this.queue[target] : null
+      const anchorInRest = anchor ? rest.indexOf(anchor) : -1
+      const insertAt = anchor ? anchorInRest + 1 : 0
+      this.queue = [...rest.slice(0, insertAt), ...moving, ...rest.slice(insertAt)]
+      this.currentIndex = activeSong ? this.queue.indexOf(activeSong) : -1
+      this.priorityNextSongId = null
+      this.shuffleBag = []
+      persist(this)
+      return moving.length
+    },
+    /** 批量移除队列位置。 */
+    removeQueueItems(indices) {
+      const list = Array.isArray(indices) ? indices.filter((index) => Number.isInteger(index)) : []
+      if (list.length === 0) return 0
+      const unique = new Set(list.filter((index) => index >= 0 && index < this.queue.length))
+      if (unique.size === 0) return 0
+      const activeSong = this.currentSong
+      const removed = this.queue.filter((_, index) => unique.has(index))
+      this.queue = this.queue.filter((_, index) => !unique.has(index))
+      this.currentIndex = activeSong ? this.queue.indexOf(activeSong) : -1
+      this.priorityNextSongId = null
+      this.shuffleBag = []
+      persist(this)
+      releaseLocalSongs(removed)
+      return removed.length
+    },
     clearQueue() {
       this.cancelSleepTimer()
       const previousQueue = this.queue
@@ -409,6 +670,7 @@ export const usePlayerStore = defineStore('player', {
       this.lyrics = []
       this.lyricTranslations = []
       this.lyricRomaji = []
+      this.lyricVerbatim = []
       persist(this)
       releaseLocalSongs(previousQueue)
     },
@@ -428,6 +690,14 @@ export const usePlayerStore = defineStore('player', {
       }
       if (this.mode === 'random' && this.queue.length === 1) {
         return afterPlay(this.playAt(0), { played: true, blocked: false, skippedCount: 0 })
+      }
+      if (this.mode === 'shuffle' || this.mode === 'heart') {
+        const found = this.nextStatefulIndex()
+        if (found.index == null) {
+          this.playing = false
+          return { played: false, blocked: false, skippedCount: 0 }
+        }
+        return afterPlay(this.playAt(found.index), { played: true, blocked: false, skippedCount: 0 })
       }
       const found = findAdvanceIndex(this.queue, this.currentIndex, 1, this.mode, currentDislikeRules())
       if (found.index == null) {
@@ -456,10 +726,12 @@ export const usePlayerStore = defineStore('player', {
     setMode(mode) {
       if (!MODES.some((item) => item.key === mode)) return false
       this.mode = mode
+      // 换模式就重开一轮，避免沿用上一个模式的随机袋。
+      this.shuffleBag = []
       persist(this)
       return true
     },
-    /** 切换播放模式（顺序 -> 列表循环 -> 单曲循环 -> 随机）。 */
+    /** 按 MODES 顺序切换（顺序 → 列表循环 → 单曲循环 → 随机 → 不重复随机 → 心动模式）。 */
     toggleMode() {
       const idx = MODES.findIndex((m) => m.key === this.mode)
       return this.setMode(MODES[(idx + 1) % MODES.length].key)
@@ -468,8 +740,105 @@ export const usePlayerStore = defineStore('player', {
       const value = Number(volume)
       if (!Number.isFinite(value)) return false
       this.volume = Math.max(0, Math.min(1, value))
+      // 拖动音量即视为要出声：音量大于 0 时自动解除静音。
+      if (this.volume > 0) this.muted = false
       persist(this)
       return true
+    },
+    /** 静音/取消静音。取消静音时若当前音量为 0，恢复到默认音量而不是“无声的取消静音”。 */
+    setMuted(muted) {
+      const next = Boolean(muted)
+      if (next === this.muted) return false
+      if (!next && this.volume <= 0) this.volume = 0.8
+      this.muted = next
+      persist(this)
+      return true
+    },
+    toggleMuted() {
+      return this.setMuted(!this.muted)
+    },
+    setPlaybackRate(rate) {
+      const next = normalizePlaybackRate(rate)
+      if (next === this.playbackRate) return false
+      this.playbackRate = next
+      persist(this)
+      return true
+    },
+    /** 在受支持的档位里循环切换倍速。 */
+    cyclePlaybackRate() {
+      const index = PLAYBACK_RATES.indexOf(this.playbackRate)
+      const next = PLAYBACK_RATES[(index + 1) % PLAYBACK_RATES.length]
+      return this.setPlaybackRate(next) ? next : this.playbackRate
+    },
+    /** 记录续播位置；由播放器节流调用，避免频繁写 localStorage。 */
+    saveResumePosition(songId, time) {
+      const seconds = Number(time)
+      if (songId === undefined || songId === null || !Number.isFinite(seconds)) return false
+      if (this.resumeSongId === songId && Math.abs((this.resumeTime || 0) - seconds) < 1) return false
+      this.resumeSongId = songId
+      this.resumeTime = Math.max(0, seconds)
+      persist(this)
+      return true
+    },
+    /** 取出某首歌的续播位置（秒）；太靠近开头或结尾都返回 0。取出后即清除。 */
+    consumeResumePosition(songId, duration = 0) {
+      if (songId === undefined || songId === null || this.resumeSongId !== songId) return 0
+      const saved = Math.max(0, Number(this.resumeTime) || 0)
+      const total = Number(duration) || 0
+      this.clearResumePosition()
+      if (saved < RESUME_MIN_SECONDS) return 0
+      if (total > 0 && saved > total - RESUME_TAIL_GUARD_SECONDS) return 0
+      return saved
+    },
+    clearResumePosition() {
+      const changed = this.resumeSongId !== null || this.resumeTime !== 0
+      this.resumeSongId = null
+      this.resumeTime = 0
+      if (changed) persist(this)
+      return changed
+    },
+    /** 打乱播放队列：正在播放的曲目移到队首并继续播放，其余随机重排。 */
+    shuffleQueue() {
+      if (this.queue.length < 2) return false
+      const activeSong = this.currentSong
+      const rest = this.queue.filter((song) => song !== activeSong)
+      for (let i = rest.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1))
+        ;[rest[i], rest[j]] = [rest[j], rest[i]]
+      }
+      this.queue = activeSong ? [activeSong, ...rest] : rest
+      this.currentIndex = activeSong ? 0 : -1
+      this.priorityNextSongId = null
+      this.shuffleBag = []
+      persist(this)
+      return true
+    },
+    /** 去掉队列中重复的曲目（同一 id 只保留第一次出现），保持当前曲目不变。 */
+    dedupeQueue() {
+      if (this.queue.length === 0) return 0
+      const seen = new Set()
+      const removed = []
+      const next = []
+      for (const song of this.queue) {
+        const key = song?.id
+        if (key !== undefined && key !== null) {
+          if (seen.has(key)) {
+            removed.push(song)
+            continue
+          }
+          seen.add(key)
+        }
+        next.push(song)
+      }
+      if (removed.length === 0) return 0
+      const activeSong = this.currentSong
+      this.queue = next
+      this.currentIndex = activeSong ? this.queue.indexOf(activeSong) : -1
+      this.priorityNextSongId = null
+      this.shuffleBag = []
+      persist(this)
+      releaseLocalSongs(removed)
+      return removed.length
     },
     /** 加载当前歌曲的原歌词与时间对齐译文 */
     async loadLyrics(song) {
@@ -478,12 +847,14 @@ export const usePlayerStore = defineStore('player', {
         this.lyrics = Array.isArray(song.customLyrics) ? song.customLyrics : []
         this.lyricTranslations = Array.isArray(song.customTranslationLyrics) ? song.customTranslationLyrics : []
         this.lyricRomaji = Array.isArray(song.customRomajiLyrics) ? song.customRomajiLyrics : []
+        this.lyricVerbatim = Array.isArray(song.customVerbatimLyrics) ? song.customVerbatimLyrics : []
         return
       }
       if (!song?.id || song.isLocal) {
         this.lyrics = []
         this.lyricTranslations = []
         this.lyricRomaji = []
+        this.lyricVerbatim = []
         return
       }
       try {
@@ -492,15 +863,227 @@ export const usePlayerStore = defineStore('player', {
         this.lyrics = Array.isArray(res?.lines) ? res.lines : []
         this.lyricTranslations = Array.isArray(res?.translationLines) ? res.translationLines : []
         this.lyricRomaji = Array.isArray(res?.romajiLines) ? res.romajiLines : []
+        this.lyricVerbatim = Array.isArray(res?.verbatimLines) ? res.verbatimLines : []
       } catch (e) {
         if (requestId !== this.lyricLoadRequestId) return
         this.lyrics = []
         this.lyricTranslations = []
         this.lyricRomaji = []
+        this.lyricVerbatim = []
       }
+    },
+    /**
+     * 快速换源：用新的音频地址替换当前曲目（保留队列位置与播放进度）。
+     * 只改播放地址与来源标注，不动曲库身份（id 不变，歌词/收藏等仍然有效）。
+     */
+    applySourceToCurrent({ audioUrl, sourceName = '', sourcePlatform = '', sourceQuality = '', isCustomSource = true }) {
+      const index = this.currentIndex
+      if (index < 0 || index >= this.queue.length) return false
+      const url = String(audioUrl || '').trim()
+      if (!url) return false
+      const previous = this.queue[index]
+      const resumeAt = this.currentTime
+      // 整项替换而不是就地改属性：currentSong 计算属性才会重新求值并触发播放器重新加载。
+      this.queue[index] = {
+        ...previous,
+        audioUrl: url,
+        sourceName: String(sourceName || '') || previous.sourceName,
+        sourcePlatform: String(sourcePlatform || '') || previous.sourcePlatform,
+        sourceQuality: String(sourceQuality || '') || previous.sourceQuality,
+        isCustomSource: Boolean(isCustomSource),
+        sourceSwitchedAt: Date.now()
+      }
+      this.currentTime = resumeAt
+      persist(this)
+      return true
     },
     toggleLyric() {
       this.lyricVisible = !this.lyricVisible
+    },
+    /** 合并歌词显示偏好（译文/罗马音/逐字/沉浸/字号/时间校准），非法值自动收敛。 */
+    setLyricView(patch) {
+      const next = normalizeLyricView({ ...this.lyricView, ...(patch && typeof patch === 'object' ? patch : {}) })
+      this.lyricView = next
+      persist(this)
+      return next
+    },
+    /** 微调歌词时间校准（毫秒，正值＝歌词提前出现），返回校准后的偏移。 */
+    adjustLyricOffset(deltaMs) {
+      const step = Number(deltaMs)
+      if (!Number.isFinite(step)) return this.lyricView.offsetMs
+      const raw = Math.round((this.lyricView.offsetMs + step) / 10) * 10
+      const clamped = Math.max(-LYRIC_OFFSET_LIMIT_MS, Math.min(LYRIC_OFFSET_LIMIT_MS, raw))
+      return this.setLyricView({ offsetMs: clamped }).offsetMs
+    },
+    /** 清除歌词时间校准。 */
+    resetLyricOffset() {
+      return this.setLyricView({ offsetMs: 0 }).offsetMs
+    },
+    /** 选择均衡器预设。 */
+    setEqualizerPreset(key) {
+      const preset = EQ_PRESETS.find((item) => item.key === key)
+      if (!preset) return this.equalizer.preset
+      this.equalizer = { preset: preset.key, gains: presetGains(preset.key) }
+      persist(this)
+      return preset.key
+    },
+    /** 自定义某一频段增益（dB），自动切到 custom。 */
+    setEqualizerBand(index, gain) {
+      const gains = this.equalizerGains
+      const position = Number(index)
+      if (!Number.isInteger(position) || position < 0 || position >= gains.length) return this.equalizer.preset
+      gains[position] = Number(gain)
+      const normalized = normalizeEqualizerGains(gains)
+      this.equalizer = { preset: matchEqualizerPreset(normalized), gains: normalized }
+      persist(this)
+      return this.equalizer.preset
+    },
+    /** 恢复原声。 */
+    resetEqualizer() {
+      this.equalizer = { preset: 'flat', gains: EQ_FLAT_GAINS.slice() }
+      persist(this)
+      return 'flat'
+    },
+    /**
+     * 不重复随机 / 心动模式的下一首。
+     * 不重复随机用“随机袋”保证一轮内不重复；心动模式按收藏与本机播放统计加权。
+     */
+    nextStatefulIndex() {
+      const rules = currentDislikeRules()
+      const isSkipped = (song, ruleSet) => isSkippedByDislike(song, ruleSet)
+      if (this.mode === 'shuffle') {
+        const result = nextShuffleIndex({
+          queue: this.queue,
+          currentIndex: this.currentIndex,
+          bag: this.shuffleBag,
+          rules,
+          isSkipped
+        })
+        this.shuffleBag = result.bag
+        return { index: result.index }
+      }
+      if (this.mode === 'heart') {
+        const favorites = new Set(this.favoriteIds || [])
+        const entries = []
+        for (let i = 0; i < this.queue.length; i++) {
+          if (i === this.currentIndex) continue
+          const song = this.queue[i]
+          if (isSkipped(song, rules)) continue
+          entries.push({
+            index: i,
+            weight: heartWeight({ isFavorite: favorites.has(song?.id), stats: this.playStats[song?.id] })
+          })
+        }
+        return { index: nextHeartIndex({ entries }) }
+      }
+      return { index: null }
+    },
+    /** 收藏 id 由播放器写入，只用于心动模式加权。 */
+    setFavoriteIds(ids) {
+      this.favoriteIds = Array.isArray(ids) ? ids.filter((id) => id != null) : []
+    },
+    /** 记录一次播放结果（本机统计：完整播放 / 中途切走），只存在本地不上传。 */
+    recordPlayEvent(songId, type = 'play') {
+      if (songId === undefined || songId === null || songId === '') return null
+      const key = String(songId)
+      const stats = normalizePlayStats(this.playStats)
+      const current = stats[key] || { count: 0, completed: 0, skipped: 0, updatedAt: 0 }
+      current.count += 1
+      if (type === 'completed') current.completed += 1
+      if (type === 'skipped') current.skipped += 1
+      current.updatedAt = Date.now()
+      stats[key] = current
+      this.playStats = normalizePlayStats(stats)
+      persist(this)
+      return current
+    },
+    /**
+     * 保存整份会话（队列 + 位置 + 模式 + 倍速）。
+     * 只存曲库歌曲（本地 blob 与自定义源签名地址不入库），恢复时由调用方按 id 重新取曲目。
+     */
+    saveSessionSnapshot({ now = Date.now() } = {}) {
+      const queueIds = this.queue
+        .filter((song) => !song?.isLocal && !song?.isCustomSource && song?.id != null)
+        .map((song) => song.id)
+      if (queueIds.length === 0) {
+        this.sessionSnapshot = null
+        persist(this)
+        return null
+      }
+      // 当前曲目本身不可恢复（本地文件/自定义源）时位置没有意义，记为 0。
+      const restorable = this.currentIndex >= 0 && queueIds.includes(this.currentSong?.id)
+      const position = restorable ? Math.max(0, Number(this.currentTime) || 0) : 0
+      this.sessionSnapshot = normalizeSessionSnapshot({
+        version: SESSION_SNAPSHOT_VERSION,
+        queueIds,
+        currentSongId: this.currentSong?.id ?? null,
+        position,
+        mode: this.mode,
+        playbackRate: this.playbackRate,
+        savedAt: now
+      })
+      persist(this)
+      return this.sessionSnapshot
+    },
+    /** 恢复会话：返回需要重新加载的队列 id 与目标位置，调用方取回曲目后 playAll。 */
+    consumeSessionSnapshot() {
+      const snapshot = this.sessionSnapshot
+      this.sessionSnapshot = null
+      persist(this)
+      if (!snapshot) return null
+      return {
+        queueIds: snapshot.queueIds.slice(),
+        currentSongId: snapshot.currentSongId,
+        position: snapshot.position,
+        mode: snapshot.mode,
+        playbackRate: snapshot.playbackRate
+      }
+    },
+    /** 丢弃会话快照（用户选择“不继续”）。 */
+    clearSessionSnapshot() {
+      this.sessionSnapshot = null
+      persist(this)
+    },
+    /** 切歌交叉淡入淡出：只接受 0/30/60/120 毫秒，默认关闭。 */
+    setCrossfade(ms) {
+      this.crossfadeMs = normalizeCrossfade(ms)
+      persist(this)
+      return this.crossfadeMs
+    },
+    /** 迷你/沉浸形态的停靠位置（bottom / left / right）。 */
+    setPlayerBarDock(dock) {
+      this.playerBarDock = normalizePlayerDock(dock)
+      persist(this)
+      return this.playerBarDock
+    },
+    /** 贴边时鼠标离开是否自动淡出。 */
+    setPlayerBarAutoHide(enabled) {
+      this.playerBarAutoHide = enabled !== false
+      persist(this)
+      return this.playerBarAutoHide
+    },
+    /** 播放失败（自动重试也用尽）后是否自动跳到下一首。默认关闭：静默换歌比停在那里更容易让人困惑。 */
+    setAutoSkipOnError(enabled) {
+      this.autoSkipOnError = enabled === true
+      persist(this)
+      return this.autoSkipOnError
+    },
+    /** 切换播放器形态（标准 / 迷你 / 沉浸）。 */
+    setPlayerViewMode(mode) {
+      this.playerViewMode = normalizePlayerViewMode(mode)
+      persist(this)
+      return this.playerViewMode
+    },
+    /** 按顺序循环：标准 → 迷你 → 沉浸 → 标准。 */
+    cyclePlayerViewMode() {
+      const index = PLAYER_VIEW_MODE_KEYS.indexOf(normalizePlayerViewMode(this.playerViewMode))
+      return this.setPlayerViewMode(PLAYER_VIEW_MODE_KEYS[(index + 1) % PLAYER_VIEW_MODE_KEYS.length])
+    },
+    /** 记住空间音效开关；音源不支持时不清除偏好，下次遇到可用音源仍会套用。 */
+    setSpatialPreferred(preferred) {
+      this.spatialPreferred = preferred === true
+      persist(this)
+      return this.spatialPreferred
     }
   }
 })

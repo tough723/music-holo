@@ -10,6 +10,8 @@
     "build:e2e": "vite build --mode test --outDir dist-e2e",
     "test": "vitest run --environment jsdom",
     "test:e2e": "playwright test",
+    "test:e2e:journeys": "playwright test --grep-invert @live",
+    "test:e2e:live": "playwright test --grep @live",
     "preview": "vite preview",
     "preview:e2e": "vite preview --host 127.0.0.1 --port 4173 --strictPort --outDir dist-e2e",
     "gen:audio": "node scripts/gen-audio.mjs"

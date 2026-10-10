@@ -171,6 +171,22 @@ CREATE TABLE `user_song_dislike` (
   UNIQUE KEY `uk_user_song_dislike` (`user_id`, `song_id`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '用户不喜欢的歌曲';
 
+-- ------------------------------------------------------------
+-- 歌词时间轴校正上报（众包，只记偏移不记歌词内容）
+-- ------------------------------------------------------------
+DROP TABLE IF EXISTS `lyric_offset_correction`;
+CREATE TABLE `lyric_offset_correction` (
+  `id`          BIGINT   NOT NULL COMMENT '主键',
+  `user_id`     BIGINT   NOT NULL COMMENT '提交账号',
+  `song_id`     BIGINT   NOT NULL COMMENT '歌曲 id',
+  `offset_ms`   INT      NOT NULL DEFAULT 0 COMMENT '偏移毫秒，正值＝歌词提前出现',
+  `create_time` DATETIME DEFAULT NULL COMMENT '创建时间',
+  `update_time` DATETIME DEFAULT NULL COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_user_song_offset` (`user_id`, `song_id`),
+  KEY `idx_song_offset` (`song_id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '歌词时间轴校正上报';
+
 DROP TABLE IF EXISTS `user_singer_dislike`;
 CREATE TABLE `user_singer_dislike` (
   `id`          BIGINT   NOT NULL COMMENT '主键',

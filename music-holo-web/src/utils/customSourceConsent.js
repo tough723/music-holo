@@ -22,19 +22,46 @@ export function createCustomSourceRequestBridge(source, {
 } = {}) {
   if (desktopSourceBridge() && request === performCustomSourceRequest) return createDesktopSourceRequestBridge(source)
   const approvedOrigins = new Set()
+  const pendingApprovals = new Map()
+  let approvalQueue = Promise.resolve()
   const sourceName = String(source?.name || '自定义音源').slice(0, 80)
+
+  const ensureOriginApproved = async (target, method, signal) => {
+    if (signal?.aborted) throw new Error('网络请求已取消')
+    if (approvedOrigins.has(target.origin)) return
+
+    let approval = pendingApprovals.get(target.origin)
+    if (!approval) {
+      // 音源初始化可能并发请求 IP、版本信息等多个主机。Element Plus 的
+      // MessageBox 是模态框，若并发各自弹确认框，后弹框会盖住先弹框，
+      // 用户既无法逐个授权，自动化也无法点击被遮挡的按钮。域名确认按会话串行，
+      // 同一域名的并发请求共享一个确认结果；网络请求本身仍可并发执行。
+      approval = approvalQueue.then(async () => {
+        if (signal?.aborted) throw new Error('网络请求已取消')
+        if (approvedOrigins.has(target.origin)) return
+        await confirmRequest({ sourceName, method, target, signal })
+        if (signal?.aborted) throw new Error('网络请求已取消')
+        approvedOrigins.add(target.origin)
+      })
+      pendingApprovals.set(target.origin, approval)
+      // 拒绝当前域名不应卡住后续其他域名的授权队列。
+      approvalQueue = approval.then(() => undefined, () => undefined)
+    }
+
+    try {
+      await approval
+    } finally {
+      if (pendingApprovals.get(target.origin) === approval) {
+        pendingApprovals.delete(target.origin)
+      }
+    }
+    if (signal?.aborted) throw new Error('网络请求已取消')
+  }
 
   return async (rawUrl, options, signal) => {
     const target = parseCustomSourceUrl(rawUrl)
-    if (signal?.aborted) throw new Error('网络请求已取消')
-
-    if (!approvedOrigins.has(target.origin)) {
-      const method = String(options?.method || 'GET').toUpperCase()
-      await confirmRequest({ sourceName, method, target, signal })
-      if (signal?.aborted) throw new Error('网络请求已取消')
-      approvedOrigins.add(target.origin)
-    }
-
+    const method = String(options?.method || 'GET').toUpperCase()
+    await ensureOriginApproved(target, method, signal)
     return request(target.href, options, { signal })
   }
 }

@@ -1,4 +1,5 @@
-const { app, BrowserWindow, protocol, net, ipcMain, dialog, session } = require('electron')
+const electron = require('electron')
+const { app, BrowserWindow, protocol, net, ipcMain, dialog, session } = electron
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 const { randomUUID } = require('node:crypto')
@@ -8,10 +9,26 @@ const { sourceRequest, openPublicResponse } = require('./transport.cjs')
 const { SourceSessions } = require('./sessions.cjs')
 const { assertTrustedSender } = require('./ipc-security.cjs')
 const { mediaRange, mediaContentType } = require('./media-policy.cjs')
+const { DownloadManager } = require('./downloads.cjs')
+const { TrayController } = require('./tray.cjs')
+const { ShortcutController, MEDIA_KEYS, isValidAccelerator, SHORTCUT_COMMANDS } = require('./shortcuts.cjs')
+const { LyricWindowController } = require('./lyric-window.cjs')
+const { LocalApiServer } = require('./local-api.cjs')
+const { parseDeepLink, registerProtocol } = require('./deep-link.cjs')
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }])
 const APP_URL = 'app://music-holo/'
-let win, sources
+let win, sources, downloads, tray, shortcuts, lyricWindow, localApi, deepLinks
+const integrationConfig = {
+  tray: false,
+  mediaKeys: true,
+  customShortcuts: {},
+  lyricWindow: false,
+  localApi: false,
+  localApiPort: 17320
+}
+let localApiToken = ''
+const pendingApiCalls = new Map()
 const mediaTickets = new Map()
 const mediaControllers = new Set()
 const promptControllers = new Set()
@@ -35,20 +52,133 @@ async function confirm(name, url, signal) {
   })
   return result.response === 1
 }
+/** 歌词窗发来的控制命令同样只转发给主窗口执行。 */
+function registerLyricWindowIpc() {
+  ipcMain.on('lyric:command', (event, payload) => {
+    if (!lyricWindow?.isOpen || event.sender !== lyricWindow.window.webContents) return
+    dispatchCommand(String(payload?.command || '').slice(0, 32), payload?.payload || {})
+  })
+}
+
 function reset() {
   generation++
-  sources?.closeAll(); mediaTickets.clear()
+  sources?.closeAll(); downloads?.cancelAll(); mediaTickets.clear()
   for (const controller of promptControllers) controller.abort()
   promptControllers.clear()
   for (const controller of mediaControllers) controller.abort()
   mediaControllers.clear()
 }
+/** 把托盘、快捷键、歌词窗与本机 API 的意图统一转给主窗口执行。 */
+function dispatchCommand(command, payload = {}) {
+  if (!win || win.isDestroyed()) return false
+  win.webContents.send('desktop:command', { command: String(command || '').slice(0, 32), payload })
+  return true
+}
+
+async function refreshIntegration() {
+  if (integrationConfig.tray) tray.enable()
+  else tray.disable()
+  shortcuts.apply({ mediaKeys: integrationConfig.mediaKeys, custom: integrationConfig.customShortcuts })
+  if (integrationConfig.lyricWindow) lyricWindow.open()
+  else lyricWindow.close()
+  if (integrationConfig.localApi) {
+    if (!localApiToken) localApiToken = randomUUID().replace(/-/g, '')
+    try {
+      await localApi.start(integrationConfig.localApiPort)
+    } catch (error) {
+      integrationConfig.localApi = false
+      console.error('本机 API 启动失败：', String(error?.message || error))
+    }
+  } else {
+    await localApi.stop().catch(() => {})
+  }
+}
+
+/** 所有 IPC 都校验发送方是主窗口，且只暴露最小能力。 */
+const handle = (name, callback) => ipcMain.handle(name, (event, ...args) => { assertTrustedSender(event, win); return callback(...args) })
+
+function registerDownloadIpc() {
+  handle('download:pickDirectory', async () => {
+    if (!win || win.isDestroyed()) return ''
+    const result = await dialog.showOpenDialog(win, {
+      title: '选择下载保存目录', properties: ['openDirectory', 'createDirectory', 'dontAddToRecent']
+    })
+    return result.canceled || !result.filePaths.length ? '' : result.filePaths[0]
+  })
+  handle('download:pickPath', async (fileName) => {
+    if (!win || win.isDestroyed()) return ''
+    const result = await dialog.showSaveDialog(win, {
+      title: '保存音频文件', defaultPath: String(fileName || 'music-holo-track.mp3'),
+      properties: ['createDirectory', 'showOverwriteConfirmation', 'dontAddToRecent']
+    })
+    return result.canceled || !result.filePath ? '' : result.filePath
+  })
+  handle('download:start', (job) => downloads.start(job || {}))
+  handle('download:cancel', (id) => downloads.cancel(id))
+  handle('download:show', (target) => {
+    const file = String(target || '')
+    if (file) require('electron').shell.showItemInFolder(file)
+  })
+  handle('download:openPath', (target) => {
+    const file = String(target || '')
+    return file ? require('electron').shell.openPath(file) : ''
+  })
+}
+
+function registerIntegrationIpc() {
+  handle('integration:get', () => ({
+    ...integrationConfig,
+    shortcuts: shortcuts.list(),
+    lyricWindowOpen: lyricWindow.isOpen,
+    localApiPort: localApi.port,
+    localApiToken,
+    protocolRegistered: Boolean(deepLinks?.registered),
+    mediaKeysSupported: Object.keys(MEDIA_KEYS)
+  }))
+  handle('integration:configure', async (patch) => {
+    const next = patch && typeof patch === 'object' ? patch : {}
+    if ('tray' in next) integrationConfig.tray = Boolean(next.tray)
+    if ('mediaKeys' in next) integrationConfig.mediaKeys = Boolean(next.mediaKeys)
+    if ('lyricWindow' in next) integrationConfig.lyricWindow = Boolean(next.lyricWindow)
+    if ('localApi' in next) integrationConfig.localApi = Boolean(next.localApi)
+    if ('localApiPort' in next) {
+      const port = Number(next.localApiPort)
+      // 0 表示让系统分配端口（便于测试与端口冲突时自动避让）。
+      if (Number.isInteger(port) && (port === 0 || (port >= 1024 && port <= 65535))) integrationConfig.localApiPort = port
+    }
+    if (next.customShortcuts && typeof next.customShortcuts === 'object') {
+      const cleaned = {}
+      for (const [command, accelerator] of Object.entries(next.customShortcuts)) {
+        if (SHORTCUT_COMMANDS.includes(command) && isValidAccelerator(accelerator)) cleaned[command] = String(accelerator).trim()
+      }
+      integrationConfig.customShortcuts = cleaned
+    }
+    await refreshIntegration()
+    return true
+  })
+  handle('integration:regenerateToken', () => {
+    localApiToken = randomUUID().replace(/-/g, '')
+    return localApiToken
+  })
+  handle('integration:lyricState', (state) => lyricWindow.push(state))
+  handle('integration:lyricOptions', (options) => lyricWindow.setOptions(options || {}))
+  handle('integration:apiRespond', ({ id, result, error } = {}) => {
+    const pending = pendingApiCalls.get(String(id))
+    if (!pending) return false
+    pendingApiCalls.delete(String(id))
+    pending.callback(error ? new Error(String(error)) : null, result)
+    return true
+  })
+  handle('integration:shortcutProbe', (accelerator) => isValidAccelerator(accelerator))
+}
+
 function registerIpc() {
-  const handle = (name, callback) => ipcMain.handle(name, (event, ...args) => { assertTrustedSender(event, win); return callback(...args) })
+  registerIntegrationIpc()
   handle('source:open', (name) => sources.open(name))
   handle('source:close', (id) => sources.close(id))
   handle('source:cancel', (id, requestId) => sources.cancel(id, requestId))
   handle('source:request', (id, requestId, url, options) => sources.run(id, requestId, url, options))
+  registerDownloadIpc()
   handle('source:media', async (rawUrl) => {
     const url = sourceUrl(rawUrl, deniedHosts)
     if (mediaTickets.size + mediaPrompts >= 256 || mediaPrompts >= 2) throw new Error('临时媒体数量或授权并发超过限制，请重启客户端清理')
@@ -155,9 +285,60 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
   session.defaultSession.setPermissionCheckHandler(() => false)
   sources = new SourceSessions({ confirm, request: sourceRequest, deniedHosts })
+  downloads = new DownloadManager({ emit: (event) => { if (win && !win.isDestroyed()) win.webContents.send('download:event', event) } })
+  tray = new TrayController({
+    electron,
+    onCommand: (command) => {
+      if (command === 'quit') { app.quit(); return }
+      if (command === 'show') { if (win && !win.isDestroyed()) { win.show(); win.focus() } return }
+      dispatchCommand(command)
+    }
+  })
+  shortcuts = new ShortcutController({
+    globalShortcut: electron.globalShortcut,
+    onCommand: (command) => {
+      if (command === 'show') { if (win && !win.isDestroyed()) { win.show(); win.focus() } return }
+      dispatchCommand(command)
+    }
+  })
+  lyricWindow = new LyricWindowController({
+    electron,
+    appUrl: APP_URL,
+    onCommand: (command) => dispatchCommand(command)
+  })
+  localApi = new LocalApiServer({
+    getToken: () => localApiToken,
+    logger: (message) => console.info(message),
+    requestRenderer: (command, payload, callback, id) => {
+      pendingApiCalls.set(id, { callback })
+      if (!win || win.isDestroyed()) {
+        pendingApiCalls.delete(id)
+        callback(new Error('主窗口不可用'))
+        return
+      }
+      win.webContents.send('desktop:api', { id, command, payload })
+    }
+  })
   protocol.handle('app', serveApp)
-  registerIpc(); createWindow()
+  registerIpc(); registerLyricWindowIpc(); createWindow()
+  deepLinks = registerProtocol(app, {
+    onLink: (link) => {
+      if (!win || win.isDestroyed()) return false
+      win.webContents.send('desktop:deep-link', link)
+      return true
+    }
+  })
+  const coldStart = deepLinks.takePending()
+  if (coldStart && win && !win.isDestroyed()) {
+    win.webContents.once('did-finish-load', () => win.webContents.send('desktop:deep-link', coldStart))
+  }
   app.on('activate', () => { if (!win) createWindow() })
 })
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
-app.on('before-quit', reset)
+app.on('before-quit', () => {
+  reset()
+  shortcuts?.unregisterAll()
+  tray?.disable()
+  lyricWindow?.close()
+  localApi?.stop().catch(() => {})
+})

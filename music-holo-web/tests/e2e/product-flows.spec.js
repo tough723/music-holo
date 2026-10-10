@@ -14,7 +14,8 @@ async function loginAs(page, username) {
 }
 
 async function openMenu(page, label) {
-  await page.locator('.sidebar .app-nav-menu').getByRole('menuitem', { name: label }).click()
+  // 精确匹配：导航里同时存在“歌单 / 歌单导入 / 歌单管理”这类前缀相同的条目。
+  await page.locator('.sidebar .app-nav-menu').getByRole('menuitem', { name: label, exact: true }).click()
 }
 
 test('游客可以搜索歌曲并从结果启动播放', async ({ page }) => {
@@ -532,7 +533,7 @@ test('歌曲短评可发布、举报并由管理员隐藏，作者能看到处�
   await expect(page.getByText('举报已提交，管理员会尽快审核', { exact: true })).toBeVisible()
   await page.keyboard.press('Escape')
 
-  await page.locator('.sidebar .app-nav-menu').getByRole('menuitem', { name: '管理后台' }).click()
+  await page.locator('.sidebar .app-nav-menu').getByRole('menuitem', { name: '管理后台', exact: true }).click()
   await openMenu(page, '短评审核')
   const reportRow = page.locator('.el-table__row').filter({ hasText: comment })
   await expect(reportRow).toBeVisible()
@@ -714,7 +715,7 @@ test('歌单创建者可以上下移动曲目并保存，管理员不能调整�
 
 test('管理员可以进入仪表盘并加载运营统计', async ({ page }) => {
   await loginAs(page, 'admin')
-  await page.locator('.sidebar .app-nav-menu').getByRole('menuitem', { name: '管理后台' }).click()
+  await page.locator('.sidebar .app-nav-menu').getByRole('menuitem', { name: '管理后台', exact: true }).click()
   await openMenu(page, '仪表盘')
 
   await expect(page.locator('.page-title')).toHaveText('仪表盘')

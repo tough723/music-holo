@@ -13,8 +13,8 @@
       <el-alert type="warning" :closable="false" show-icon>
         <template #title>仅在本次操作中运行可信脚本</template>
         <template #default>
-          <span v-if="isDesktop">桌面模式：脚本仍在受限 Worker 中运行；网络经桌面桥逐域名授权，支持公网 HTTP(S)，不受网页 CORS 限制。禁止访问内网、业务后端和本机文件，不携带登录凭据；HTTP 为明文传输。只支持部分 LX API，并非所有脚本都兼容。搜索仍来自 Music Holo 曲库。</span>
-          <span v-else>脚本不会自动运行。初始化和每次网络请求都受隔离 Worker、HTTPS、逐域名确认与浏览器 CORS 限制；请求不携带 Cookie 或登录态。同源媒体地址会拒绝，避免播放器请求附带 Music Holo 站点凭据。常见本机地址会拦截，但浏览器无法保证识别所有 DNS 重绑定，仍只运行可信脚本。默认只传歌曲标题、歌手、专辑、时长和 Music Holo 歌曲 ID；可选补充平台曲目 ID，敏感凭据字段会拒绝。</span>
+          <span v-if="isDesktop">桌面模式：脚本仍在受限 Worker 中运行；网络经桌面桥逐域名授权，支持公网 HTTP(S)，不受网页 CORS 限制。禁止访问内网、业务后端和本机文件，不携带登录凭据；HTTP 为明文传输。只支持部分 LX API，并非所有脚本都兼容。搜索与榜单由 Music Holo 平台适配器提供（与脚本无关）。</span>
+          <span v-else>脚本不会自动运行。初始化和每次网络请求都受隔离 Worker、HTTPS、逐域名确认与浏览器 CORS 限制；请求不携带 Cookie 或登录态。同源媒体地址会拒绝，避免播放器请求附带 Music Holo 站点凭据。常见本机地址会拦截，但浏览器无法保证识别所有 DNS 重绑定，仍只运行可信脚本。默认只传歌曲标题、歌手、专辑、时长；Music Holo 歌曲 ID 只写入 musicHoloId 字段，不伪装成平台 ID。平台曲目 ID（id/songmid/hash 等）请在下方 JSON 提供真实值，敏感凭据字段会拒绝。</span>
         </template>
       </el-alert>
 
@@ -38,7 +38,7 @@
           spellcheck="false"
           aria-label="平台专属曲目字段 JSON"
         />
-        <small>当音源要求 songmid、musicmid 等平台 ID 时可在此填写，例如 {"songmid":"…"}。只填曲目元数据，不要填 Cookie、密码、令牌或其他凭据；内容仅用于本次解析，不会持久化。</small>
+        <small>当音源要求 id、songmid、musicmid、hash 等平台 ID 时可在此填写，例如 {"id":"347230"}、{"songmid":"…"}、{"hash":"…"}。只填曲目元数据，不要填 Cookie、密码、令牌或其他凭据；内容仅用于本次解析，不会持久化。</small>
       </label>
 
       <div v-if="sources.length" class="source-playback-source">
@@ -170,7 +170,7 @@ import {
   mergeCustomSourceMusicInfo,
   createCustomSourceSession,
   CUSTOM_SOURCE_SESSION_TIMEOUT_MS,
-  parseCustomSourceLyrics,
+  parseCustomSourceLyricBundle,
   validateCustomSourceMediaUrl
 } from '@/utils/customSourceRuntime'
 
@@ -270,11 +270,15 @@ async function initializeSource() {
 
     createdSession = await createCustomSourceSession(source, {
       onRequest: createCustomSourceRequestBridge(source),
+      onUpdateAlert: (alert) => reportUpdateAlert(source, alert),
       signal: controller.signal
     })
     if (controller.signal.aborted || !visible.value) {
       createdSession.destroy()
       return
+    }
+    if (createdSession.capabilities?.devToolsRequested) {
+      ElMessage.info(`「${source.name}」请求了调试模式（openDevTools）。隔离运行环境不会打开开发者工具，但本次会话的网络请求已打印到浏览器控制台。`)
     }
 
     const availablePlatforms = createdSession.capabilities.sources.filter((platform) => platform.actions.includes('musicUrl'))
@@ -303,12 +307,12 @@ async function initializeSource() {
 }
 
 async function resolveOptionalLyrics(session, platform, musicInfo) {
-  if (!platform.actions.includes('lyric')) return []
+  if (!platform.actions.includes('lyric')) return { lines: [], translationLines: [], romajiLines: [], verbatimLines: [] }
   try {
     const result = await session.request({ source: platform.key, action: 'lyric', info: { musicInfo } })
-    return parseCustomSourceLyrics(result)
+    return parseCustomSourceLyricBundle(result)
   } catch {
-    return []
+    return { lines: [], translationLines: [], romajiLines: [], verbatimLines: [] }
   }
 }
 
@@ -320,6 +324,26 @@ async function resolveOptionalCover(session, platform, musicInfo) {
   } catch {
     return null
   }
+}
+
+/** 音源脚本声明的更新提示：只展示日志与官方下载地址，绝不自动下载或执行。 */
+function reportUpdateAlert(source, alert) {
+  if (!alert?.log) return
+  const message = alert.updateUrl
+    ? `「${source.name}」提示更新：${alert.log}。是否打开音源作者提供的更新地址？`
+    : `「${source.name}」提示更新：${alert.log}`
+  if (!alert.updateUrl) {
+    ElMessage.info(message)
+    return
+  }
+  ElMessageBox.confirm(message, '音源更新提示', {
+    type: 'warning',
+    confirmButtonText: '打开更新地址',
+    cancelButtonText: '稍后处理',
+    closeOnClickModal: false
+  }).then(() => {
+    globalThis.open?.(alert.updateUrl, '_blank', 'noopener,noreferrer')
+  }).catch(() => {})
 }
 
 async function resolveAndPlay() {
@@ -354,7 +378,7 @@ async function resolveAndPlay() {
     if (controller.signal.aborted) return
 
     const audio = validateCustomSourceMediaUrl(rawAudio)
-    const customLyrics = await resolveOptionalLyrics(session, platform, musicInfo)
+    const lyricBundle = await resolveOptionalLyrics(session, platform, musicInfo)
     if (controller.signal.aborted) return
     const cover = await resolveOptionalCover(session, platform, musicInfo)
     if (controller.signal.aborted) return
@@ -381,7 +405,10 @@ async function resolveAndPlay() {
       sourceSongId: song.id,
       audioUrl: playbackUrl,
       cover: coverUrl,
-      customLyrics,
+      customLyrics: lyricBundle.lines,
+      customTranslationLyrics: lyricBundle.translationLines,
+      customRomajiLyrics: lyricBundle.romajiLines,
+      customVerbatimLyrics: lyricBundle.verbatimLines,
       isCustomSource: true,
       sourceName: source.name,
       sourcePlatform: platform.name,

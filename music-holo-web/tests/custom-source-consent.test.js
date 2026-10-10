@@ -1,7 +1,48 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createCustomSourceRequestBridge } from '@/utils/customSourceConsent'
 
+function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej })
+  return { promise, resolve, reject }
+}
+
 describe('自定义音源逐会话网络授权', () => {
+  it('并发网络请求按域名串行弹授权，同域名请求共享一次确认', async () => {
+    const firstDomainApproval = deferred()
+    const secondDomainApproval = deferred()
+    let activePrompts = 0
+    let maxActivePrompts = 0
+    const confirmRequest = vi.fn(({ target }) => {
+      activePrompts += 1
+      maxActivePrompts = Math.max(maxActivePrompts, activePrompts)
+      const gate = target.origin === 'https://one.example.org' ? firstDomainApproval : secondDomainApproval
+      return gate.promise.finally(() => { activePrompts -= 1 })
+    })
+    const request = vi.fn().mockResolvedValue({ statusCode: 200 })
+    const bridge = createCustomSourceRequestBridge({ name: '并发初始化源' }, { confirmRequest, request })
+
+    const firstRequest = bridge('https://one.example.org/ip', { method: 'GET' })
+    const secondDomainRequest = bridge('https://two.example.org/version', { method: 'GET' })
+    const sameDomainRequest = bridge('https://one.example.org/version', { method: 'GET' })
+
+    await vi.waitFor(() => expect(confirmRequest).toHaveBeenCalledOnce())
+    expect(confirmRequest.mock.calls[0][0].target.origin).toBe('https://one.example.org')
+    expect(maxActivePrompts).toBe(1)
+    firstDomainApproval.resolve()
+
+    await vi.waitFor(() => expect(confirmRequest).toHaveBeenCalledTimes(2))
+    expect(confirmRequest.mock.calls[1][0].target.origin).toBe('https://two.example.org')
+    expect(maxActivePrompts).toBe(1)
+    secondDomainApproval.resolve()
+
+    await Promise.all([firstRequest, secondDomainRequest, sameDomainRequest])
+    expect(confirmRequest).toHaveBeenCalledTimes(2)
+    expect(request).toHaveBeenCalledTimes(3)
+    expect(maxActivePrompts).toBe(1)
+  })
+
   it('同一会话内按域名只确认一次，新会话必须重新确认', async () => {
     const confirmRequest = vi.fn().mockResolvedValue(undefined)
     const request = vi.fn().mockResolvedValue({ statusCode: 200 })

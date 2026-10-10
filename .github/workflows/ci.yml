@@ -34,7 +34,25 @@ jobs:
       - name: Security audit
         run: npm audit --audit-level=moderate
       - name: Mock API integration tests
-        run: npm test
+        # 日志主机不在白名单、无法下载 run log 时，把失败摘要打成 job 注解（可用 API 读取）
+        shell: bash
+        run: |
+          set +e
+          npm test > /tmp/vitest.log 2>&1
+          status=$?
+          cat /tmp/vitest.log
+          if [ "$status" -ne 0 ]; then
+            {
+              echo "### Vitest 失败摘要"
+              echo
+              echo '```'
+              grep -n -E '✗|×|FAIL|AssertionError|Error:' /tmp/vitest.log | tail -n 40
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            summary=$(grep -n -E '✗|×|FAIL|AssertionError|Error:' /tmp/vitest.log | tail -n 40 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            echo "::error title=Vitest 失败（前端单测）::$summary"
+          fi
+          exit "$status"
       - name: Production build
         run: npm run build
 
@@ -57,11 +75,11 @@ jobs:
         run: npm ci
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
-      - name: Run production-build browser journeys
+      - name: Run production-build browser journeys（排除 @live：第三方依赖另开非阻断 job）
         shell: bash
         run: |
           set +e
-          npm run test:e2e > /tmp/playwright-e2e.log 2>&1
+          npm run test:e2e:journeys > /tmp/playwright-e2e.log 2>&1
           status=$?
           cat /tmp/playwright-e2e.log
           if [ "$status" -ne 0 ]; then
@@ -75,6 +93,69 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: music-holo-playwright-debug
+          path: |
+            music-holo-web/playwright-report/
+            music-holo-web/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  live-source:
+    name: Live third-party source journey
+    runs-on: ubuntu-24.04
+    # 依赖第三方音源与其上游平台是否在线：失败只记录，不阻断合并。
+    continue-on-error: true
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: music-holo-web
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: music-holo-web/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Run live custom-source journey against the real service
+        shell: bash
+        run: |
+          set +e
+          npm run test:e2e:live > /tmp/live-source.log 2>&1
+          status=$?
+          cat /tmp/live-source.log
+          {
+            echo "### 真实第三方音源在线旅程（@live，非阻断）"
+            echo
+            echo "退出码：$status（0 = 真实直链已解码播放；非 0 见下方日志，可能是第三方离线或返回明文 http 直链被安全边界拒绝）"
+            echo
+            echo '```'
+            tail -n 60 /tmp/live-source.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # 结论打成 job 注解，方便通过 API（而不是下载日志）查看。
+          # 无论成功、失败还是第三方离线，都要留下一条能读到的记录。
+          outcome=$(grep 'LIVE_OUTCOME=' /tmp/live-source.log | tail -n 1 || true)
+          if [ -n "$outcome" ]; then
+            echo "::notice title=真实音源在线结果（退出码 $status）::${outcome#LIVE_OUTCOME=}"
+          else
+            fallback=$(grep -n -E 'LIVE_STEP|LIVE_OUTCOME|Error:|waiting for|intercepts|not stable|detached|pointer events' /tmp/live-source.log | tail -n 30 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            echo "::notice title=真实音源在线结果（退出码 $status，未打印结论）::$fallback"
+          fi
+          if [ "$status" -ne 0 ]; then
+            taildetail=$(grep -n -E 'LIVE_STEP|✘|Error:|AssertionError|Timed out|waiting for|intercepts|not stable|detached|pointer events' /tmp/live-source.log | tail -n 40 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            echo "::warning title=真实音源旅程未通过（非阻断）::$taildetail"
+          fi
+          exit 0
+      - name: Upload live journey diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: music-holo-live-source-diagnostics
           path: |
             music-holo-web/playwright-report/
             music-holo-web/test-results/
@@ -130,8 +211,50 @@ jobs:
         uses: actions/checkout@v5
       - name: Validate Compose configuration
         run: docker compose config --quiet
+      - name: Prefetch base images
+        # Docker Hub 对匿名拉取按 IP 限流（第三方服务故障，与代码无关）：
+        # 先退避重试，仍失败时改用公共镜像代理 mirror.gcr.io（同一官方镜像，只换拉取源）。
+        run: |
+          set +e
+          # 运行镜像（compose 服务）与构建基础镜像（两个 Dockerfile 的 FROM）都要预先拉到本地：
+          # 本地已有镜像时 buildkit 不会再向 registry-1.docker.io 请求元数据，从而避开限流。
+          for image in mysql:8.0 redis:7 node:22-bookworm-slim nginx:stable-alpine maven:3.9.11-eclipse-temurin-17 eclipse-temurin:17-jre-jammy; do
+            if docker image inspect "$image" > /dev/null 2>&1; then echo "$image 已在本地"; continue; fi
+            for attempt in 1 2 3; do
+              docker pull "$image" && break
+              echo "::warning title=Image pull retry::$image 第 $attempt 次拉取失败，20 秒后重试"
+              sleep 20
+            done
+            if ! docker image inspect "$image" > /dev/null 2>&1; then
+              # mirror.gcr.io 是 Docker Hub 官方镜像的公共代理（内容一致，仅换拉取源）。
+              docker pull "mirror.gcr.io/library/$image" && docker tag "mirror.gcr.io/library/$image" "$image"
+            fi
+            docker image inspect "$image" > /dev/null 2>&1 || echo "::error title=Base image unavailable::$image 无法从 Docker Hub 或公共代理拉取"
+          done
       - name: Start and wait for the production-like stack
-        run: docker compose up --build --detach --wait --wait-timeout 300
+        run: |
+          set +e
+          docker version 2>&1 | head -n 20 || true
+          docker compose version 2>&1 | head -n 5 || true
+          df -h / /var/lib/docker 2>&1 | head -n 5 || true
+          # Docker Hub 对匿名拉取有按 IP 的限流（第三方服务故障，与代码无关），失败时退避重试。
+          for attempt in 1 2 3; do
+            docker compose up --build --detach --wait --wait-timeout 300 > /tmp/compose-up.log 2>&1
+            status=$?
+            cat /tmp/compose-up.log
+            [ "$status" -eq 0 ] && break
+            grep -q 'toomanyrequests\|pull rate limit\|Error response from daemon: Get' /tmp/compose-up.log || break
+            echo "::warning title=Docker Hub rate limited::第 $attempt 次镜像拉取被限流，等待 90 秒后重试"
+            docker compose down --volumes --remove-orphans > /dev/null 2>&1
+            [ "$attempt" -lt 3 ] && sleep 90
+          done
+          if [ "$status" -ne 0 ]; then
+            docker compose ps || true
+            docker compose logs --no-color --tail 200 || true
+            summary=$(tail -n 60 /tmp/compose-up.log | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            echo "::error title=Compose stack failed to start::exit=$status log=$summary"
+          fi
+          exit $status
       - name: Smoke-test same-origin web, API, playback, and persistent uploads
         shell: bash
         run: |

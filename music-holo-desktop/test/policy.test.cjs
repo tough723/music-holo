@@ -29,5 +29,15 @@ test('filters secrets/hop headers, serializes forms and bounds input', () => {
   assert.throws(() => requestOptions({ method: 'CONNECT' }))
   assert.throws(() => requestOptions({ headers: { test: 'a\r\nb' } }))
   assert.throws(() => requestOptions({ method: 'POST', body: 'a'.repeat(65537) }), /64 KB/)
-  assert.throws(() => requestOptions({ method: 'POST', formData: { foo: 'bar' } }), /multipart/)
+})
+
+test('builds multipart formData without header injection', () => {
+  const options = requestOptions({ method: 'POST', formData: { songmid: 'a b', quality: '320k' } })
+  assert.match(options.headers['content-type'], /^multipart\/form-data; boundary=----MusicHoloFormBoundary[0-9a-f]{32}$/)
+  const text = options.body.toString('utf8')
+  assert.match(text, /name="songmid"\r\n\r\na b\r\n/)
+  assert.match(text, /name="quality"\r\n\r\n320k\r\n/)
+  assert.match(text, /--MusicHoloFormBoundary[0-9a-f]{32}--\r\n$/)
+  assert.throws(() => requestOptions({ method: 'POST', formData: { 'bad\r\nX-Injected: 1': 'v' } }), /字段名无效/)
+  assert.throws(() => requestOptions({ method: 'POST', formData: 'not-an-object' }), /格式无效/)
 })
