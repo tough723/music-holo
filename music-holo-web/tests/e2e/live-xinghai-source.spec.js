@@ -69,16 +69,22 @@ async function runLiveJourney(page, testInfo) {
     script
   }
 
-  // 先把脚本放入 demo 账号的本机源库；内容只留在 localStorage，不会上传。
-  await page.goto('/')
-  await page.evaluate((saved) => {
-    localStorage.setItem('mh_custom_sources_v1:2', JSON.stringify([saved]))
-  }, source)
+  // 使用登录页公开列出的普通用户演示账号，避免在 E2E 源码里重复存储密码。
   await page.goto('/login')
-  await page.getByPlaceholder('用户名').fill('demo')
-  await page.getByPlaceholder('密码').fill('123456')
+  const publicDemoAccount = await page.locator('.auth-tip').innerText()
+  const demoAccountText = publicDemoAccount.slice(publicDemoAccount.lastIndexOf('或') + 1).split('（')[0]
+  const [username, password] = demoAccountText.split('/').map((value) => value.trim())
+  expect(username, '登录页应公开提供普通用户演示账号').toBeTruthy()
+  expect(password, '演示账号密码应由登录页展示，而非写入 E2E 源码').toBeTruthy()
+  await page.getByPlaceholder('用户名').fill(username)
+  await page.getByPlaceholder('密码').fill(password)
   await page.getByRole('button', { name: /登\s*录/ }).click()
   await expect(page).toHaveURL(/\/home$/)
+  await page.evaluate((saved) => {
+    const account = JSON.parse(localStorage.getItem('mh_user') || 'null')
+    if (!account?.id) throw new Error('演示账号登录后没有可用的本机源库归属 ID')
+    localStorage.setItem(`mh_custom_sources_v1:${account.id}`, JSON.stringify([saved]))
+  }, source)
   await page.locator('.sidebar .app-nav-menu').getByRole('menuitem', { name: '设置', exact: true }).click()
   await expect(page).toHaveURL(/\/settings$/)
   await page.getByRole('tab', { name: '自定义源' }).click()
