@@ -31,6 +31,34 @@ export function nextRetryDelay(attempt) {
   return AUTO_RETRY_DELAYS_MS[index] ?? null
 }
 
+/**
+ * 缓冲卡死：播放意图在、进度却长时间不动，通常是连接断了但浏览器没报错。
+ * 判定阈值（毫秒）：比一般的缓冲等待长一截，避免在弱网正常缓冲时误判。
+ */
+export const STALL_TIMEOUT_MS = 8000
+/** 进度推进小于这个秒数视为“没动”。 */
+export const STALL_MIN_PROGRESS_SECONDS = 0.05
+
+/**
+ * 是否该判定为卡死。
+ * @param {{ stalledSince?: number, now?: number, timeoutMs?: number }} options
+ */
+export function isPlaybackStalled({ stalledSince = 0, now = Date.now(), timeoutMs = STALL_TIMEOUT_MS } = {}) {
+  const since = Number(stalledSince)
+  const current = Number(now)
+  if (!Number.isFinite(since) || since <= 0 || !Number.isFinite(current)) return false
+  const timeout = Number(timeoutMs) > 0 ? Number(timeoutMs) : STALL_TIMEOUT_MS
+  return current - since >= timeout
+}
+
+/** 进度是否有实质推进。 */
+export function hasProgress(previousTime, currentTime) {
+  const previous = Number(previousTime)
+  const current = Number(currentTime)
+  if (!Number.isFinite(previous) || !Number.isFinite(current)) return false
+  return Math.abs(current - previous) > STALL_MIN_PROGRESS_SECONDS
+}
+
 /** 是否还该继续自动重试（没超过次数上限）。 */
 export function shouldAutoRetry(attempts, code) {
   if (!isTransientAudioError(code)) return false

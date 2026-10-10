@@ -755,7 +755,8 @@ import { LOUDNESS_TARGETS, applyGainToVolume, describeLufs, measureAudioLoudness
 import { formatSeconds, formatPercent } from '@/utils/playStats'
 import * as favoriteApi from '@/api/favorite'
 import { fmtDuration } from '@/utils/format'
-import { isTransientAudioError, nextRetryDelay } from '@/utils/audioRetry'
+import { MEDIA_ERR_NETWORK, isPlaybackStalled, isTransientAudioError, nextRetryDelay, hasProgress } from '@/utils/audioRetry'
+import { nextPreloadIndex, shouldPreloadNext } from '@/utils/audioPreload'
 import { createMediaSessionController } from '@/utils/mediaSession'
 import {
   EQ_BANDS,
@@ -972,6 +973,8 @@ function persistSession({ force = false } = {}) {
 
 function handlePageHide() {
   resetAutoRetry()
+  stopStallWatch()
+  releasePreloadAudio()
   persistSession({ force: true })
   statsStore.flush()
 }
@@ -1879,7 +1882,7 @@ function runAutoRetry(song) {
 }
 
 /** 失败后安排一次自动重试。返回 true 表示已经接管（这次先不弹错误提示）。 */
-function scheduleAutoRetry(song, code) {
+function scheduleAutoRetry(song, code, { message = '音频加载中断，正在自动重试…' } = {}) {
   if (!song?.audioUrl || !isTransientAudioError(code)) return false
   const delay = nextRetryDelay(autoRetry.attempts + 1)
   if (delay === null) return false
@@ -1889,10 +1892,131 @@ function scheduleAutoRetry(song, code) {
   autoRetry.timer = setTimeout(() => runAutoRetry(song), delay)
   if (!autoRetry.notified) {
     autoRetry.notified = true
-    ElMessage.info('音频加载中断，正在自动重试…')
+    ElMessage.info(message)
   }
   buffering.value = true
   return true
+}
+
+/**
+ * 下一首元数据预取：用一个游离的媒体元素把下一首的连接与元数据提前预热，
+ * 切歌时少等一次握手。不与播放用的两个元素、也不与交叉淡入抢资源。
+ */
+let preloadAudio = null
+
+function releasePreloadAudio() {
+  if (!preloadAudio) return
+  try {
+    preloadAudio.removeAttribute('src')
+    preloadAudio.load()
+  } catch {
+    // jsdom 等环境没有实现 load()，预取本身只是优化。
+  }
+  preloadAudio = null
+}
+
+function preloadNextTrack() {
+  releasePreloadAudio()
+  const index = nextPreloadIndex(playerStore.queue, playerStore.currentIndex, playerStore.mode)
+  if (index < 0) return
+  const next = playerStore.queue[index]
+  if (!next?.audioUrl) return
+  // 相对地址要按当前页面解析：同源的 /audio/x.wav 同样是远端请求。
+  let isRemote = false
+  try {
+    const resolved = new URL(next.audioUrl, window.location.href)
+    isRemote = resolved.protocol === 'http:' || resolved.protocol === 'https:'
+  } catch {
+    isRemote = false
+  }
+  const connection = navigator?.connection
+  if (!shouldPreloadNext({
+    hasNext: true,
+    isRemote,
+    isLocal: Boolean(next.isLocal),
+    isCustomSource: Boolean(next.isCustomSource),
+    saveData: connection?.saveData,
+    effectiveType: connection?.effectiveType
+  })) return
+  try {
+    const AudioConstructor = window.Audio
+    if (typeof AudioConstructor !== 'function') return
+    preloadAudio = new AudioConstructor()
+    preloadAudio.preload = 'metadata'
+    preloadAudio.src = next.audioUrl
+  } catch {
+    preloadAudio = null
+  }
+}
+
+watch(
+  () => [playerStore.currentIndex, playerStore.queue.length, playerStore.mode],
+  () => preloadNextTrack()
+)
+
+/**
+ * 缓冲卡死的兜底：浏览器在连接中断时常常既不报错也不前进，
+ * 只留一个转圈的 buffering。检测到长时间没有进展就当成一次网络中断重新加载。
+ */
+const STALL_CHECK_INTERVAL_MS = 2000
+let stallCheckTimer = null
+let stallSince = 0
+let lastProgressTime = 0
+
+function startStallWatch() {
+  if (stallCheckTimer !== null) return
+  lastProgressTime = activeAudioElement()?.currentTime || 0
+  stallSince = 0
+  stallCheckTimer = setInterval(checkPlaybackStall, STALL_CHECK_INTERVAL_MS)
+}
+
+function stopStallWatch() {
+  if (stallCheckTimer !== null) {
+    clearInterval(stallCheckTimer)
+    stallCheckTimer = null
+  }
+  stallSince = 0
+}
+
+function checkPlaybackStall() {
+  const audio = activeAudioElement()
+  const song = currentSong.value
+  // 没有播放意图、还没拿到元数据、正在拖动进度、或已经播完：都不算卡死。
+  if (!playerStore.playing || !audio || audio.paused || audio.ended) {
+    stallSince = 0
+    lastProgressTime = audio?.currentTime || 0
+    return
+  }
+  if (dragging.value || audio.readyState < 1) {
+    stallSince = 0
+    return
+  }
+  if (hasProgress(lastProgressTime, audio.currentTime)) {
+    lastProgressTime = audio.currentTime
+    stallSince = 0
+    return
+  }
+  const now = Date.now()
+  if (!stallSince) {
+    stallSince = now
+    return
+  }
+  if (!isPlaybackStalled({ stalledSince: stallSince, now })) return
+  stallSince = 0
+  recoverFromStall(song)
+}
+
+/** 卡死恢复：跟加载失败共用三次退避的账本，用完才把错误交给用户。 */
+function recoverFromStall(song) {
+  if (!song) return
+  const scheduled = scheduleAutoRetry(song, MEDIA_ERR_NETWORK, { message: '缓冲卡住了，正在重新连接…' })
+  if (scheduled) {
+    autoRetry.wasPlaying = true
+    return
+  }
+  audioError.value = true
+  buffering.value = false
+  ElMessage.warning(`《${song.title}》缓冲卡住了，可点播放器上的重试按钮再试一次`)
 }
 
 function retryAudio() {
@@ -2475,9 +2599,11 @@ watch(playing, (isPlaying) => {
     resumeSpatialAudio()
     applyRememberedSpatialAudio().catch(() => {})
     playActiveAudio(audio)
+    startStallWatch()
   } else {
     audio.pause()
     buffering.value = false
+    stopStallWatch()
   }
 })
 
@@ -2660,6 +2786,8 @@ function onVisibilityChange() {
 }
 
 onMounted(() => {
+  // 交叉淡入会让两个媒体元素轮流当“当前元素”：重新挂载时回到默认，避免状态串台。
+  activeAudioName = 'native'
   const nativeAudio = audioRef.value
   const spatialAudio = spatialAudioRef.value
   if (nativeAudio) {

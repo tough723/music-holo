@@ -855,4 +855,83 @@ describe('底部播放器交互', () => {
       vi.useRealTimers()
     }
   })
+
+  it('缓冲卡死会自动重新连接，用尽机会后才提示手动重试', async () => {
+    vi.useFakeTimers()
+    try {
+      const store = await mountPlayer()
+      store.playAll([song(1, '霓虹海', 240), song(2, '云端信使', 240)], 1)
+      await flush()
+      const [nativeAudio] = document.querySelectorAll('audio')
+      // jsdom 的 play() 是桩，不会真的把元素切到播放态
+      Object.defineProperty(nativeAudio, 'paused', { value: false, configurable: true })
+      Object.defineProperty(nativeAudio, 'readyState', { value: 2, configurable: true })
+      store.playing = true
+      await flush()
+
+      const loads = () => nativeAudio.__loadCalls || 0
+      const advance = async (ms) => { vi.advanceTimersByTime(ms); await flush() }
+
+      // 每 2 秒查一次，连续 8 秒没有进展才判定卡死
+      const before = loads()
+      await advance(3000)
+      expect(loads()).toBe(before) // 才 3 秒：还在正常缓冲的容忍范围内
+      await advance(7000) // 到第 10 秒判定卡死，排入一次自动重连
+      await advance(1000) // 重连真正执行
+      expect(loads()).toBeGreaterThan(before)
+      expect(document.querySelector('.pb-retry')).toBeNull()
+
+      // 用尽三次机会后，改由用户手动重试（每次重连后依然不前进）
+      for (let i = 0; i < 6; i += 1) await advance(12000)
+      expect(document.querySelector('.pb-retry')).not.toBeNull()
+
+      // 手动重试后进度恢复推进：不再判定卡死，也不会反复重载
+      document.querySelector('.pb-retry').click()
+      await flush()
+      store.playing = true
+      await flush()
+      const afterRetry = loads()
+      nativeAudio.currentTime = 5
+      await advance(4000)
+      nativeAudio.currentTime = 9
+      await advance(4000)
+      expect(loads()).toBe(afterRetry)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('顺序播放会预热下一首的元数据，省流量或随机模式不预热', async () => {
+    const created = []
+    const RealAudio = window.Audio
+    window.Audio = function FakeAudio() {
+      const element = document.createElement('audio')
+      created.push(element)
+      return element
+    }
+    try {
+      const store = await mountPlayer()
+      store.playAll([song(1, '霓虹海', 240), song(2, '云端信使', 240), song(3, '极光列车', 240)], 1)
+      await flush()
+      // 顺序播放：预热队里下一首（云端信使）
+      expect(created).toHaveLength(1)
+      expect(created[0].preload).toBe('metadata')
+      expect(created[0].getAttribute('src')).toBe('/audio/2.wav')
+
+      // 切到随机模式：下一首不确定，不再预热
+      store.setMode('random')
+      await flush()
+      expect(created).toHaveLength(1) // 只释放旧的，不新建
+
+      // 省流量模式：即使下一首确定也不预热
+      Object.defineProperty(window.navigator, 'connection', { value: { saveData: true }, configurable: true })
+      store.setMode('order')
+      store.playAll([song(4, 'A', 240), song(5, 'B', 240)], 4)
+      await flush()
+      expect(created).toHaveLength(1)
+      delete window.navigator.connection
+    } finally {
+      window.Audio = RealAudio
+    }
+  })
 })
