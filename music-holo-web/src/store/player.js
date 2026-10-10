@@ -3,6 +3,7 @@ import * as songApi from '@/api/song'
 import * as lyricApi from '@/api/lyric'
 import { useDislikeStore } from '@/store/dislike'
 import { findAdvanceIndex } from '@/utils/dislikeSkip'
+import { EQ_FLAT_GAINS, EQ_PRESETS, matchEqualizerPreset, normalizeEqualizerGains, presetGains } from '@/utils/spatialAudio'
 
 const PLAYER_KEY = 'mh_player'
 
@@ -36,6 +37,16 @@ const PLAYER_VIEW_MODE_KEYS = PLAYER_VIEW_MODES.map((mode) => mode.key)
 
 export function normalizePlayerViewMode(value) {
   return PLAYER_VIEW_MODE_KEYS.includes(value) ? value : 'standard'
+}
+
+/** 均衡器偏好：预设键 + 增益数组，非法值回落到原声。 */
+export function normalizeEqualizerState(saved = {}) {
+  const source = saved && typeof saved === 'object' ? saved : {}
+  const preset = EQ_PRESETS.some((item) => item.key === source.preset) ? source.preset : 'custom'
+  const gains = preset === 'custom'
+    ? normalizeEqualizerGains(source.gains)
+    : presetGains(preset)
+  return { preset: matchEqualizerPreset(gains), gains }
 }
 
 /** 歌词显示偏好：字号档位与缩放系数。 */
@@ -169,7 +180,8 @@ function persist(state) {
     lyricView: normalizeLyricView(state.lyricView),
     // 空间音效是输出偏好：记住用户上次的开关，下一次用户手势触发播放时自动套用。
     spatialPreferred: Boolean(state.spatialPreferred),
-    playerViewMode: normalizePlayerViewMode(state.playerViewMode)
+    playerViewMode: normalizePlayerViewMode(state.playerViewMode),
+    equalizer: normalizeEqualizerState(state.equalizer)
   }))
 }
 
@@ -212,6 +224,8 @@ export const usePlayerStore = defineStore('player', {
       spatialPreferred: saved.spatialPreferred === true,
       /** 播放器形态：standard / mini / immersive。 */
       playerViewMode: normalizePlayerViewMode(saved.playerViewMode),
+      /** 均衡器：预设名 + 实际增益（dB，按 EQ_BANDS 顺序）。 */
+      equalizer: normalizeEqualizerState(saved.equalizer),
       /** 原歌词与可选译文歌词 */
       lyrics: [],
       lyricTranslations: [],
@@ -235,7 +249,13 @@ export const usePlayerStore = defineStore('player', {
       : null),
     modeLabel: (state) => MODES.find((m) => m.key === state.mode)?.label || '顺序播放',
     /** 队列总时长（秒）；本地文件未读到元数据时按 0 计。 */
-    queueDuration: (state) => (state.queue || []).reduce((total, song) => total + Math.max(0, Number(song?.duration) || 0), 0)
+    queueDuration: (state) => (state.queue || []).reduce((total, song) => total + Math.max(0, Number(song?.duration) || 0), 0),
+    /** 均衡器当前增益（dB）。 */
+    equalizerGains: (state) => normalizeEqualizerGains(state.equalizer?.gains),
+    /** 均衡器是否处于非原声状态（决定是否值得为此接入音频处理链路）。 */
+    equalizerActive() {
+      return this.equalizerGains.some((value) => Math.abs(value) >= 0.01)
+    }
   },
   actions: {
     /** 将用户选择的音频文件加入本地队列；文件只留在浏览器内，不上传服务器。 */
@@ -733,6 +753,31 @@ export const usePlayerStore = defineStore('player', {
     /** 清除歌词时间校准。 */
     resetLyricOffset() {
       return this.setLyricView({ offsetMs: 0 }).offsetMs
+    },
+    /** 选择均衡器预设。 */
+    setEqualizerPreset(key) {
+      const preset = EQ_PRESETS.find((item) => item.key === key)
+      if (!preset) return this.equalizer.preset
+      this.equalizer = { preset: preset.key, gains: presetGains(preset.key) }
+      persist(this)
+      return preset.key
+    },
+    /** 自定义某一频段增益（dB），自动切到 custom。 */
+    setEqualizerBand(index, gain) {
+      const gains = this.equalizerGains
+      const position = Number(index)
+      if (!Number.isInteger(position) || position < 0 || position >= gains.length) return this.equalizer.preset
+      gains[position] = Number(gain)
+      const normalized = normalizeEqualizerGains(gains)
+      this.equalizer = { preset: matchEqualizerPreset(normalized), gains: normalized }
+      persist(this)
+      return this.equalizer.preset
+    },
+    /** 恢复原声。 */
+    resetEqualizer() {
+      this.equalizer = { preset: 'flat', gains: EQ_FLAT_GAINS.slice() }
+      persist(this)
+      return 'flat'
     },
     /** 切换播放器形态（标准 / 迷你 / 沉浸）。 */
     setPlayerViewMode(mode) {

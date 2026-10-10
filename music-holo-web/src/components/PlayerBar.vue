@@ -200,6 +200,54 @@
           <div class="sleep-note">手动切歌会取消“播完当前歌曲”定时。</div>
         </div>
       </el-popover>
+      <el-popover v-model:visible="equalizerVisible" placement="top" trigger="click" :width="320">
+        <template #reference>
+          <el-button
+            circle
+            text
+            class="pb-equalizer"
+            :class="{ active: playerStore.equalizerActive }"
+            aria-label="均衡器与音效预设"
+            :aria-expanded="equalizerVisible ? 'true' : 'false'"
+          >
+            <el-icon><Operation /></el-icon>
+          </el-button>
+        </template>
+        <div class="equalizer-panel">
+          <div class="equalizer-head">
+            <span>均衡器</span>
+            <el-button text size="small" :disabled="!playerStore.equalizerActive" @click="resetEqualizer">恢复原声</el-button>
+          </div>
+          <div class="equalizer-presets">
+            <button
+              v-for="preset in EQ_PRESETS"
+              :key="preset.key"
+              type="button"
+              class="equalizer-preset"
+              :class="{ active: playerStore.equalizer.preset === preset.key }"
+              :aria-pressed="playerStore.equalizer.preset === preset.key ? 'true' : 'false'"
+              @click="applyEqualizerPreset(preset.key)"
+            >{{ preset.label }}</button>
+          </div>
+          <div class="equalizer-bands">
+            <div v-for="(band, index) in EQ_BANDS" :key="band.frequency" class="equalizer-band">
+              <input
+                type="range"
+                class="equalizer-slider"
+                :min="-EQ_GAIN_LIMIT"
+                :max="EQ_GAIN_LIMIT"
+                step="0.5"
+                :value="playerStore.equalizerGains[index]"
+                :aria-label="`${band.label}Hz 增益`"
+                @input="onEqualizerBand(index, $event)"
+              />
+              <span class="equalizer-value">{{ formatGain(playerStore.equalizerGains[index]) }}</span>
+              <span class="equalizer-freq">{{ band.label }}</span>
+            </div>
+          </div>
+          <p class="equalizer-note">均衡器与 3D 空间音效都要经过音频处理链路，跨域/自定义源音源不生效（会保持原声）。</p>
+        </div>
+      </el-popover>
       <el-tooltip :content="spatialEnabled ? '关闭 3D 空间音效' : '开启 3D 空间音效（本地/同源音源，耳机体验更明显）'" placement="top">
         <el-button
           circle
@@ -461,7 +509,7 @@ import { useDownloadStore } from '@/store/downloads'
 import * as favoriteApi from '@/api/favorite'
 import { fmtDuration } from '@/utils/format'
 import { createMediaSessionController } from '@/utils/mediaSession'
-import { createSpatialAudioGraph, isSpatialAudioUrl } from '@/utils/spatialAudio'
+import { EQ_BANDS, EQ_GAIN_LIMIT, EQ_PRESETS, createSpatialAudioGraph, isSpatialAudioUrl } from '@/utils/spatialAudio'
 const SourceSwitchDialog = defineAsyncComponent(() => import('./SourceSwitchDialog.vue'))
 import {
   filesFromGrantedHandles,
@@ -492,6 +540,8 @@ const audioRef = ref(null)
 const switchDialogVisible = ref(false)
 const spatialAudioRef = ref(null)
 const spatialEnabled = ref(false)
+/** 播放是否已接入 Web Audio 处理链路（空间音效或均衡器在用）。 */
+const processedEnabled = ref(false)
 const trackRef = ref(null)
 let spatialAudioGraph = null
 let mediaSessionController = null
@@ -519,6 +569,29 @@ const SHORTCUT_HELP = Object.freeze([
   { keys: 'Q', desc: '打开 / 关闭播放队列' },
   { keys: 'V', desc: '切换播放器形态（标准 / 迷你 / 沉浸）' }
 ])
+
+// ---- 均衡器 ----
+const equalizerVisible = ref(false)
+
+function formatGain(value) {
+  const number = Number(value) || 0
+  if (Math.abs(number) < 0.05) return '0'
+  return `${number > 0 ? '+' : ''}${number.toFixed(1)}`
+}
+
+function applyEqualizerPreset(key) {
+  playerStore.setEqualizerPreset(key)
+}
+
+function onEqualizerBand(index, event) {
+  const value = Number(event?.target?.value)
+  if (!Number.isFinite(value)) return
+  playerStore.setEqualizerBand(index, value)
+}
+
+function resetEqualizer() {
+  playerStore.resetEqualizer()
+}
 
 // ---- 播放器形态：标准 / 迷你 / 沉浸 ----
 const viewMode = computed(() => playerStore.playerViewMode)
@@ -690,7 +763,7 @@ function onQueueDragEnd() {
 }
 
 function activeAudioElement() {
-  return spatialEnabled.value ? spatialAudioRef.value : audioRef.value
+  return processedEnabled.value ? spatialAudioRef.value : audioRef.value
 }
 
 function ensureSpatialAudioGraph() {
@@ -1172,7 +1245,7 @@ function hadRecentUserGesture(windowMs = 1500) {
 
 /** 浏览器挂起音频上下文后（后台标签页/休眠），恢复播放前必须重新 resume，否则只有画面在走、声音是静的。 */
 function resumeSpatialAudio() {
-  if (!spatialEnabled.value || !spatialAudioGraph) return
+  if (!processedEnabled.value || !spatialAudioGraph) return
   const resumed = spatialAudioGraph.resume?.()
   resumed?.catch?.(() => {})
 }
@@ -1187,6 +1260,8 @@ function canUseSpatialAudio(song = currentSong.value) {
  */
 async function applyRememberedSpatialAudio() {
   if (!playerStore.spatialPreferred || spatialEnabled.value) return
+  // 均衡器也需要链路：没有空间偏好时，若均衡器非原声同样值得自动接入。
+  if (!playerStore.equalizerActive && !playerStore.spatialPreferred) return
   if (!hadRecentUserGesture() || !canUseSpatialAudio()) return
   const song = currentSong.value
   const key = `${song?.id || ''}|${song?.audioUrl || ''}`
@@ -1195,54 +1270,41 @@ async function applyRememberedSpatialAudio() {
   await toggleSpatialAudio({ silent: true })
 }
 
-async function toggleSpatialAudio(options = {}) {
+/**
+ * 把播放切换到 Web Audio 处理链路（独立的媒体元素 + 音频图）。
+ * 空间音效与均衡器都要经过这条链路；跨域音源不进 Web Audio，保持原声。
+ */
+async function enableProcessedAudio({ spatial = false, silent = false } = {}) {
   const nativeAudio = audioRef.value
   const spatialAudio = spatialAudioRef.value
   const song = currentSong.value
-  if (!nativeAudio || !spatialAudio || !song?.audioUrl || song.isCustomSource) return
-
-  if (spatialEnabled.value) {
-    const resumeAt = spatialAudio.currentTime || playerStore.currentTime
-    spatialAudio.pause()
-    playerStore.currentTime = resumeAt
-    setAudioSource(nativeAudio, song.audioUrl)
-    seekAudioWhenReady(nativeAudio, resumeAt)
-    if (nativeAudio.readyState >= 1 && resumeAt > 0) {
-      try { nativeAudio.currentTime = resumeAt } catch { /* wait for metadata */ }
-    }
-    spatialAudioGraph?.setEnabled(false)
-    spatialEnabled.value = false
-    if (options.remember !== false) playerStore.setSpatialPreferred(false)
-    if (playerStore.playing) {
-      safePlay(nativeAudio).catch(() => { playerStore.playing = false })
-    }
-    if (options.silent !== true) ElMessage.info('已关闭 3D 空间音效，切回原声播放')
-    return
-  }
-
+  if (!nativeAudio || !spatialAudio || !song?.audioUrl || song.isCustomSource) return false
   if (!isSpatialAudioUrl(song.audioUrl, window.location.href)) {
     // 音源本身不支持：不改写偏好，换一首同源的歌仍然会按偏好自动套用。
-    if (options.silent !== true) ElMessage.warning('该音源不支持空间处理，当前保持原声播放')
-    return
+    if (!silent) ElMessage.warning('当前音源不经过音频处理链路，空间音效与均衡器不可用')
+    return false
   }
 
   try {
     const graph = ensureSpatialAudioGraph()
-    setAudioSource(spatialAudio, song.audioUrl)
     const resumeAt = nativeAudio.currentTime || playerStore.currentTime
     playerStore.currentTime = resumeAt
+    setAudioSource(spatialAudio, song.audioUrl)
     seekAudioWhenReady(spatialAudio, resumeAt)
     spatialAudio.volume = 1
     await graph.context.resume()
-    graph.setVolume(playerStore.volume)
-    graph.setEnabled(true)
-    spatialEnabled.value = true
-    playerStore.setSpatialPreferred(true)
+    graph.setVolume(playerStore.muted ? 0 : playerStore.volume)
+    graph.setEnabled(spatial)
+    graph.setEqualizer?.(playerStore.equalizerGains)
+    processedEnabled.value = true
+    spatialEnabled.value = spatial
+    if (spatial) playerStore.setSpatialPreferred(true)
     nativeAudio.pause()
     if (playerStore.playing) {
       try {
         await safePlay(spatialAudio)
       } catch (error) {
+        processedEnabled.value = false
         spatialEnabled.value = false
         graph.setEnabled(false)
         setAudioSource(nativeAudio, song.audioUrl)
@@ -1251,14 +1313,72 @@ async function toggleSpatialAudio(options = {}) {
         throw error
       }
     }
-    if (options.silent !== true) ElMessage.success('已开启 3D 空间音效，使用耳机体验更明显')
+    return true
   } catch {
     spatialAudio.pause()
     spatialAudioGraph?.setEnabled(false)
+    processedEnabled.value = false
     spatialEnabled.value = false
     // 启动失败（浏览器不支持/上下文被拒）不改写偏好，下次遇到可用环境再试。
-    if (options.silent !== true) ElMessage.warning('空间音效无法启动，已保持原声播放')
+    if (!silent) ElMessage.warning('音频处理链路无法启动，已保持原声播放')
+    return false
   }
+}
+
+/** 退出处理链路：切回原生媒体元素，保持进度。 */
+function disableProcessedAudio({ silent = false, message = '' } = {}) {
+  const nativeAudio = audioRef.value
+  const spatialAudio = spatialAudioRef.value
+  const song = currentSong.value
+  if (spatialAudio) spatialAudio.pause()
+  spatialAudioGraph?.setEnabled(false)
+  spatialEnabled.value = false
+  processedEnabled.value = false
+  if (!nativeAudio) return
+  const resumeAt = spatialAudio?.currentTime || playerStore.currentTime
+  playerStore.currentTime = resumeAt
+  setAudioSource(nativeAudio, song?.audioUrl || '', { anonymous: Boolean(song?.isCustomSource) })
+  if (song?.audioUrl) seekAudioWhenReady(nativeAudio, resumeAt)
+  if (nativeAudio.readyState >= 1 && resumeAt > 0) {
+    try { nativeAudio.currentTime = resumeAt } catch { /* wait for metadata */ }
+  }
+  if (playerStore.playing) safePlay(nativeAudio).catch(() => { playerStore.playing = false })
+  if (!silent && message) ElMessage.info(message)
+}
+
+function toggleSpatialAudio(options = {}) {
+  if (spatialEnabled.value) {
+    // 还有均衡器在用时不能直接退出链路，只关掉 3D 支路。
+    if (playerStore.equalizerActive) {
+      spatialAudioGraph?.setEnabled(false)
+      spatialEnabled.value = false
+      playerStore.setSpatialPreferred(false)
+      if (options.silent !== true) ElMessage.info('已关闭 3D 空间音效（均衡器仍在处理链路中）')
+      return Promise.resolve(true)
+    }
+    disableProcessedAudio({
+      silent: options.silent === true,
+      message: '已关闭 3D 空间音效，切回原声播放'
+    })
+    playerStore.setSpatialPreferred(false)
+    return Promise.resolve(true)
+  }
+  return enableProcessedAudio({ spatial: true, silent: options.silent === true })
+}
+
+/** 均衡器变化：链路已接入就只改增益，否则按需接入（只处理同源/本地音频）。 */
+async function syncEqualizer({ notify = false } = {}) {
+  const gains = playerStore.equalizerGains
+  const flat = gains.every((value) => Math.abs(value) < 0.01)
+  if (!processedEnabled.value) {
+    if (flat) return false
+    const ok = await enableProcessedAudio({ spatial: spatialEnabled.value, silent: !notify })
+    if (!ok && notify) ElMessage.warning('当前音源不经过音频处理链路，均衡器不可用')
+    return ok
+  }
+  const applied = Boolean(spatialAudioGraph?.setEqualizer?.(gains))
+  if (!applied && notify) ElMessage.warning('当前浏览器不支持均衡器')
+  return applied
 }
 
 function startSleepTimer(minutes) {
@@ -1476,8 +1596,9 @@ async function onLocalFilesSelected(event) {
 
 function clearQueue() {
   playerStore.clearQueue()
-  spatialEnabled.value = false
   spatialAudioGraph?.setEnabled(false)
+  spatialEnabled.value = false
+  processedEnabled.value = false
   spatialAutoTriedFor = ''
   for (const audio of [audioRef.value, spatialAudioRef.value]) {
     if (!audio) continue
@@ -1541,14 +1662,15 @@ watch(currentSong, (song) => {
     return
   }
 
-  if (spatialEnabled.value && (song.isCustomSource || !isSpatialAudioUrl(song.audioUrl, window.location.href))) {
+  if (processedEnabled.value && (song.isCustomSource || !isSpatialAudioUrl(song.audioUrl, window.location.href))) {
     spatialAudio.pause()
     spatialAudioGraph?.setEnabled(false)
     spatialEnabled.value = false
-    ElMessage.warning('该音源不支持空间处理，已自动切回原声')
+    processedEnabled.value = false
+    ElMessage.warning('该音源不经过音频处理链路，已自动切回原声')
   }
 
-  if (spatialEnabled.value) {
+  if (processedEnabled.value) {
     nativeAudio.pause()
     setAudioSource(spatialAudio, song.audioUrl)
     seekAudioWhenReady(spatialAudio, playerStore.currentTime)
@@ -1653,7 +1775,7 @@ function onAudioEnded(event) {
 function onAudioError(event) {
   if (event.currentTarget !== activeAudioElement()) return
   buffering.value = false
-  if (event.currentTarget === spatialAudioRef.value && spatialEnabled.value) {
+  if (event.currentTarget === spatialAudioRef.value && processedEnabled.value) {
     const nativeAudio = audioRef.value
     const spatialAudio = spatialAudioRef.value
     const resumeAt = spatialAudio.currentTime || playerStore.currentTime
@@ -1661,13 +1783,14 @@ function onAudioError(event) {
     playerStore.currentTime = resumeAt
     spatialAudioGraph?.setEnabled(false)
     spatialEnabled.value = false
+    processedEnabled.value = false
     if (currentSong.value?.audioUrl) {
       setAudioSource(nativeAudio, currentSong.value.audioUrl, { anonymous: Boolean(currentSong.value.isCustomSource) })
       seekAudioWhenReady(nativeAudio, resumeAt)
       if (playerStore.playing) {
         safePlay(nativeAudio).catch(() => { playerStore.playing = false })
       }
-      ElMessage.warning('空间音效遇到播放问题，已自动切回原声')
+      ElMessage.warning('音频处理链路遇到播放问题，已自动切回原声')
       return
     }
   }
@@ -1749,6 +1872,8 @@ onMounted(() => {
   }
   syncAudioOutput()
   installMediaSession()
+  // 均衡器是偏好：等用户手势触发播放时再由 applyRememberedSpatialAudio 一并接入链路。
+  if (playerStore.equalizerActive && !playerStore.spatialPreferred) markUserGesture()
   window.addEventListener('mh-seek', onLyricSeek)
   window.addEventListener('keydown', onPlayerShortcut)
   window.addEventListener('keydown', markUserGesture)
@@ -1799,6 +1924,10 @@ watch(() => playerStore.lyricView.immersive, (immersive) => {
   }
 })
 
+watch(() => playerStore.equalizerGains.join(','), () => {
+  syncEqualizer({ notify: false }).catch(() => {})
+})
+
 watch(() => playerStore.playerViewMode, (mode) => {
   applyViewMode(mode)
   syncViewportClass(mode)
@@ -1832,6 +1961,69 @@ watch(() => userStore.isLogin, (loggedIn) => {
   box-shadow: 0 -18px 50px -34px var(--holo-glow), 0 -1px 0 rgba(255, 255, 255, 0.1) inset;
   transform-style: preserve-3d;
 }
+/* ---- 均衡器 ---- */
+.equalizer-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.equalizer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+}
+.equalizer-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.equalizer-preset {
+  padding: 4px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-sub);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.18s ease, background 0.18s ease;
+}
+.equalizer-preset:hover {
+  color: var(--holo-primary);
+  border-color: color-mix(in srgb, var(--holo-primary) 45%, transparent);
+}
+.equalizer-preset.active {
+  color: #fff;
+  background: color-mix(in srgb, var(--holo-primary) 62%, transparent);
+  border-color: transparent;
+}
+.equalizer-bands {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px 10px;
+}
+.equalizer-band {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  font-size: 10px;
+  color: var(--text-sub);
+}
+.equalizer-slider {
+  width: 100%;
+  accent-color: var(--holo-primary);
+}
+.equalizer-value {
+  font-variant-numeric: tabular-nums;
+}
+.equalizer-note {
+  color: var(--text-sub);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 /* ---- 迷你 / 沉浸形态：只保留核心控制 ---- */
 .player-bar.is-compact {
   gap: 12px;
@@ -1852,6 +2044,7 @@ watch(() => userStore.isLogin, (loggedIn) => {
 .player-bar.is-compact .pb-volume,
 .player-bar.is-compact .pb-volume-value,
 .player-bar.is-compact .pb-rate,
+.player-bar.is-compact .pb-equalizer,
 .player-bar.is-compact .pb-shortcuts {
   display: none;
 }

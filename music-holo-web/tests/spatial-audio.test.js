@@ -1,5 +1,134 @@
 import { describe, expect, it } from 'vitest'
-import { createSpatialAudioGraph, isSpatialAudioUrl } from '../src/utils/spatialAudio.js'
+import {
+  EQ_BANDS,
+  EQ_GAIN_LIMIT,
+  EQ_PRESETS,
+  createSpatialAudioGraph,
+  isSpatialAudioUrl,
+  matchEqualizerPreset,
+  normalizeEqualizerGains,
+  presetGains
+} from '../src/utils/spatialAudio.js'
+
+describe('均衡器', () => {
+  it('增益被夹在 ±12dB，非法值按 0 处理，长度对齐频段', () => {
+    expect(normalizeEqualizerGains([99, -99, 'x', null, 3.3333, undefined])).toEqual([
+      EQ_GAIN_LIMIT,
+      -EQ_GAIN_LIMIT,
+      0,
+      0,
+      3.3,
+      0
+    ])
+    expect(normalizeEqualizerGains(null)).toEqual(EQ_BANDS.map(() => 0))
+    expect(normalizeEqualizerGains([1, 2])).toHaveLength(EQ_BANDS.length)
+  })
+
+  it('预设可识别，改一个频段就变成自定义', () => {
+    expect(matchEqualizerPreset(presetGains('pop'))).toBe('pop')
+    expect(matchEqualizerPreset(presetGains('flat'))).toBe('flat')
+    const tweaked = presetGains('rock')
+    tweaked[2] = 6
+    expect(matchEqualizerPreset(tweaked)).toBe('custom')
+    expect(matchEqualizerPreset([0, 0, 0, 0, 0, 0.5])).toBe('custom')
+  })
+
+  it('预设都是合法增益且覆盖常见曲风', () => {
+    const keys = EQ_PRESETS.map((preset) => preset.key)
+    expect(keys).toEqual(expect.arrayContaining(['flat', 'pop', 'rock', 'vocal']))
+    for (const preset of EQ_PRESETS) {
+      expect(normalizeEqualizerGains(preset.gains)).toHaveLength(EQ_BANDS.length)
+    }
+  })
+
+  it('均衡器串在混合之后、总音量之前，切换增益即时生效', () => {
+    class FakeParam {
+      constructor(value = 0) { this.value = value }
+      setValueAtTime(value) { this.value = value }
+      setTargetAtTime(value) { this.value = value }
+    }
+    class FakeNode {
+      constructor() { this.connections = [] }
+      connect(target, ...args) { this.connections.push({ target, args }) }
+      disconnect(target) {
+        if (!target) { this.connections = []; return }
+        this.connections = this.connections.filter((entry) => entry.target !== target)
+      }
+    }
+    class FakeGain extends FakeNode {
+      constructor() { super(); this.gain = new FakeParam(1) }
+    }
+    class FakeBiquad extends FakeNode {
+      constructor() {
+        super()
+        this.type = 'lowpass'
+        this.frequency = new FakeParam(350)
+        this.Q = new FakeParam(1)
+        this.gain = new FakeParam(0)
+      }
+    }
+    class FakeContext {
+      constructor() {
+        this.currentTime = 0
+        this.state = 'running'
+        this.destination = new FakeNode()
+        this.gains = []
+        this.filters = []
+      }
+      createMediaElementSource() { return new FakeNode() }
+      createChannelSplitter() { return new FakeNode() }
+      createPanner() { return { connect () {}, positionX: { setValueAtTime () {} } } }
+      createGain() { const gain = new FakeGain(); this.gains.push(gain); return gain }
+      createBiquadFilter() { const filter = new FakeBiquad(); this.filters.push(filter); return filter }
+      resume() { this.state = 'running'; return Promise.resolve() }
+      close() { this.state = 'closed'; return Promise.resolve() }
+    }
+
+    const graph = createSpatialAudioGraph({}, FakeContext)
+    expect(graph.supportsEqualizer()).toBe(true)
+    const [spatialBus, dryGain, wetGain, masterGain] = graph.context.gains
+    // 滤波器把 dry/wet 的汇入点接管了：不再直连 masterGain。
+    expect(dryGain.connections.some((entry) => entry.target === masterGain)).toBe(false)
+    expect(wetGain.connections.some((entry) => entry.target === masterGain)).toBe(false)
+    expect(graph.context.filters).toHaveLength(EQ_BANDS.length)
+    expect(graph.context.filters.map((filter) => filter.type)).toEqual(EQ_BANDS.map((band) => band.type))
+
+    expect(graph.setEqualizer([1, 2, 3, 4, 5, 6])).toBe(true)
+    expect(graph.getEqualizerGains()).toEqual([1, 2, 3, 4, 5, 6])
+    expect(graph.context.filters.map((filter) => filter.gain.value)).toEqual([1, 2, 3, 4, 5, 6])
+
+    graph.setEqualizer(presetGains('flat'))
+    expect(graph.context.filters.every((filter) => filter.gain.value === 0)).toBe(true)
+    expect(spatialBus.connections).toHaveLength(1)
+  })
+
+  it('浏览器没有 BiquadFilter 时均衡器降级为直通，不影响原声', () => {
+    class FakeContext {
+      constructor() {
+        this.currentTime = 0
+        this.state = 'running'
+        this.destination = {}
+        this.gains = []
+      }
+      createMediaElementSource() { return { connect () {} } }
+      createChannelSplitter() { return { connect () {} } }
+      createPanner() { return { connect () {}, positionX: { setValueAtTime () {} } } }
+      createGain() {
+        const gain = { connect () {}, disconnect () {}, gain: { value: 1, setTargetAtTime (value) { this.value = value } } }
+        this.gains.push(gain)
+        return gain
+      }
+      resume() { return Promise.resolve() }
+      close() { this.state = 'closed'; return Promise.resolve() }
+    }
+    const graph = createSpatialAudioGraph({}, FakeContext)
+    expect(graph.supportsEqualizer()).toBe(false)
+    expect(graph.setEqualizer([6, 6, 6, 6, 6, 6])).toBe(false)
+    // 降级后空间音效仍然可用。
+    graph.setEnabled(true)
+    expect(graph.context.gains[1].gain.value).toBeCloseTo(0.72)
+  })
+})
 
 describe('空间音效工具', () => {
   it('只允许同源和本地 Blob 音频接入 Web Audio', () => {

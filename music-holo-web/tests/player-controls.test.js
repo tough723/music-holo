@@ -131,6 +131,48 @@ describe('输出偏好：空间音效记忆', () => {
   })
 })
 
+describe('均衡器偏好', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    setActivePinia(createPinia())
+  })
+
+  it('默认原声，选择预设后增益跟着变并持久化', () => {
+    const store = usePlayerStore()
+    expect(store.equalizer.preset).toBe('flat')
+    expect(store.equalizerActive).toBe(false)
+
+    expect(store.setEqualizerPreset('rock')).toBe('rock')
+    expect(store.equalizerActive).toBe(true)
+    expect(store.equalizerGains).toHaveLength(6)
+    expect(JSON.parse(localStorage.getItem('mh_player')).equalizer.preset).toBe('rock')
+
+    const reloaded = usePlayerStore(createPinia())
+    expect(reloaded.equalizer.preset).toBe('rock')
+    expect(reloaded.equalizerGains).toEqual(store.equalizerGains)
+  })
+
+  it('改一个频段变自定义并夹在限幅内，未知预设被忽略', () => {
+    const store = usePlayerStore()
+    store.setEqualizerPreset('pop')
+    expect(store.setEqualizerBand(2, 99)).toBe('custom')
+    expect(store.equalizerGains[2]).toBe(12)
+    expect(store.setEqualizerBand(1, -99)).toBe('custom')
+    expect(store.equalizerGains[1]).toBe(-12)
+    // 越界下标与非数字都保持原样。
+    expect(store.setEqualizerBand(9, 3)).toBe('custom')
+    expect(store.setEqualizerBand('x', 3)).toBe('custom')
+    expect(store.setEqualizerBand(0, 'abc')).toBe('custom')
+    expect(store.equalizerGains[0]).toBe(0)
+
+    store.setEqualizerPreset('pop')
+    expect(store.setEqualizerPreset('not-a-preset')).toBe('pop')
+
+    expect(store.resetEqualizer()).toBe('flat')
+    expect(store.equalizerActive).toBe(false)
+  })
+})
+
 describe('播放器形态：标准 / 迷你 / 沉浸', () => {
   beforeEach(() => {
     localStorage.clear()
