@@ -22,8 +22,9 @@ import { test, expect } from '@playwright/test'
  * 按顺序尝试，第一个真正播起来的就作为结论；都没播起来时，逐个核对「必须有明确提示」。
  *
  * 与真实脚本相关的两个额外交互（夹具旅程里不会出现）：
- *   - 初始化阶段脚本会立即联网（IP 查询、版本检查），每个新域名都会弹「仅本次允许」；
- *   - 解析阶段可能再经过聚合后端 → GD 等多跳，同样逐个域名授权。
+ * - 初始化阶段脚本会立即联网（IP 查询、版本检查），每个新域名都会弹「仅本次允许」；
+ * - 版本检查还可能弹「音源更新提示」，用例会选「稍后处理」（不会擅自打开作者链接）；
+ * - 解析阶段可能再经过聚合后端 → GD 等多跳，同样逐个域名授权。
  * 因此这里不是点一次就完事，而是**每一次点击都要先清一遍授权弹窗**——
  * 模态遮罩会把解析对话框挡住，让 click 一直重试到超时（第一轮就是这么红的）。
  */
@@ -165,8 +166,8 @@ async function attemptCandidate(page, candidate) {
 
 /** 点「信任并初始化」→「我信任并继续」，再把初始化期间冒出来的域名授权逐个点掉。 */
 async function initializeSource(page, dialog) {
-  await clickWithApprovals(page, dialog.getByRole('button', { name: '信任并初始化自定义音源' }))
-  await clickWithApprovals(page, page.getByRole('button', { name: '我信任并继续' }))
+  await clickWithApprovals(page, dialog.getByRole('button', { name: '信任并初始化自定义音源' }), '信任并初始化')
+  await clickWithApprovals(page, page.getByRole('button', { name: '我信任并继续' }), '确认隔离初始化')
   const platformSelect = dialog.getByLabel('选择自定义音源平台')
   const deadline = Date.now() + 60_000
   let approvals = 0
@@ -182,8 +183,10 @@ async function initializeSource(page, dialog) {
 
 /** 打开第 index 个下拉框，读出候选，按 picker 选一个（选不到就用第一个）。 */
 async function pickFromSelect(page, dialog, index, picker) {
+  const selectLabel = index === 0 ? '音源平台下拉框' : '音质下拉框'
   const select = dialog.locator('.source-playback-fields .el-select').nth(index)
-  await clickWithApprovals(page, select)
+  console.log(`LIVE_ACTION 开始：点击${selectLabel}`)
+  await clickWithApprovals(page, select, selectLabel)
   const options = page.locator('.el-select-dropdown__item:visible')
   const opened = Date.now() + 15_000
   while (Date.now() < opened) {
@@ -194,14 +197,16 @@ async function pickFromSelect(page, dialog, index, picker) {
   const labels = (await options.allInnerTexts()).map((text) => text.trim()).filter(Boolean)
   if (!labels.length) throw new Error(`第 ${index + 1} 个下拉框没有任何可选项`)
   const picked = picker(labels) || labels[0]
-  await clickWithApprovals(page, page.getByRole('option', { name: picked, exact: true }).first(), `选项 ${picked}`)
+  console.log(`LIVE_ACTION 下拉项：${labels.join(' / ')}，准备选择「${picked}」`)
+  await clickWithApprovals(page, page.getByRole('option', { name: picked, exact: true }).first(), `下拉选项 ${picked}`)
   await page.waitForTimeout(200)
   return { picked, labels }
 }
 
 /** 点「隔离解析并播放」，边等结果边处理授权弹窗，直到拿到媒体地址或出现明确失败提示。 */
 async function resolveAndCollect(page, dialog, audio, timeoutMs) {
-  await clickWithApprovals(page, dialog.getByRole('button', { name: '隔离解析并播放歌曲' }))
+  console.log('LIVE_ACTION 开始：按所选平台发起真实 musicUrl 解析')
+  await clickWithApprovals(page, dialog.getByRole('button', { name: '隔离解析并播放歌曲' }), '隔离解析并播放')
   const notices = new Set()
   const deadline = Date.now() + timeoutMs
   let src = ''
@@ -247,8 +252,12 @@ async function waitForPlayback(audio, timeoutMs) {
 async function clickVisible(page, name) {
   const button = page.getByRole('button', { name }).first()
   if (!(await button.isVisible().catch(() => false))) return false
-  await button.click({ timeout: 3_000 }).catch(() => {})
-  return true
+  try {
+    await button.click({ timeout: 1_500 })
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -258,10 +267,21 @@ async function clickVisible(page, name) {
  */
 async function drainApprovals(page) {
   let handled = 0
-  for (let round = 0; round < 4; round += 1) {
-    if (!(await clickVisible(page, '仅本次允许'))) break
-    handled += 1
-    await page.waitForTimeout(250)
+  for (let round = 0; round < 8; round += 1) {
+    // 优先关闭版本提醒：若它压在授权窗之上，先点底下的「仅本次允许」会一直被遮罩拦截。
+    if (await clickVisible(page, '稍后处理')) {
+      handled += 1
+      console.log('LIVE_ACTION 已选择「稍后处理」关闭星海版本更新提醒（未打开任何外部地址）')
+      await page.waitForTimeout(200)
+      continue
+    }
+    if (await clickVisible(page, '仅本次允许')) {
+      handled += 1
+      console.log('LIVE_ACTION 已批准星海音源本次单域名请求')
+      await page.waitForTimeout(200)
+      continue
+    }
+    break
   }
   return handled
 }
@@ -269,10 +289,13 @@ async function drainApprovals(page) {
 async function clickWithApprovals(page, locator, label = '', timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs
   let lastError = ''
+  let attempts = 0
   while (Date.now() < deadline) {
     await drainApprovals(page)
+    attempts += 1
     try {
       await locator.click({ timeout: 2_000 })
+      console.log(`LIVE_ACTION 点击成功：${label || '未命名动作'}（尝试 ${attempts} 次）`)
       return
     } catch (error) {
       lastError = String(error && error.message ? error.message : error).split('\n')[0]
@@ -280,7 +303,19 @@ async function clickWithApprovals(page, locator, label = '', timeoutMs = 30_000)
       await page.waitForTimeout(300)
     }
   }
-  throw new Error(`点击${label ? `「${label}」` : ''}失败（${timeoutMs}ms，授权弹窗可能一直在挡）：${lastError.slice(0, 200)}`)
+  const blocker = await summarizeBlockers(page)
+  throw new Error(`点击「${label || '未命名动作'}」失败（${timeoutMs}ms，${attempts} 次）：${lastError.slice(0, 180)}；当前 UI：${blocker}`)
+}
+
+async function summarizeBlockers(page) {
+  const dialogs = await page.locator('.el-message-box:visible').allInnerTexts().catch(() => [])
+  const sourceDialogs = await page.locator('.el-dialog:visible').allInnerTexts().catch(() => [])
+  const buttons = await page.locator('button:visible').allInnerTexts().catch(() => [])
+  return [
+    `messageBox=${JSON.stringify(dialogs.map((text) => text.trim().slice(0, 100)))}`,
+    `dialogs=${JSON.stringify(sourceDialogs.map((text) => text.trim().slice(0, 100)))}`,
+    `buttons=${JSON.stringify(buttons.map((text) => text.trim()).filter(Boolean).slice(-12))}`
+  ].join(' ')
 }
 
 function hostOf(value) {
