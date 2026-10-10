@@ -1,4 +1,13 @@
 <template>
+  <div v-if="resumePrompt" class="session-resume" role="status">
+    <div class="session-resume-text">
+      继续上次的收听？队列 {{ resumePrompt.count }} 首，上次播到第 {{ resumePrompt.index }} 首 · {{ resumePrompt.position }}
+    </div>
+    <div class="session-resume-actions">
+      <button type="button" class="session-resume-btn primary" @click="resumeSession">继续</button>
+      <button type="button" class="session-resume-btn" @click="ignoreSession">忽略</button>
+    </div>
+  </div>
   <div
     class="player-bar glass-panel"
     :class="{
@@ -637,7 +646,15 @@
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { CROSSFADE_OPTIONS, PLAYER_DOCKS, PLAYER_VIEW_MODES, SLEEP_TIMER_MINUTES, usePlayerStore } from '@/store/player'
+import {
+  CROSSFADE_OPTIONS,
+  PLAYER_DOCKS,
+  PLAYER_VIEW_MODES,
+  SLEEP_TIMER_MINUTES,
+  getSessionSongResolver,
+  isSessionSnapshotFresh,
+  usePlayerStore
+} from '@/store/player'
 import { useUserStore } from '@/store/user'
 import { useDislikeStore } from '@/store/dislike'
 import { useDownloadStore } from '@/store/downloads'
@@ -708,6 +725,67 @@ const SHORTCUT_HELP = Object.freeze([
 
 // ---- 交叉淡入淡出 ----
 const crossfadeVisible = ref(false)
+
+// ---- 会话续播（P2-7）：整份队列 + 位置 + 模式 + 倍速 ----
+const resumePrompt = ref(null)
+let lastSessionPersist = 0
+
+function checkSessionResume() {
+  const snapshot = playerStore.sessionSnapshot
+  if (!snapshot || playerStore.queue.length > 0) return
+  if (!isSessionSnapshotFresh(snapshot)) {
+    playerStore.clearSessionSnapshot()
+    return
+  }
+  const ids = Array.isArray(snapshot.queueIds) ? snapshot.queueIds : []
+  const index = Math.max(0, ids.indexOf(snapshot.currentSongId))
+  resumePrompt.value = { count: ids.length, index: index + 1, position: fmtDuration(Math.floor(snapshot.position || 0)) }
+}
+
+async function resumeSession() {
+  if (!resumePrompt.value) return
+  resumePrompt.value = null
+  const target = playerStore.consumeSessionSnapshot()
+  if (!target) return
+  const resolver = getSessionSongResolver()
+  let songs = []
+  try {
+    songs = (await resolver?.(target.queueIds)) || []
+  } catch {
+    songs = []
+  }
+  songs = Array.isArray(songs) ? songs.filter(Boolean) : []
+  if (songs.length === 0) {
+    // 没有「按 id 取曲目」的解析器时不能假装修复：明确告知无法续播。
+    ElMessage.info('上次那批曲目已不在可访问的范围里，无法续播')
+    return
+  }
+  const index = Math.max(0, songs.findIndex((song) => song.id === target.currentSongId))
+  playerStore.setPlaybackRate(target.playbackRate)
+  playerStore.setMode(target.mode)
+  // 位置沿用既有的单曲续播机制（太靠开头/结尾会被自动忽略）。
+  const startSong = songs[index]
+  playerStore.saveResumePosition(startSong?.id, target.position)
+  playerStore.playAll(songs, startSong?.id)
+  ElMessage.success(`继续上次的收听：第 ${index + 1} 首 · ${fmtDuration(Math.floor(target.position || 0))}`)
+}
+
+function ignoreSession() {
+  resumePrompt.value = null
+  playerStore.clearSessionSnapshot()
+}
+
+function persistSession({ force = false } = {}) {
+  if (playerStore.queue.length === 0) return
+  const now = Date.now()
+  if (!force && now - lastSessionPersist < 15000) return
+  lastSessionPersist = now
+  playerStore.saveSessionSnapshot({ now })
+}
+
+function handlePageHide() {
+  persistSession({ force: true })
+}
 
 // ---- 迷你 / 沉浸形态的停靠与自动隐藏 ----
 const dockVisible = ref(false)
@@ -2136,6 +2214,7 @@ function onAudioTimeUpdate(event) {
   if (song && !song.isLocal && !song.isCustomSource && now - resumeSavedAt > 5000) {
     resumeSavedAt = now
     playerStore.saveResumePosition(song.id, audio.currentTime)
+    persistSession()
   }
 }
 
@@ -2249,7 +2328,10 @@ function onVisibilityChange() {
     playerStore.checkSleepTimer()
     // 回到前台：AudioContext 可能已被浏览器挂起，不 resume 就会只走进度不出声。
     resumeSpatialAudio()
+    return
   }
+  // 切到后台/最小化时把整份队列落盘，回来或下次冷启动都能续播。
+  persistSession({ force: true })
 }
 
 onMounted(() => {
@@ -2294,6 +2376,8 @@ onMounted(() => {
   window.addEventListener('resize', onViewportResize)
   document.addEventListener('visibilitychange', onVisibilityChange)
   loadFavorites()
+  checkSessionResume()
+  window.addEventListener('beforeunload', handlePageHide)
 })
 
 onUnmounted(() => {
@@ -2328,6 +2412,8 @@ onUnmounted(() => {
   window.removeEventListener('resize', onViewportResize)
   document.removeEventListener('visibilitychange', onVisibilityChange)
   clearSleepClock()
+  persistSession({ force: true })
+  window.removeEventListener('beforeunload', handlePageHide)
 })
 
 // 歌词舞台里手动退出沉浸（Esc / 按钮）时，播放器形态跟着回到标准，避免状态不一致。
@@ -2377,6 +2463,46 @@ watch(() => userStore.isLogin, (loggedIn) => {
   box-shadow: 0 -18px 50px -34px var(--holo-glow), 0 -1px 0 rgba(255, 255, 255, 0.1) inset;
   transform-style: preserve-3d;
 }
+/* ---- 会话续播 ---- */
+.session-resume {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--player-h) + 12px);
+  z-index: 1200;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: min(640px, calc(100vw - 32px));
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--holo-primary) 38%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg-elevated, #16171c) 92%, transparent);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.32);
+}
+.session-resume-text {
+  font-size: 13px;
+  color: var(--text-main);
+}
+.session-resume-actions {
+  display: flex;
+  gap: 8px;
+}
+.session-resume-btn {
+  padding: 5px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-sub);
+  font-size: 12px;
+  cursor: pointer;
+}
+.session-resume-btn.primary {
+  color: #fff;
+  background: color-mix(in srgb, var(--holo-primary) 74%, transparent);
+  border-color: transparent;
+}
+
 /* ---- 交叉淡入淡出 ---- */
 .crossfade-panel {
   display: flex;

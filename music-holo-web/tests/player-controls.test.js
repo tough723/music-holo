@@ -2,6 +2,11 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import {
   CROSSFADE_OPTIONS,
+  SESSION_TTL_MS,
+  getSessionSongResolver,
+  isSessionSnapshotFresh,
+  normalizeSessionSnapshot,
+  setSessionSongResolver,
   CROSSFADE_MAX_MS,
   PLAYBACK_RATES,
   PLAYER_VIEW_MODES,
@@ -268,6 +273,66 @@ describe('切歌交叉淡入淡出', () => {
     expect(store.setCrossfade(-10)).toBe(0)
     expect(store.setCrossfade('abc')).toBe(0)
     expect(store.setCrossfade(CROSSFADE_MAX_MS)).toBe(CROSSFADE_MAX_MS)
+  })
+})
+
+describe('队列级会话续播', () => {
+  const songs = [
+    { id: 10, title: '深夜巴士', artist: 'A', duration: 200, audioUrl: '/audio/10.wav' },
+    { id: 11, title: '雨港', artist: 'B', duration: 180, audioUrl: '/audio/11.wav', isLocal: true },
+    { id: 12, title: '信号塔', artist: 'C', duration: 150, audioUrl: '/audio/12.wav' }
+  ]
+
+  beforeEach(() => {
+    localStorage.clear()
+    setActivePinia(createPinia())
+  })
+
+  it('保存整份队列与位置，只存曲库曲目，且能持久化后重新读出', () => {
+    const store = usePlayerStore()
+    store.playAll(songs, 11) // 按曲目 id 起播：当前曲目是本地文件
+    store.currentTime = 42.5
+    store.setMode('random')
+    store.setPlaybackRate(1.25)
+    const snapshot = store.saveSessionSnapshot({ now: 1_700_000_000_000 })
+    expect(snapshot.queueIds).toEqual([10, 12]) // 本地文件不入库（下次启动拿不到）
+    // 当前曲目是本地文件（不在快照里），位置不记，避免恢复到别的曲目上。
+    expect(snapshot.currentSongId).toBe(11)
+    expect(snapshot.position).toBe(0)
+    expect(snapshot.mode).toBe('random')
+    expect(snapshot.playbackRate).toBe(1.25)
+
+    setActivePinia(createPinia())
+    expect(usePlayerStore().sessionSnapshot).toEqual(snapshot)
+    expect(isSessionSnapshotFresh(snapshot, 1_700_000_000_000)).toBe(true)
+  })
+
+  it('队列为空时不写快照，陈旧快照不提示续播', () => {
+    const store = usePlayerStore()
+    expect(store.saveSessionSnapshot({ now: 1000 })).toBeNull()
+    expect(store.sessionSnapshot).toBeNull()
+
+    const stale = normalizeSessionSnapshot({ version: 1, queueIds: [1], savedAt: 1000 })
+    expect(isSessionSnapshotFresh(stale, 1000 + SESSION_TTL_MS + 1)).toBe(false)
+    expect(isSessionSnapshotFresh(stale, 999)).toBe(false) // 时钟回拨也不算新鲜
+  })
+
+  it('consume 后快照即清空，注册解析器才能把队列拼回来', async () => {
+    const store = usePlayerStore()
+    store.playAll(songs, 12)
+    store.saveSessionSnapshot({ now: 1_700_000_000_000 })
+    const target = store.consumeSessionSnapshot()
+    expect(target.queueIds).toEqual([10, 12])
+    expect(store.sessionSnapshot).toBeNull()
+    expect(store.consumeSessionSnapshot()).toBeNull()
+
+    // 解析器是「按 id 取曲目」的入口，store 不持有曲库；未注册时返回空。
+    setSessionSongResolver(null)
+    expect(getSessionSongResolver()).toBeNull()
+    setSessionSongResolver((ids) => songs.filter((song) => ids.includes(song.id)))
+    expect(getSessionSongResolver()(target.queueIds).map((song) => song.id)).toEqual([10, 12])
+    setSessionSongResolver('not a function')
+    expect(getSessionSongResolver()).toBeNull()
   })
 })
 

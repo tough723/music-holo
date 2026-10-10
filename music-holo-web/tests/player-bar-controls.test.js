@@ -5,7 +5,7 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import ElementPlus from 'element-plus'
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 import PlayerBar from '../src/components/PlayerBar.vue'
-import { usePlayerStore } from '../src/store/player.js'
+import { usePlayerStore, setSessionSongResolver } from '../src/store/player.js'
 
 /**
  * 底部播放器是全局组件，这里用真实组件挂载（jsdom）验证它的交互而不是 store 本身：
@@ -42,6 +42,17 @@ async function mountPlayer() {
 }
 
 const flush = async () => { await nextTick(); await nextTick() }
+
+/** 冷启动模拟：抹掉持久化的曲目对象，只留下会话快照（曲目得靠解析器重新取）。 */
+function dropPersistedQueue() {
+  const raw = localStorage.getItem('mh_player')
+  if (!raw) return
+  const state = JSON.parse(raw)
+  delete state.queue
+  delete state.currentIndex
+  delete state.currentTime
+  localStorage.setItem('mh_player', JSON.stringify(state))
+}
 
 describe('底部播放器交互', () => {
   beforeEach(() => {
@@ -520,5 +531,58 @@ describe('底部播放器交互', () => {
     expect(nativeAudio.getAttribute('src')).toBe('/audio/2.wav')
     expect(spatialAudio.__playCalls || 0).toBe(0)
     expect(nativeAudio.volume).toBeCloseTo(store.volume, 2)
+  })
+
+  it('会话续播：冷启动提示上一次的队列，确认后恢复，忽略后不再出现', async () => {
+    const store = await mountPlayer()
+    store.playAll([song(1, '霓虹海'), song(2, '云端信使'), song(3, '极光列车')], 2)
+    await flush()
+    store.currentTime = 96
+    store.saveSessionSnapshot({ now: Date.now() })
+    await flush()
+    expect(document.querySelector('.session-resume')).toBeNull() // 队列还在播放时不打扰
+
+    // 模拟冷启动：关掉组件（保留 localStorage）再挂一次。
+    app.unmount()
+    await flush()
+    dropPersistedQueue()
+    const restarted = await mountPlayer()
+    await flush()
+    const banner = document.querySelector('.session-resume')
+    expect(banner).not.toBeNull()
+    expect(banner.textContent).toContain('3 首')
+    expect(banner.textContent).toContain('第 2 首')
+    expect(banner.textContent).toContain('01:36')
+
+    // 没有「按 id 取曲目」的解析器时不能假装成功：给出明确提示并丢弃快照。
+    setSessionSongResolver(null)
+    banner.querySelector('.session-resume-btn.primary').click()
+    await flush()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    await flush()
+    expect(document.querySelector('.session-resume')).toBeNull()
+    expect(restarted.sessionSnapshot).toBeNull()
+
+    // 注册解析器后可真正恢复队列与模式。
+    const library = [song(1, '霓虹海'), song(2, '云端信使'), song(3, '极光列车')]
+    setSessionSongResolver((ids) => ids.map((id) => library.find((item) => item.id === id)).filter(Boolean))
+    restarted.playAll(library, 2)
+    restarted.currentTime = 96
+    restarted.saveSessionSnapshot({ now: Date.now() })
+    app.unmount()
+    dropPersistedQueue() // 冷启动：曲目对象不在本地，只剩会话快照
+    await flush()
+    const second = await mountPlayer()
+    await flush()
+    const secondBanner = document.querySelector('.session-resume')
+    expect(secondBanner).not.toBeNull()
+    secondBanner.querySelector('.session-resume-btn.primary').click()
+    await flush()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    await flush()
+    expect(second.queue.map((item) => item.id)).toEqual([1, 2, 3])
+    expect(second.currentSong.title).toBe('云端信使')
+    expect(document.querySelector('.session-resume')).toBeNull()
+    setSessionSongResolver(null)
   })
 })

@@ -49,6 +49,49 @@ export const PLAYER_DOCKS = Object.freeze([
 ])
 const PLAYER_DOCK_KEYS = PLAYER_DOCKS.map((item) => item.key)
 
+/**
+ * 会话恢复需要一个「按 id 取曲目」的解析器（曲库/歌单数据在各页面手上，store 不持有曲库）。
+ * 注册后「继续上次的收听」才能把队列拼回来；未注册时续播入口会给出明确提示而不是假装成功。
+ */
+let sessionSongResolver = null
+
+export function setSessionSongResolver(resolver) {
+  sessionSongResolver = typeof resolver === 'function' ? resolver : null
+}
+
+export function getSessionSongResolver() {
+  return sessionSongResolver
+}
+
+/** 会话快照：整份队列 + 播放位置 + 模式 + 倍速，冷启动后可询问“继续上次的收听”。 */
+export const SESSION_SNAPSHOT_VERSION = 1
+/** 快照有效期（毫秒）：超过就当作陈旧，不再提示续播。 */
+export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
+
+export function normalizeSessionSnapshot(saved = {}) {
+  const source = saved && typeof saved === 'object' ? saved : {}
+  if (Number(source.version) !== SESSION_SNAPSHOT_VERSION) return null
+  const ids = Array.isArray(source.queueIds) ? source.queueIds.filter((id) => id != null).slice(0, 500) : []
+  if (ids.length === 0) return null
+  const savedAt = Number(source.savedAt)
+  if (!Number.isFinite(savedAt) || savedAt <= 0) return null
+  return {
+    version: SESSION_SNAPSHOT_VERSION,
+    queueIds: ids,
+    currentSongId: source.currentSongId ?? null,
+    position: Math.max(0, Number(source.position) || 0),
+    mode: MODES.some((item) => item.key === source.mode) ? source.mode : 'order',
+    playbackRate: normalizePlaybackRate(source.playbackRate ?? 1),
+    savedAt
+  }
+}
+
+export function isSessionSnapshotFresh(snapshot, now = Date.now()) {
+  if (!snapshot) return false
+  const savedAt = Number(snapshot.savedAt)
+  return Number.isFinite(savedAt) && now - savedAt >= 0 && now - savedAt < SESSION_TTL_MS
+}
+
 export function normalizePlayerDock(value) {
   return PLAYER_DOCK_KEYS.includes(value) ? value : 'bottom'
 }
@@ -228,6 +271,7 @@ function persist(state) {
     // 空间音效是输出偏好：记住用户上次的开关，下一次用户手势触发播放时自动套用。
     spatialPreferred: Boolean(state.spatialPreferred),
     crossfadeMs: normalizeCrossfade(state.crossfadeMs),
+    sessionSnapshot: normalizeSessionSnapshot(state.sessionSnapshot),
     playerViewMode: normalizePlayerViewMode(state.playerViewMode),
     playerBarDock: normalizePlayerDock(state.playerBarDock),
     playerBarAutoHide: state.playerBarAutoHide !== false,
@@ -276,6 +320,8 @@ export const usePlayerStore = defineStore('player', {
       spatialPreferred: saved.spatialPreferred === true,
       /** 切歌交叉淡入淡出时长（毫秒，0 = 关闭）。 */
       crossfadeMs: normalizeCrossfade(saved.crossfadeMs),
+      /** 上次收听的会话快照（队列 id + 位置 + 模式 + 倍速），只在用户确认后恢复。 */
+      sessionSnapshot: normalizeSessionSnapshot(saved.sessionSnapshot),
       /** 播放器形态：standard / mini / immersive。 */
       playerViewMode: normalizePlayerViewMode(saved.playerViewMode),
       /** 迷你/沉浸形态的停靠位置与贴边自动隐藏。 */
@@ -948,6 +994,53 @@ export const usePlayerStore = defineStore('player', {
       this.playStats = normalizePlayStats(stats)
       persist(this)
       return current
+    },
+    /**
+     * 保存整份会话（队列 + 位置 + 模式 + 倍速）。
+     * 只存曲库歌曲（本地 blob 与自定义源签名地址不入库），恢复时由调用方按 id 重新取曲目。
+     */
+    saveSessionSnapshot({ now = Date.now() } = {}) {
+      const queueIds = this.queue
+        .filter((song) => !song?.isLocal && !song?.isCustomSource && song?.id != null)
+        .map((song) => song.id)
+      if (queueIds.length === 0) {
+        this.sessionSnapshot = null
+        persist(this)
+        return null
+      }
+      // 当前曲目本身不可恢复（本地文件/自定义源）时位置没有意义，记为 0。
+      const restorable = this.currentIndex >= 0 && queueIds.includes(this.currentSong?.id)
+      const position = restorable ? Math.max(0, Number(this.currentTime) || 0) : 0
+      this.sessionSnapshot = normalizeSessionSnapshot({
+        version: SESSION_SNAPSHOT_VERSION,
+        queueIds,
+        currentSongId: this.currentSong?.id ?? null,
+        position,
+        mode: this.mode,
+        playbackRate: this.playbackRate,
+        savedAt: now
+      })
+      persist(this)
+      return this.sessionSnapshot
+    },
+    /** 恢复会话：返回需要重新加载的队列 id 与目标位置，调用方取回曲目后 playAll。 */
+    consumeSessionSnapshot() {
+      const snapshot = this.sessionSnapshot
+      this.sessionSnapshot = null
+      persist(this)
+      if (!snapshot) return null
+      return {
+        queueIds: snapshot.queueIds.slice(),
+        currentSongId: snapshot.currentSongId,
+        position: snapshot.position,
+        mode: snapshot.mode,
+        playbackRate: snapshot.playbackRate
+      }
+    },
+    /** 丢弃会话快照（用户选择“不继续”）。 */
+    clearSessionSnapshot() {
+      this.sessionSnapshot = null
+      persist(this)
     },
     /** 切歌交叉淡入淡出：只接受 0/30/60/120 毫秒，默认关闭。 */
     setCrossfade(ms) {
