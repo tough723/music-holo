@@ -90,17 +90,19 @@ test('@live 榜单曲目用真实星海音源在线解析（第三方依赖，�
   }, { timeout: 60_000, message: '解析既没有产出地址也没有任何提示（静默失败）' }).toBeTruthy()
 
   const noticeText = [...notices].join(' | ')
+  let outcome = ''
   if (mediaSrc.startsWith('https://')) {
     // 真实直链落地：无头 Chromium 也会真解码，进度必须往前走
     await expect.poll(() => audio.evaluate((element) => element.currentTime), { timeout: 20_000 })
       .toBeGreaterThan(0)
-    testInfo.annotations.push({ type: 'live-outcome', description: `https 直链已解码播放：${mediaSrc.slice(0, 72)}…` })
+    const position = await audio.evaluate((element) => element.currentTime)
+    outcome = `PLAYED https 直链已解码播放，进度 ${position.toFixed(2)}s，主机 ${new URL(mediaSrc).host}`
   } else {
     // 明文 http 直链按既有安全边界被拒，或第三方/网络失败：都必须有明确提示
     expect(noticeText, '解析没落地时必须给出明确提示，不能静默').toMatch(/失败|不安全|拒绝|不支持|http|错误|超时|无法/)
-    testInfo.annotations.push({
-      type: 'live-outcome',
-      description: `未落地（地址=${mediaSrc || '空'}），界面提示：${noticeText.slice(0, 200)}`
-    })
+    outcome = `BLOCKED 未落地（地址=${mediaSrc ? mediaSrc.slice(0, 60) : '空'}），界面提示：${noticeText.slice(0, 160)}`
   }
+  testInfo.annotations.push({ type: 'live-outcome', description: outcome })
+  // CI 日志主机不在白名单时也能拿到结论：打成一行标记，由 workflow 转成 job 注解。
+  console.log(`LIVE_OUTCOME=${outcome.replace(/\n/g, ' ')}`)
 })

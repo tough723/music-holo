@@ -119,6 +119,11 @@ jobs:
             tail -n 60 /tmp/live-source.log
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          # 结论打成 job 注解，方便通过 API（而不是下载日志）查看
+          outcome=$(grep -m1 'LIVE_OUTCOME=' /tmp/live-source.log || true)
+          if [ -n "$outcome" ]; then
+            echo "::notice title=真实音源在线结果::${outcome#LIVE_OUTCOME=}"
+          fi
           exit 0
       - name: Upload live journey diagnostics
         if: always()
