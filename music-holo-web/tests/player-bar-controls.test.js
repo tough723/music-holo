@@ -382,6 +382,89 @@ describe('底部播放器交互', () => {
     expect(document.querySelector('.queue-count').textContent).not.toContain('下一首《')
   })
 
+  it('换 src / 切歌造成的中止不算故障：不弹错误、不记失败统计', async () => {
+    const store = await mountPlayer()
+    // 曲库歌曲：错误会先尝试本机离线副本，这里用自定义源跳过那条异步分支
+    store.playAll([{ ...song(1, '霓虹海', 240), isCustomSource: true }, song(2, '云端信使', 240)], 1)
+    await flush()
+    const [nativeAudio] = document.querySelectorAll('audio')
+
+    const failWith = (code) => {
+      Object.defineProperty(nativeAudio, 'error', { value: { code }, configurable: true })
+      nativeAudio.dispatchEvent(new Event('error'))
+    }
+
+    // 中止（切歌、重新 load 都会触发）：不当成故障
+    failWith(1)
+    await flush()
+    expect(document.querySelector('.pb-retry')).toBeNull()
+    expect(useStatsStore().events.filter((item) => item.type === 'error')).toHaveLength(0)
+
+    // 真正的地址不可用：仍然照旧给出手动重试入口
+    failWith(4)
+    await flush()
+    expect(document.querySelector('.pb-retry')).not.toBeNull()
+    expect(useStatsStore().events.filter((item) => item.type === 'error').length).toBeGreaterThan(0)
+  })
+
+  it('队列里会标出播放失败的曲目，重试或真的播起来后撤掉标记', async () => {
+    const store = await mountPlayer()
+    store.playAll([{ ...song(1, '霓虹海', 240), isCustomSource: true }, song(2, '云端信使', 240)], 1)
+    await flush()
+    const [nativeAudio] = document.querySelectorAll('audio')
+    host.querySelector('button[aria-label="播放队列"]').click()
+    await flush()
+    const failedRows = () => Array.from(document.querySelectorAll('.queue-failed-tag'))
+    expect(failedRows()).toHaveLength(0)
+
+    Object.defineProperty(nativeAudio, 'error', { value: { code: 4 }, configurable: true })
+    nativeAudio.dispatchEvent(new Event('error'))
+    await flush()
+    expect(failedRows()).toHaveLength(1)
+    expect(failedRows()[0].title).toContain('播放失败')
+
+    // 手动重试：先撤掉标记，等结果
+    document.querySelector('.pb-retry').click()
+    await flush()
+    expect(failedRows()).toHaveLength(0)
+  })
+
+  it('播放真的推进后，队列里的失败标记会自动撤掉', async () => {
+    vi.useFakeTimers()
+    try {
+      const store = await mountPlayer()
+      store.playAll([{ ...song(1, '霓虹海', 240), isCustomSource: true }, song(2, '云端信使', 240)], 1)
+      await flush()
+      const [nativeAudio] = document.querySelectorAll('audio')
+
+      // 网络中断 ×4：三次自动重试用尽后留下失败标记
+      for (let i = 0; i < 4; i += 1) {
+        Object.defineProperty(nativeAudio, 'error', { value: { code: 2 }, configurable: true })
+        nativeAudio.dispatchEvent(new Event('error'))
+        vi.advanceTimersByTime(7000)
+        await flush()
+      }
+      expect(document.querySelector('.pb-retry')).not.toBeNull()
+
+      host.querySelector('button[aria-label="播放队列"]').click()
+      await flush()
+      expect(document.querySelectorAll('.queue-failed-tag')).toHaveLength(1)
+
+      // 恢复播放并且进度真的在走：看门狗确认后撤掉标记
+      Object.defineProperty(nativeAudio, 'paused', { value: false, configurable: true })
+      Object.defineProperty(nativeAudio, 'readyState', { value: 2, configurable: true })
+      store.playing = true
+      nativeAudio.currentTime = 1
+      await flush()
+      nativeAudio.currentTime = 3
+      vi.advanceTimersByTime(2500)
+      await flush()
+      expect(document.querySelectorAll('.queue-failed-tag')).toHaveLength(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('队列条目可用键盘操作：回车播放、Delete 移除、Alt+方向键移动', async () => {
     const store = await mountPlayer()
     store.playAll([song(1, '霓虹海'), song(2, '云端信使'), song(3, '全息之恋')], 1)

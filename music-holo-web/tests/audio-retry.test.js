@@ -8,6 +8,7 @@ import {
   MEDIA_ERR_DECODE,
   MEDIA_ERR_NETWORK,
   MEDIA_ERR_SRC_NOT_SUPPORTED,
+  isAbortedError,
   isTransientAudioError,
   nextRetryDelay,
   shouldAutoRetry
@@ -63,5 +64,18 @@ describe('音频加载失败的自动重试策略', () => {
     expect(shouldAutoRetry(2, MEDIA_ERR_NETWORK)).toBe(true) // 第三次
     expect(shouldAutoRetry(3, MEDIA_ERR_NETWORK)).toBe(false) // 用完了
     expect(shouldAutoRetry(0, MEDIA_ERR_SRC_NOT_SUPPORTED)).toBe(false)
+  })
+})
+
+describe('自己造成的中止不算播放失败', () => {
+  it('只有 MEDIA_ERR_ABORTED 被认作中止', () => {
+    expect(isAbortedError(1)).toBe(true)
+    expect(isAbortedError('1')).toBe(true)
+    expect(isAbortedError(2)).toBe(false)
+    expect(isAbortedError(3)).toBe(false)
+    expect(isAbortedError(4)).toBe(false)
+    expect(isAbortedError(0)).toBe(false)
+    expect(isAbortedError(undefined)).toBe(false)
+    expect(isAbortedError(null)).toBe(false)
   })
 })

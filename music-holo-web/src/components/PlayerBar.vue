@@ -728,6 +728,11 @@
       <div class="queue-meta">
         <div class="queue-title">{{ entry.song.title }}</div>
         <div class="queue-artist">
+          <span
+            v-if="failedSongIds.has(entry.song.id)"
+            class="queue-failed-tag"
+            title="本次播放失败：地址无效、网络中断或解码失败"
+          >播放失败</span>
           {{ entry.song.singerName }}
           <el-tag v-if="entry.song.isLocal" size="small" effect="plain" class="queue-local-tag">本地</el-tag>
           <el-tag v-else-if="entry.song.isCustomSource" size="small" effect="plain" class="queue-local-tag">
@@ -797,7 +802,14 @@ import { formatSeconds, formatPercent } from '@/utils/playStats'
 import * as favoriteApi from '@/api/favorite'
 import * as playlistApi from '@/api/playlist'
 import { fmtDuration } from '@/utils/format'
-import { MEDIA_ERR_NETWORK, isPlaybackStalled, isTransientAudioError, nextRetryDelay, hasProgress } from '@/utils/audioRetry'
+import {
+  MEDIA_ERR_NETWORK,
+  hasProgress,
+  isAbortedError,
+  isPlaybackStalled,
+  isTransientAudioError,
+  nextRetryDelay
+} from '@/utils/audioRetry'
 import { nextPreloadIndex, shouldPreloadNext } from '@/utils/audioPreload'
 import { nextIndexAfterFailure, nextPreviewIndex } from '@/utils/playMode'
 import {
@@ -2047,6 +2059,12 @@ const nextButtonTooltip = computed(() => (nextSongPreview.value
   ? `下一首 · Shift + →（${nextSongPreview.value}）`
   : '下一首 · Shift + →'))
 
+/**
+ * 本次会话里失败过的曲目（按 id）：队列里标出来，
+ * 这样自动跳过之后用户还能看到“是哪一首没播成”，而不是以为播放器自己抽风。
+ */
+const failedSongIds = ref(new Set())
+
 const autoSkipOnError = computed({
   get: () => playerStore.autoSkipOnError,
   set: (enabled) => playerStore.setAutoSkipOnError(enabled)
@@ -2195,8 +2213,11 @@ function checkPlaybackStall() {
   if (hasProgress(lastProgressTime, audio.currentTime)) {
     lastProgressTime = audio.currentTime
     stallSince = 0
-    // 真的在往前播了：这一首没坏，连续失败计数清零。
+    // 真的在往前播了：这一首没坏，连续失败计数清零，队列里的失败标记也撤掉。
     consecutiveFailures.value = 0
+    if (song?.id !== undefined && song?.id !== null && failedSongIds.value.delete(song.id)) {
+      failedSongIds.value = new Set(failedSongIds.value)
+    }
     return
   }
   const now = Date.now()
@@ -2228,6 +2249,9 @@ function recoverFromStall(song) {
 function retryAudio() {
   const song = currentSong.value
   const audio = activeAudioElement()
+  if (song?.id !== undefined && song?.id !== null && failedSongIds.value.delete(song.id)) {
+    failedSongIds.value = new Set(failedSongIds.value)
+  }
   if (!song?.audioUrl || !audio) return
   // 用户手动重试：清空自动重试的账本，重新给满三次机会。
   resetAutoRetry()
@@ -3025,6 +3049,9 @@ function onAudioEnded(event) {
 function onAudioError(event) {
   if (event.currentTarget !== activeAudioElement()) return
   buffering.value = false
+  // 换 src / 调 load() / 快速切歌都会让浏览器报 MEDIA_ERR_ABORTED，那是我们自己的动作，
+  // 不是故障：既不记失败统计，也不弹提示（真卡住了由缓冲看门狗兜）。
+  if (isAbortedError(event.currentTarget?.error?.code ?? event.error?.code)) return
   // 播放失败归因到音源：不记 skip（用户没主动切走），也不算听完。
   statsSkipGuard = true
   if (currentSong.value) recordStats('error', currentSong.value)
@@ -3076,6 +3103,7 @@ function reportAudioLoadFailure(song, code) {
     return
   }
   audioError.value = true
+  if (song?.id !== undefined && song?.id !== null) failedSongIds.value.add(song.id)
   consecutiveFailures.value += 1
   // 自动跳过只在「用户开了开关 + 不是单曲循环 + 还没连着失败太多次 + 确实有下一首」时生效。
   if (autoSkipIfEnabled()) return
@@ -4096,6 +4124,18 @@ watch(() => userStore.isLogin, (loggedIn) => {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+.queue-failed-tag {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 16px;
+  color: #ffb4a2;
+  border: 1px solid rgba(255, 180, 162, 0.5);
+  background: rgba(255, 180, 162, 0.1);
+  cursor: help;
 }
 .queue-auto-skip {
   display: inline-flex;

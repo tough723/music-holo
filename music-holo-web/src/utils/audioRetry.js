@@ -21,6 +21,18 @@ export function isTransientAudioError(code) {
 }
 
 /**
+ * 是否是我们自己造成的“中止”（MEDIA_ERR_ABORTED）。
+ *
+ * 按 HTML 规范，code 1 表示取流过程被中止——换 src、调 load()、快速切歌都会触发它，
+ * 它是我们自己的动作，不是故障。以前会把这种事件当成一次播放失败弹提示，
+ * 于是网络慢一点、多切两首歌就会看到「《新歌》音频加载失败」这种假警报。
+ * 真要是切完之后卡住不出声，由缓冲看门狗（连续 8 秒没进展）兜住。
+ */
+export function isAbortedError(code) {
+  return Number(code) === MEDIA_ERR_ABORTED
+}
+
+/**
  * 第 attempt 次失败后该等多久。
  * @param {number} attempt 已经尝试过的次数（1 表示第一次失败）
  * @returns {number|null} null = 不再自动重试，交给用户手动重试
