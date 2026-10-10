@@ -22,6 +22,18 @@ export const STATEFUL_MODES = Object.freeze(['shuffle', 'heart'])
 
 export const SLEEP_TIMER_MINUTES = [15, 30, 45, 60]
 
+/** 交叉淡入淡出时长（毫秒）：默认关闭，开启后切歌时旧音轨淡出、新音轨淡入。 */
+export const CROSSFADE_OFF = 0
+export const CROSSFADE_OPTIONS = Object.freeze([0, 30, 60, 120])
+export const CROSSFADE_MAX_MS = 120
+
+export function normalizeCrossfade(ms) {
+  const value = Number(ms)
+  if (!Number.isFinite(value)) return CROSSFADE_OFF
+  const matched = CROSSFADE_OPTIONS.find((option) => Math.abs(option - value) < 0.5)
+  return matched ?? CROSSFADE_OFF
+}
+
 /** 可选播放速度；只接受这些档位，避免异常倍速把音频解码器拖垮。 */
 export const PLAYBACK_RATES = Object.freeze([0.5, 0.75, 1, 1.25, 1.5, 1.75, 2])
 /** 短于这个进度不值得续播（大概率只听了片头）。 */
@@ -215,6 +227,7 @@ function persist(state) {
     lyricView: normalizeLyricView(state.lyricView),
     // 空间音效是输出偏好：记住用户上次的开关，下一次用户手势触发播放时自动套用。
     spatialPreferred: Boolean(state.spatialPreferred),
+    crossfadeMs: normalizeCrossfade(state.crossfadeMs),
     playerViewMode: normalizePlayerViewMode(state.playerViewMode),
     playerBarDock: normalizePlayerDock(state.playerBarDock),
     playerBarAutoHide: state.playerBarAutoHide !== false,
@@ -261,6 +274,8 @@ export const usePlayerStore = defineStore('player', {
       lyricView: normalizeLyricView(saved.lyricView),
       /** 上次是否开着 3D 空间音效（只是偏好，实际是否生效取决于音源与浏览器）。 */
       spatialPreferred: saved.spatialPreferred === true,
+      /** 切歌交叉淡入淡出时长（毫秒，0 = 关闭）。 */
+      crossfadeMs: normalizeCrossfade(saved.crossfadeMs),
       /** 播放器形态：standard / mini / immersive。 */
       playerViewMode: normalizePlayerViewMode(saved.playerViewMode),
       /** 迷你/沉浸形态的停靠位置与贴边自动隐藏。 */
@@ -933,6 +948,12 @@ export const usePlayerStore = defineStore('player', {
       this.playStats = normalizePlayStats(stats)
       persist(this)
       return current
+    },
+    /** 切歌交叉淡入淡出：只接受 0/30/60/120 毫秒，默认关闭。 */
+    setCrossfade(ms) {
+      this.crossfadeMs = normalizeCrossfade(ms)
+      persist(this)
+      return this.crossfadeMs
     },
     /** 迷你/沉浸形态的停靠位置（bottom / left / right）。 */
     setPlayerBarDock(dock) {

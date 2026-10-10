@@ -478,4 +478,47 @@ describe('底部播放器交互', () => {
     await flush()
     expect(store.queue.map((item) => item.title)).toEqual(['霓虹海', '极光列车', '云端信使', '全息之恋'])
   })
+
+  it('交叉淡入：切歌时新音轨在空闲元素上淡入，旧音轨淡出后才暂停', async () => {
+    const store = await mountPlayer()
+    store.playAll([song(1, '霓虹海'), song(2, '云端信使')], 1)
+    await flush()
+    store.setCrossfade(60)
+    await flush()
+
+    const [nativeAudio, spatialAudio] = document.querySelectorAll('audio')
+    // 原声模式下第二个元素空闲：切歌时它接手新曲目，旧曲目继续播完淡出。
+    expect(spatialAudio.__playCalls || 0).toBe(0)
+
+    store.next()
+    await flush()
+    expect(spatialAudio.__playCalls || 0).toBeGreaterThan(0)
+    expect(spatialAudio.getAttribute('src')).toBe('/audio/2.wav')
+    expect(spatialAudio.volume).toBeLessThan(store.volume)
+    // 淡出还没结束，旧音轨仍在播放（没有 pause）。
+    expect(nativeAudio.__pauseCalls || 0).toBe(0)
+
+    // 等淡入淡出结束（60ms + 余量）。
+    await new Promise((resolve) => setTimeout(resolve, 260))
+    await flush()
+    expect(nativeAudio.__pauseCalls || 0).toBeGreaterThan(0)
+    expect(spatialAudio.volume).toBeCloseTo(store.volume, 2)
+    // 新音轨成为当前元素：进度事件只认它。
+    expect(store.currentSong.title).toBe('云端信使')
+  })
+
+  it('关闭交叉淡入时立即切源，不做淡入淡出', async () => {
+    const store = await mountPlayer()
+    store.playAll([song(1, '霓虹海'), song(2, '云端信使')], 1)
+    await flush()
+    store.setCrossfade(0)
+    await flush()
+
+    const [nativeAudio, spatialAudio] = document.querySelectorAll('audio')
+    store.next()
+    await flush()
+    expect(nativeAudio.getAttribute('src')).toBe('/audio/2.wav')
+    expect(spatialAudio.__playCalls || 0).toBe(0)
+    expect(nativeAudio.volume).toBeCloseTo(store.volume, 2)
+  })
 })

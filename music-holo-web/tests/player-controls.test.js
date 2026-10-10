@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import {
+  CROSSFADE_OPTIONS,
+  CROSSFADE_MAX_MS,
   PLAYBACK_RATES,
   PLAYER_VIEW_MODES,
   RESUME_MIN_SECONDS,
@@ -243,6 +245,29 @@ describe('队列批量操作', () => {
     expect(store.shuffleBag.length).toBeGreaterThan(0)
     store.removeQueueItems([0])
     expect(store.shuffleBag).toEqual([])
+  })
+})
+
+describe('切歌交叉淡入淡出', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    setActivePinia(createPinia())
+  })
+
+  it('只接受 0/30/60/120 毫秒，默认关闭且持久化', () => {
+    const store = usePlayerStore()
+    expect(store.crossfadeMs).toBe(0)
+    expect(CROSSFADE_OPTIONS).toEqual([0, 30, 60, 120])
+
+    expect(store.setCrossfade(60)).toBe(60)
+    expect(JSON.parse(localStorage.getItem('mh_player')).crossfadeMs).toBe(60)
+    expect(usePlayerStore(createPinia()).crossfadeMs).toBe(60)
+
+    // 非档位值与非法输入一律回到关闭。
+    expect(store.setCrossfade(45)).toBe(0)
+    expect(store.setCrossfade(-10)).toBe(0)
+    expect(store.setCrossfade('abc')).toBe(0)
+    expect(store.setCrossfade(CROSSFADE_MAX_MS)).toBe(CROSSFADE_MAX_MS)
   })
 })
 

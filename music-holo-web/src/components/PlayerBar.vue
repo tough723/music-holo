@@ -363,6 +363,35 @@
           </el-badge>
         </span>
       </el-tooltip>
+      <el-popover v-model:visible="crossfadeVisible" placement="top" trigger="click" :width="220">
+        <template #reference>
+          <el-button
+            circle
+            text
+            class="pb-crossfade"
+            :class="{ active: playerStore.crossfadeMs > 0 }"
+            aria-label="切歌交叉淡入淡出"
+            :aria-expanded="crossfadeVisible ? 'true' : 'false'"
+          >
+            <el-icon><Connection /></el-icon>
+          </el-button>
+        </template>
+        <div class="crossfade-panel">
+          <div class="crossfade-title">切歌交叉淡入淡出</div>
+          <div class="crossfade-options">
+            <button
+              v-for="option in CROSSFADE_OPTIONS"
+              :key="option"
+              type="button"
+              class="crossfade-option"
+              :class="{ active: playerStore.crossfadeMs === option }"
+              :aria-pressed="playerStore.crossfadeMs === option ? 'true' : 'false'"
+              @click="playerStore.setCrossfade(option)"
+            >{{ option === 0 ? '关闭' : `${option}ms` }}</button>
+          </div>
+          <p class="crossfade-note">原声模式下用第二个媒体元素重叠播放，消除切歌爆音与间隙；开启空间音效或均衡器时自动让位（那个元素被处理链路占用）。</p>
+        </div>
+      </el-popover>
       <el-popover v-if="isCompactView" v-model:visible="dockVisible" placement="top" trigger="click" :width="220">
         <template #reference>
           <el-button
@@ -608,7 +637,7 @@
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { PLAYER_DOCKS, PLAYER_VIEW_MODES, SLEEP_TIMER_MINUTES, usePlayerStore } from '@/store/player'
+import { CROSSFADE_OPTIONS, PLAYER_DOCKS, PLAYER_VIEW_MODES, SLEEP_TIMER_MINUTES, usePlayerStore } from '@/store/player'
 import { useUserStore } from '@/store/user'
 import { useDislikeStore } from '@/store/dislike'
 import { useDownloadStore } from '@/store/downloads'
@@ -677,6 +706,9 @@ const SHORTCUT_HELP = Object.freeze([
   { keys: 'V', desc: '切换播放器形态（标准 / 迷你 / 沉浸）' }
 ])
 
+// ---- 交叉淡入淡出 ----
+const crossfadeVisible = ref(false)
+
 // ---- 迷你 / 沉浸形态的停靠与自动隐藏 ----
 const dockVisible = ref(false)
 const barFaded = ref(false)
@@ -700,6 +732,7 @@ function cancelBarFade() {
 }
 
 function scheduleBarFade() {
+  stopCrossfade()
   cancelBarFade()
   if (!docked.value || !playerStore.playerBarAutoHide) return
   fadeTimer = setTimeout(() => { barFaded.value = true }, 3000)
@@ -1003,8 +1036,94 @@ function onQueueDragEnd() {
   dropIndex.value = -1
 }
 
+/**
+ * 交叉淡入淡出只在“原声模式”下启用：那时空间音效占用的第二个媒体元素是空闲的，
+ * 借它来播新曲目即可真·重叠；处理链路开启时不做，避免与空间/均衡抢元素。
+ */
+let activeAudioName = 'native'
+let crossfadeTimers = []
+let crossfading = false
+
 function activeAudioElement() {
-  return processedEnabled.value ? spatialAudioRef.value : audioRef.value
+  if (processedEnabled.value) return spatialAudioRef.value
+  return activeAudioName === 'spatial' ? spatialAudioRef.value : audioRef.value
+}
+
+function idleAudioElement() {
+  if (processedEnabled.value) return null
+  return activeAudioName === 'spatial' ? audioRef.value : spatialAudioRef.value
+}
+
+function stopCrossfade() {
+  for (const timer of crossfadeTimers) clearInterval(timer)
+  crossfadeTimers = []
+  crossfading = false
+}
+
+function fadeVolume(audio, from, to, durationMs, onDone) {
+  const target = Math.max(0, Math.min(1, to))
+  if (!audio) { onDone?.(); return }
+  const start = Math.max(0, Math.min(1, from))
+  if (durationMs <= 0 || start === target) {
+    audio.volume = target
+    onDone?.()
+    return
+  }
+  const steps = Math.max(2, Math.ceil(durationMs / 20))
+  let step = 0
+  const timer = setInterval(() => {
+    step += 1
+    const ratio = Math.min(1, step / steps)
+    audio.volume = Math.max(0, Math.min(1, start + (target - start) * ratio))
+    if (ratio >= 1) {
+      clearInterval(timer)
+      crossfadeTimers = crossfadeTimers.filter((item) => item !== timer)
+      onDone?.()
+    }
+  }, Math.max(10, Math.round(durationMs / steps)))
+  crossfadeTimers.push(timer)
+}
+
+function targetVolume() {
+  return playerStore.muted ? 0 : Math.max(0, Math.min(1, playerStore.volume))
+}
+
+/**
+ * 切歌交叉淡入：旧音轨淡出的同时新音轨淡入，淡出结束才停旧音轨。
+ * @returns {boolean} 是否走了交叉淡入（false 表示调用方应按普通方式切源）
+ */
+function startCrossfade(song, resumeAt = 0) {
+  const outgoing = activeAudioElement()
+  const incoming = idleAudioElement()
+  if (!song?.audioUrl || !outgoing || !incoming || processedEnabled.value) return false
+  if (playerStore.crossfadeMs <= 0 || !playerStore.playing) return false
+
+  const durationMs = Math.min(playerStore.crossfadeMs, 200)
+  const volume = targetVolume()
+  stopCrossfade()
+  crossfading = true
+
+  incoming.volume = 0
+  incoming.muted = false
+  incoming.playbackRate = Number(playerStore.playbackRate) || 1
+  setAudioSource(incoming, song.audioUrl, { anonymous: Boolean(song.isCustomSource) })
+  seekAudioWhenReady(incoming, resumeAt)
+  safePlay(incoming).catch((error) => {
+    // 新音轨起不来就退回普通切源，不能把播放卡住。
+    stopCrossfade()
+    incoming.pause()
+    handlePlayFailure(outgoing, error)
+  })
+
+  fadeVolume(incoming, 0, volume, durationMs)
+  fadeVolume(outgoing, outgoing.volume, 0, durationMs, () => {
+    outgoing.pause()
+    outgoing.volume = volume
+    crossfading = false
+    // 新音轨成为当前播放元素，直到下一次切歌再交换。
+    activeAudioName = activeAudioName === 'spatial' ? 'native' : 'spatial'
+  })
+  return true
 }
 
 function ensureSpatialAudioGraph() {
@@ -1383,17 +1502,25 @@ function toggleMute() {
 }
 
 /** 音量/静音/倍速统一下发到两个媒体元素与空间音效图。 */
-function syncAudioOutput() {
+function syncAudioOutput({ skipCrossfade = false } = {}) {
   const volume = playerStore.volume
   const rate = Number(playerStore.playbackRate) || 1
   const nativeAudio = audioRef.value
   const spatialAudio = spatialAudioRef.value
-  if (nativeAudio) {
-    nativeAudio.volume = volume
-    nativeAudio.muted = playerStore.muted
-    nativeAudio.playbackRate = rate
+  // 交叉淡入期间音量由淡变器接管，这里不能抢，否则会把淡入/淡出的音量曲线打乱。
+  if (!crossfading || !skipCrossfade) {
+    if (nativeAudio) {
+      nativeAudio.volume = volume
+      nativeAudio.muted = playerStore.muted
+      nativeAudio.playbackRate = rate
+    }
+    if (spatialAudio && !processedEnabled.value) {
+      spatialAudio.volume = volume
+      spatialAudio.muted = playerStore.muted
+      spatialAudio.playbackRate = rate
+    }
   }
-  if (spatialAudio) {
+  if (spatialAudio && processedEnabled.value) {
     // 空间音效的音量由 WebAudio 图控制，媒体元素本身保持 1。
     spatialAudio.volume = 1
     spatialAudio.muted = false
@@ -1531,6 +1658,17 @@ async function applyRememberedSpatialAudio() {
   await toggleSpatialAudio({ silent: true })
 }
 
+/** 进入处理链路前先收尾交叉淡入：它占用的正是链路要用的那个媒体元素。 */
+function prepareProcessedAudio() {
+  stopCrossfade()
+  const idle = idleAudioElement()
+  if (idle) {
+    idle.pause()
+    setAudioSource(idle, '')
+  }
+  activeAudioName = 'native'
+}
+
 /**
  * 把播放切换到 Web Audio 处理链路（独立的媒体元素 + 音频图）。
  * 空间音效与均衡器都要经过这条链路；跨域音源不进 Web Audio，保持原声。
@@ -1546,6 +1684,7 @@ async function enableProcessedAudio({ spatial = false, silent = false } = {}) {
     return false
   }
 
+  prepareProcessedAudio()
   try {
     const graph = ensureSpatialAudioGraph()
     const resumeAt = nativeAudio.currentTime || playerStore.currentTime
@@ -1933,16 +2072,23 @@ watch(currentSong, (song) => {
     ElMessage.warning('该音源不经过音频处理链路，已自动切回原声')
   }
 
-  if (processedEnabled.value) {
+  // 交叉淡入：原声模式下用空闲的第二个媒体元素重叠播放，避免切歌爆音与静音间隙。
+  const resumedAt = playerStore.currentTime
+  if (startCrossfade(song, resumedAt)) {
+    syncAudioOutput({ skipCrossfade: true })
+  } else if (processedEnabled.value) {
+    stopCrossfade()
     nativeAudio.pause()
     setAudioSource(spatialAudio, song.audioUrl)
-    seekAudioWhenReady(spatialAudio, playerStore.currentTime)
+    seekAudioWhenReady(spatialAudio, resumedAt)
+    syncAudioOutput()
   } else {
+    stopCrossfade()
     spatialAudio.pause()
     setAudioSource(nativeAudio, song.audioUrl, { anonymous: Boolean(song.isCustomSource) })
-    seekAudioWhenReady(nativeAudio, playerStore.currentTime)
+    seekAudioWhenReady(nativeAudio, resumedAt)
+    syncAudioOutput()
   }
-  syncAudioOutput()
 
   // 断点续播：同一首歌上次听到一半，从记录处继续（过于靠近开头/结尾则不续播）。
   const audio = activeAudioElement()
@@ -2231,6 +2377,41 @@ watch(() => userStore.isLogin, (loggedIn) => {
   box-shadow: 0 -18px 50px -34px var(--holo-glow), 0 -1px 0 rgba(255, 255, 255, 0.1) inset;
   transform-style: preserve-3d;
 }
+/* ---- 交叉淡入淡出 ---- */
+.crossfade-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.crossfade-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.crossfade-options {
+  display: flex;
+  gap: 6px;
+}
+.crossfade-option {
+  flex: 1;
+  padding: 5px 0;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-sub);
+  font-size: 12px;
+  cursor: pointer;
+}
+.crossfade-option.active {
+  color: #fff;
+  background: color-mix(in srgb, var(--holo-primary) 62%, transparent);
+  border-color: transparent;
+}
+.crossfade-note {
+  color: var(--text-sub);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 /* ---- 贴边停靠与自动隐藏 ---- */
 .pb-grip {
   display: grid;
@@ -2409,6 +2590,7 @@ watch(() => userStore.isLogin, (loggedIn) => {
 .player-bar.is-compact .pb-volume,
 .player-bar.is-compact .pb-volume-value,
 .player-bar.is-compact .pb-rate,
+.player-bar.is-compact .pb-crossfade,
 .player-bar.is-compact .pb-equalizer,
 .player-bar.is-compact .pb-shortcuts {
   display: none;
