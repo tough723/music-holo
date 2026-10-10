@@ -24,7 +24,8 @@ import { test, expect } from '@playwright/test'
  * 与真实脚本相关的两个额外交互（夹具旅程里不会出现）：
  *   - 初始化阶段脚本会立即联网（IP 查询、版本检查），每个新域名都会弹「仅本次允许」；
  *   - 解析阶段可能再经过聚合后端 → GD 等多跳，同样逐个域名授权。
- * 因此这里不是点一次就完事，而是边等结果边把出现的授权弹窗点掉。
+ * 因此这里不是点一次就完事，而是**每一次点击都要先清一遍授权弹窗**——
+ * 模态遮罩会把解析对话框挡住，让 click 一直重试到超时（第一轮就是这么红的）。
  */
 
 const SOURCE_URL = 'https://zrcdy.dpdns.org/lx/xinghai-music-sourcev2.3.15.js'
@@ -164,18 +165,14 @@ async function attemptCandidate(page, candidate) {
 
 /** 点「信任并初始化」→「我信任并继续」，再把初始化期间冒出来的域名授权逐个点掉。 */
 async function initializeSource(page, dialog) {
-  await dialog.getByRole('button', { name: '信任并初始化自定义音源' }).click()
-  await page.getByRole('button', { name: '我信任并继续' }).click()
+  await clickWithApprovals(page, dialog.getByRole('button', { name: '信任并初始化自定义音源' }))
+  await clickWithApprovals(page, page.getByRole('button', { name: '我信任并继续' }))
   const platformSelect = dialog.getByLabel('选择自定义音源平台')
   const deadline = Date.now() + 60_000
   let approvals = 0
   while (Date.now() < deadline) {
+    approvals += await drainApprovals(page)
     if (await platformSelect.isVisible().catch(() => false)) return approvals
-    if (await clickVisible(page, '仅本次允许')) {
-      approvals += 1
-      await page.waitForTimeout(250)
-      continue
-    }
     const error = await dialog.locator('.source-playback-error').innerText().catch(() => '')
     if (error.trim()) throw new Error(`初始化失败：${error.trim().slice(0, 200)}`)
     await page.waitForTimeout(300)
@@ -186,25 +183,31 @@ async function initializeSource(page, dialog) {
 /** 打开第 index 个下拉框，读出候选，按 picker 选一个（选不到就用第一个）。 */
 async function pickFromSelect(page, dialog, index, picker) {
   const select = dialog.locator('.source-playback-fields .el-select').nth(index)
-  await select.click()
+  await clickWithApprovals(page, select)
   const options = page.locator('.el-select-dropdown__item:visible')
-  await options.first().waitFor({ state: 'visible', timeout: 15_000 })
+  const opened = Date.now() + 15_000
+  while (Date.now() < opened) {
+    if (await options.first().isVisible().catch(() => false)) break
+    await drainApprovals(page)
+    await page.waitForTimeout(200)
+  }
   const labels = (await options.allInnerTexts()).map((text) => text.trim()).filter(Boolean)
   if (!labels.length) throw new Error(`第 ${index + 1} 个下拉框没有任何可选项`)
   const picked = picker(labels) || labels[0]
-  await page.getByRole('option', { name: picked, exact: true }).first().click()
+  await clickWithApprovals(page, page.getByRole('option', { name: picked, exact: true }).first(), `选项 ${picked}`)
   await page.waitForTimeout(200)
   return { picked, labels }
 }
 
 /** 点「隔离解析并播放」，边等结果边处理授权弹窗，直到拿到媒体地址或出现明确失败提示。 */
 async function resolveAndCollect(page, dialog, audio, timeoutMs) {
-  await dialog.getByRole('button', { name: '隔离解析并播放歌曲' }).click()
+  await clickWithApprovals(page, dialog.getByRole('button', { name: '隔离解析并播放歌曲' }))
   const notices = new Set()
   const deadline = Date.now() + timeoutMs
   let src = ''
   while (Date.now() < deadline) {
-    for (const name of ['仅本次允许', '允许并播放']) await clickVisible(page, name)
+    await drainApprovals(page)
+    await clickVisible(page, '允许并播放')
     const error = await dialog.locator('.source-playback-error').innerText().catch(() => '')
     if (error.trim()) notices.add(error.trim())
     for (const text of await page.locator('.el-message').allInnerTexts().catch(() => [])) {
@@ -240,11 +243,44 @@ async function waitForPlayback(audio, timeoutMs) {
   return { played: false, error: `${timeoutMs}ms 内进度没有前进` }
 }
 
+/** 出现就点掉一个按钮（用于不影响判定、只影响进度的确认框）。 */
 async function clickVisible(page, name) {
   const button = page.getByRole('button', { name }).first()
   if (!(await button.isVisible().catch(() => false))) return false
   await button.click({ timeout: 3_000 }).catch(() => {})
   return true
+}
+
+/**
+ * 真实脚本在**整个旅程期间**都会断断续续联网（IP 查询、版本检查、后端多跳），
+ * 每次新域名都弹「仅本次允许」，模态遮罩会把对话框挡住、让点击一直重试到超时。
+ * 所以每次点击都先清一遍授权弹窗，被挡住就再来一轮。
+ */
+async function drainApprovals(page) {
+  let handled = 0
+  for (let round = 0; round < 4; round += 1) {
+    if (!(await clickVisible(page, '仅本次允许'))) break
+    handled += 1
+    await page.waitForTimeout(250)
+  }
+  return handled
+}
+
+async function clickWithApprovals(page, locator, label = '', timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs
+  let lastError = ''
+  while (Date.now() < deadline) {
+    await drainApprovals(page)
+    try {
+      await locator.click({ timeout: 2_000 })
+      return
+    } catch (error) {
+      lastError = String(error && error.message ? error.message : error).split('\n')[0]
+      if (!/intercepts pointer events|not stable|not visible|not enabled|element is not|timeout/i.test(lastError)) throw error
+      await page.waitForTimeout(300)
+    }
+  }
+  throw new Error(`点击${label ? `「${label}」` : ''}失败（${timeoutMs}ms，授权弹窗可能一直在挡）：${lastError.slice(0, 200)}`)
 }
 
 function hostOf(value) {

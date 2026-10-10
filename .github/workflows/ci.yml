@@ -143,11 +143,11 @@ jobs:
           if [ -n "$outcome" ]; then
             echo "::notice title=真实音源在线结果（退出码 $status）::${outcome#LIVE_OUTCOME=}"
           else
-            fallback=$(grep -n -E 'LIVE_STEP|LIVE_OUTCOME|Error:|waiting for' /tmp/live-source.log | tail -n 30 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            fallback=$(grep -n -E 'LIVE_STEP|LIVE_OUTCOME|Error:|waiting for|intercepts|not stable|detached|pointer events' /tmp/live-source.log | tail -n 30 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
             echo "::notice title=真实音源在线结果（退出码 $status，未打印结论）::$fallback"
           fi
           if [ "$status" -ne 0 ]; then
-            taildetail=$(grep -n -E 'LIVE_STEP|✘|Error:|AssertionError|Timed out|waiting for' /tmp/live-source.log | tail -n 40 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            taildetail=$(grep -n -E 'LIVE_STEP|✘|Error:|AssertionError|Timed out|waiting for|intercepts|not stable|detached|pointer events' /tmp/live-source.log | tail -n 40 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
             echo "::warning title=真实音源旅程未通过（非阻断）::$taildetail"
           fi
           exit 0
