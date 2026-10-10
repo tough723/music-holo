@@ -2928,7 +2928,7 @@ watch(playing, (isPlaying) => {
 watch(
   () => [playerStore.volume, playerStore.muted, playerStore.playbackRate],
   () => {
-    if (crossfading) return
+    // 淡变期间 syncAudioOutput 会记账，等淡变结束再补，不会把曲线打平。
     syncAudioOutput()
   }
 )
