@@ -1,5 +1,32 @@
 <template>
-  <div class="player-bar glass-panel" :class="{ 'is-compact': isCompactView, 'is-mini': viewMode === 'mini', 'is-immersive': viewMode === 'immersive' }">
+  <div
+    class="player-bar glass-panel"
+    :class="{
+      'is-compact': isCompactView,
+      'is-mini': viewMode === 'mini',
+      'is-immersive': viewMode === 'immersive',
+      'dock-left': docked && dock === 'left',
+      'dock-right': docked && dock === 'right',
+      'is-faded': barFaded
+    }"
+    @pointerenter="cancelBarFade"
+    @pointerleave="scheduleBarFade"
+    @focusin="cancelBarFade"
+  >
+    <!-- 迷你/沉浸形态：拖拽把手（拖到屏幕边缘即换停靠位置） -->
+    <button
+      v-if="isCompactView"
+      type="button"
+      class="pb-grip"
+      aria-label="拖动播放条到屏幕边缘可切换停靠位置"
+      @pointerdown="onGripPointerDown"
+      @pointermove="onGripPointerMove"
+      @pointerup="onGripPointerUp"
+      @pointercancel="onGripPointerUp"
+    >
+      <span></span><span></span><span></span>
+    </button>
+
     <!-- 左侧：全息投影 + 歌曲信息 -->
     <div class="pb-left">
       <div class="pb-holo" @click="toggleLyric">
@@ -335,6 +362,37 @@
           </el-badge>
         </span>
       </el-tooltip>
+      <el-popover v-if="isCompactView" v-model:visible="dockVisible" placement="top" trigger="click" :width="220">
+        <template #reference>
+          <el-button
+            circle
+            text
+            class="pb-dock"
+            aria-label="播放条停靠位置"
+            :aria-expanded="dockVisible ? 'true' : 'false'"
+          >
+            <el-icon><Rank /></el-icon>
+          </el-button>
+        </template>
+        <div class="dock-panel">
+          <div class="dock-title">停靠位置</div>
+          <div class="dock-options">
+            <button
+              v-for="item in PLAYER_DOCKS"
+              :key="item.key"
+              type="button"
+              class="dock-option"
+              :class="{ active: dock === item.key }"
+              :aria-pressed="dock === item.key ? 'true' : 'false'"
+              @click="playerStore.setPlayerBarDock(item.key)"
+            >{{ item.label }}</button>
+          </div>
+          <label class="dock-switch">
+            <input type="checkbox" :checked="playerStore.playerBarAutoHide" @change="onAutoHideChange" />
+            <span>贴边时鼠标离开自动淡出</span>
+          </label>
+        </div>
+      </el-popover>
       <el-tooltip :content="`播放器形态：${viewModeLabel} · V`" placement="top">
         <el-button
           circle
@@ -504,7 +562,7 @@
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { PLAYER_VIEW_MODES, SLEEP_TIMER_MINUTES, usePlayerStore } from '@/store/player'
+import { PLAYER_DOCKS, PLAYER_VIEW_MODES, SLEEP_TIMER_MINUTES, usePlayerStore } from '@/store/player'
 import { useUserStore } from '@/store/user'
 import { useDislikeStore } from '@/store/dislike'
 import { useDownloadStore } from '@/store/downloads'
@@ -572,6 +630,57 @@ const SHORTCUT_HELP = Object.freeze([
   { keys: 'V', desc: '切换播放器形态（标准 / 迷你 / 沉浸）' }
 ])
 
+// ---- 迷你 / 沉浸形态的停靠与自动隐藏 ----
+const dockVisible = ref(false)
+const barFaded = ref(false)
+const dock = computed(() => playerStore.playerBarDock)
+/** 只有贴边（左/右）时才需要自动淡出；吸底形态一直可见。 */
+const docked = computed(() => isCompactView.value && dock.value !== 'bottom')
+let fadeTimer = null
+let gripPointerId = null
+
+function onAutoHideChange(event) {
+  playerStore.setPlayerBarAutoHide(Boolean(event?.target?.checked))
+  if (!playerStore.playerBarAutoHide) cancelBarFade()
+}
+
+function cancelBarFade() {
+  if (fadeTimer) {
+    clearTimeout(fadeTimer)
+    fadeTimer = null
+  }
+  barFaded.value = false
+}
+
+function scheduleBarFade() {
+  cancelBarFade()
+  if (!docked.value || !playerStore.playerBarAutoHide) return
+  fadeTimer = setTimeout(() => { barFaded.value = true }, 3000)
+}
+
+function onGripPointerDown(event) {
+  if (event?.button != null && event.button !== 0) return
+  gripPointerId = event?.pointerId ?? null
+  event?.target?.setPointerCapture?.(event.pointerId)
+  cancelBarFade()
+}
+
+/** 拖动把手：靠近左/右边缘 25% 时切换停靠，松手才写入偏好。 */
+function onGripPointerMove(event) {
+  if (gripPointerId === null || !event?.clientX) return
+  const width = window.innerWidth || 1
+  const ratio = event.clientX / width
+  const next = ratio < 0.25 ? 'left' : (ratio > 0.75 ? 'right' : 'bottom')
+  if (next !== dock.value) playerStore.playerBarDock = next
+}
+
+function onGripPointerUp(event) {
+  if (gripPointerId === null) return
+  gripPointerId = null
+  event?.target?.releasePointerCapture?.(event.pointerId)
+  playerStore.setPlayerBarDock(playerStore.playerBarDock)
+}
+
 // ---- 均衡器 ----
 const equalizerVisible = ref(false)
 
@@ -632,7 +741,12 @@ function applyViewMode(mode) {
 /** 迷你形态要同步改全局 --player-h，页面内容才不会被多余的留白顶住。 */
 function syncViewportClass(mode) {
   if (typeof document === 'undefined') return
-  document.documentElement.classList.toggle('mh-player-mini', mode === 'mini' || mode === 'immersive')
+  const root = document.documentElement
+  const compact = mode !== 'standard'
+  root.classList.toggle('mh-player-mini', compact)
+  const dockKey = compact ? playerStore.playerBarDock : 'bottom'
+  root.classList.toggle('mh-player-dock-left', dockKey === 'left')
+  root.classList.toggle('mh-player-dock-right', dockKey === 'right')
 }
 const sleepClockNow = ref(Date.now())
 let sleepClockInterval = null
@@ -1926,8 +2040,9 @@ onUnmounted(() => {
   } catch {
     // Cleanup must not interrupt component teardown.
   }
+  cancelBarFade()
   // 形态类名加在 <html> 上，组件卸载时清掉，避免留下孤儿状态。
-  document.documentElement.classList.remove('mh-player-mini')
+  document.documentElement.classList.remove('mh-player-mini', 'mh-player-dock-left', 'mh-player-dock-right')
   window.removeEventListener('mh-seek', onLyricSeek)
   window.removeEventListener('keydown', onPlayerShortcut)
   window.removeEventListener('keydown', markUserGesture)
@@ -1953,6 +2068,8 @@ watch(() => playerStore.playerViewMode, (mode) => {
   applyViewMode(mode)
   syncViewportClass(mode)
 }, { immediate: true })
+
+watch(() => playerStore.playerBarDock, () => syncViewportClass(playerStore.playerViewMode))
 
 watch(() => userStore.isLogin, (loggedIn) => {
   if (loggedIn) loadFavorites()
@@ -1982,6 +2099,101 @@ watch(() => userStore.isLogin, (loggedIn) => {
   box-shadow: 0 -18px 50px -34px var(--holo-glow), 0 -1px 0 rgba(255, 255, 255, 0.1) inset;
   transform-style: preserve-3d;
 }
+/* ---- 贴边停靠与自动隐藏 ---- */
+.pb-grip {
+  display: grid;
+  place-content: center;
+  gap: 3px;
+  width: 14px;
+  height: 40px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  cursor: grab;
+  flex-shrink: 0;
+  touch-action: none;
+}
+.pb-grip span {
+  display: block;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--text-sub);
+}
+.pb-grip:hover {
+  background: rgba(148, 163, 184, 0.16);
+}
+.player-bar.dock-left,
+.player-bar.dock-right {
+  left: 12px;
+  right: auto;
+  bottom: 12px;
+  width: min(340px, calc(100vw - 24px));
+  height: auto;
+  padding: 6px 10px;
+  border-radius: 14px;
+  border-top: 1px solid var(--border-color);
+  box-shadow: 0 18px 44px -26px rgba(0, 0, 0, 0.95), 0 0 0 1px color-mix(in srgb, var(--holo-primary) 12%, transparent) inset;
+}
+.player-bar.dock-right {
+  left: auto;
+  right: 12px;
+}
+.player-bar.dock-left .pb-center,
+.player-bar.dock-right .pb-center {
+  flex: 1;
+  min-width: 0;
+}
+.player-bar.dock-left .pb-info,
+.player-bar.dock-right .pb-info {
+  display: none;
+}
+.player-bar.is-faded {
+  opacity: 0.25;
+  transition: opacity 0.35s ease;
+}
+.player-bar.is-faded:hover,
+.player-bar.is-faded:focus-within {
+  opacity: 1;
+}
+.dock-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dock-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.dock-options {
+  display: flex;
+  gap: 6px;
+}
+.dock-option {
+  flex: 1;
+  padding: 5px 0;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-sub);
+  font-size: 12px;
+  cursor: pointer;
+}
+.dock-option.active {
+  color: #fff;
+  background: color-mix(in srgb, var(--holo-primary) 62%, transparent);
+  border-color: transparent;
+}
+.dock-switch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-sub);
+  font-size: 12px;
+  cursor: pointer;
+}
+
 /* ---- 均衡器 ---- */
 .equalizer-panel {
   display: flex;

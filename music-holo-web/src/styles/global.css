@@ -37,6 +37,12 @@
   }
 }
 
+/* 贴边停靠时播放条是悬浮卡片，不再占用底部空间。 */
+:root.mh-player-mini.mh-player-dock-left,
+:root.mh-player-mini.mh-player-dock-right {
+  --player-h: 0px;
+}
+
 * {
   margin: 0;
   padding: 0;

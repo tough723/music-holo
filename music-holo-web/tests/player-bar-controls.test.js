@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApp, nextTick } from 'vue'
 import { createPinia } from 'pinia'
 import { createRouter, createMemoryHistory } from 'vue-router'
@@ -301,7 +301,8 @@ describe('底部播放器交互', () => {
     await flush()
 
     const bar = host.querySelector('.player-bar')
-    const controlsInBar = () => bar.querySelectorAll('.pb-right > *').length
+    // 停靠控件是迷你形态专属入口，比较时排除掉。
+    const controlsInBar = () => bar.querySelectorAll('.pb-right > *:not(.pb-dock)').length
     const before = controlsInBar()
     store.setPlayerViewMode('mini')
     await flush()
@@ -315,5 +316,68 @@ describe('底部播放器交互', () => {
     expect(bar.querySelector('button[aria-label="播放队列"]')).toBeTruthy()
     expect(bar.querySelector('.pb-play')).toBeTruthy()
     expect(bar.querySelector('.progress-track')).toBeTruthy()
+  })
+
+  it('迷你形态可切换停靠位置，贴边时不再占用底部空间', async () => {
+    const store = await mountPlayer()
+    store.playAll([song(1, '霓虹海')], 1)
+    await flush()
+    store.setPlayerViewMode('mini')
+    await flush()
+
+    const bar = host.querySelector('.player-bar')
+    expect(bar.querySelector('.pb-grip')).toBeTruthy()
+    expect(document.documentElement.classList.contains('mh-player-dock-left')).toBe(false)
+
+    store.setPlayerBarDock('left')
+    await flush()
+    expect(bar.classList.contains('dock-left')).toBe(true)
+    expect(document.documentElement.classList.contains('mh-player-dock-left')).toBe(true)
+    expect(document.documentElement.classList.contains('mh-player-mini')).toBe(true)
+
+    store.setPlayerBarDock('right')
+    await flush()
+    expect(bar.classList.contains('dock-right')).toBe(true)
+    expect(document.documentElement.classList.contains('mh-player-dock-left')).toBe(false)
+    expect(document.documentElement.classList.contains('mh-player-dock-right')).toBe(true)
+
+    // 非法值回落吸底；回到标准形态后不再贴边。
+    expect(store.setPlayerBarDock('top')).toBe('bottom')
+    store.setPlayerViewMode('standard')
+    await flush()
+    expect(document.documentElement.classList.contains('mh-player-dock-right')).toBe(false)
+  })
+
+  it('贴边停靠时鼠标离开会自动淡出，进入或聚焦立刻恢复', async () => {
+    vi.useFakeTimers()
+    try {
+      const store = await mountPlayer()
+      store.playAll([song(1, '霓虹海')], 1)
+      await flush()
+      store.setPlayerViewMode('mini')
+      store.setPlayerBarDock('left')
+      await flush()
+
+      const bar = host.querySelector('.player-bar')
+      expect(bar.classList.contains('is-faded')).toBe(false)
+      bar.dispatchEvent(new Event('pointerleave'))
+      expect(bar.classList.contains('is-faded')).toBe(false)
+      vi.advanceTimersByTime(3100)
+      await flush()
+      expect(bar.classList.contains('is-faded')).toBe(true)
+
+      bar.dispatchEvent(new Event('pointerenter'))
+      await flush()
+      expect(bar.classList.contains('is-faded')).toBe(false)
+
+      // 关掉自动隐藏后不再淡出。
+      store.setPlayerBarAutoHide(false)
+      bar.dispatchEvent(new Event('pointerleave'))
+      vi.advanceTimersByTime(5000)
+      await flush()
+      expect(bar.classList.contains('is-faded')).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

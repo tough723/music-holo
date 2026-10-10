@@ -29,6 +29,18 @@ export const RESUME_MIN_SECONDS = 5
 /** 距离结尾这么近就从头开始，避免续播后立刻切歌。 */
 export const RESUME_TAIL_GUARD_SECONDS = 15
 
+/** 迷你/沉浸形态的停靠位置：吸底 / 靠左 / 靠右。 */
+export const PLAYER_DOCKS = Object.freeze([
+  { key: 'bottom', label: '吸底' },
+  { key: 'left', label: '靠左' },
+  { key: 'right', label: '靠右' }
+])
+const PLAYER_DOCK_KEYS = PLAYER_DOCKS.map((item) => item.key)
+
+export function normalizePlayerDock(value) {
+  return PLAYER_DOCK_KEYS.includes(value) ? value : 'bottom'
+}
+
 /**
  * 播放器形态：标准（完整播放条）/ 迷你（收成一条，只留核心控制）/ 沉浸（全屏歌词舞台 + 极简条）。
  * 只影响界面布局，不改变播放行为；桌面端可据此调整窗口，Web 端只改浮层形态。
@@ -203,6 +215,8 @@ function persist(state) {
     // 空间音效是输出偏好：记住用户上次的开关，下一次用户手势触发播放时自动套用。
     spatialPreferred: Boolean(state.spatialPreferred),
     playerViewMode: normalizePlayerViewMode(state.playerViewMode),
+    playerBarDock: normalizePlayerDock(state.playerBarDock),
+    playerBarAutoHide: state.playerBarAutoHide !== false,
     equalizer: normalizeEqualizerState(state.equalizer),
     shuffleBag: (state.shuffleBag || []).slice(0, 500),
     playStats: normalizePlayStats(state.playStats)
@@ -248,6 +262,9 @@ export const usePlayerStore = defineStore('player', {
       spatialPreferred: saved.spatialPreferred === true,
       /** 播放器形态：standard / mini / immersive。 */
       playerViewMode: normalizePlayerViewMode(saved.playerViewMode),
+      /** 迷你/沉浸形态的停靠位置与贴边自动隐藏。 */
+      playerBarDock: normalizePlayerDock(saved.playerBarDock),
+      playerBarAutoHide: saved.playerBarAutoHide !== false,
       /** 均衡器：预设名 + 实际增益（dB，按 EQ_BANDS 顺序）。 */
       equalizer: normalizeEqualizerState(saved.equalizer),
       /** 不重复随机的剩余曲目（存歌曲 id，队列增删后自动失效重洗）。 */
@@ -873,6 +890,18 @@ export const usePlayerStore = defineStore('player', {
       this.playStats = normalizePlayStats(stats)
       persist(this)
       return current
+    },
+    /** 迷你/沉浸形态的停靠位置（bottom / left / right）。 */
+    setPlayerBarDock(dock) {
+      this.playerBarDock = normalizePlayerDock(dock)
+      persist(this)
+      return this.playerBarDock
+    },
+    /** 贴边时鼠标离开是否自动淡出。 */
+    setPlayerBarAutoHide(enabled) {
+      this.playerBarAutoHide = enabled !== false
+      persist(this)
+      return this.playerBarAutoHide
     },
     /** 切换播放器形态（标准 / 迷你 / 沉浸）。 */
     setPlayerViewMode(mode) {
