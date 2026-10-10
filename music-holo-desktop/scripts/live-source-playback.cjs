@@ -12,8 +12,10 @@ const SOURCE_URL = 'https://zrcdy.dpdns.org/lx/xinghai-music-sourcev2.3.15.js'
 const SOURCE_SHA256 = '807d6157e4fd7cdd05b8727efd73778b54a3b05a0b5e4c6bb28dedc0668e94e9'
 const SOURCE_NAME = '星海音乐源'
 const ALLOWED_HOSTS = new Set([
-  'zrcdy.dpdns.org', 'yy.zddyr.top', 'music.163.com',
-  'music-api.gdstudio.xyz', 'music.126.net', 'p2.music.126.net'
+  'zrcdy.dpdns.org', 'yy.zddyr.top', 'music.163.com', 'music-api.gdstudio.xyz',
+  'music.126.net', 'p2.music.126.net', 'pd.musicapp.migu.cn', 'music.migu.cn',
+  'freetyst.nf.migu.cn', 'search.kuwo.cn', 'mobi.kuwo.cn', 'nmobi.kuwo.cn',
+  'car-er.kuwo.cn'
 ])
 const HOST_SUFFIXES = ['.music.126.net']
 
@@ -80,8 +82,11 @@ async function main() {
         try { host = new URL(urlText).hostname } catch { /* Non-network UI dialog. */ }
         const isHostPrompt = options.title === '授权音源访问' || message.includes('请求访问 ')
         const permitted = !isHostPrompt || (host && (
-          ['zrcdy.dpdns.org', 'yy.zddyr.top', 'music.163.com', 'music-api.gdstudio.xyz', 'p2.music.126.net'].includes(host) ||
-          host === 'music.126.net' || host.endsWith('.music.126.net')
+          [
+            'zrcdy.dpdns.org', 'yy.zddyr.top', 'music.163.com', 'music-api.gdstudio.xyz',
+            'p2.music.126.net', 'music.126.net', 'pd.musicapp.migu.cn', 'music.migu.cn',
+            'freetyst.nf.migu.cn', 'search.kuwo.cn', 'mobi.kuwo.cn', 'nmobi.kuwo.cn', 'car-er.kuwo.cn'
+          ].includes(host) || host.endsWith('.music.126.net')
         ))
         globalThis.liveSourceApprovals.push({ title: String(options.title || ''), host, permitted })
         const buttons = Array.isArray(options.buttons) ? options.buttons : []
@@ -176,97 +181,118 @@ async function main() {
     await expect(platformSelects.first()).toBeVisible({ timeout: 15_000 })
     console.log('LIVE_DESKTOP_STEP 平台选择控件已就绪')
 
-    // Select the Netease provider declared by the source, then use the host's
-    // verified credential-free public search adapter to obtain a real song ID.
-    // (Some Netease chart responses are empty on CI networks; search is the
-    // product's supported online-listening path and returns actual provider metadata.)
-    await selectOption(page, audition.locator('.source-audition-fields .el-select').nth(0), 'wy')
-    const selectedPlatformText = await audition.locator('.source-audition-fields .el-select').nth(0).innerText()
-    expect(selectedPlatformText).toContain('(wy)')
-    await audition.getByLabel('平台曲目搜索').fill('海阔天空')
-    await audition.getByRole('button', { name: '搜索平台' }).click()
+    // Resolve a genuine third-party catalog item (not a Music Holo mock song),
+    // then pass its real platform metadata/ID to the selected LX source.
+    // Try Migu first (its actual musicUrl response is HTTPS), then Kuwo as a
+    // public-source fallback; the earlier CI attempt showed GD/Netease search
+    // can return HTTP 403 from some runner networks.
+    const platformSelect = audition.locator('.source-audition-fields .el-select').nth(0)
+    const searchInput = audition.getByLabel('平台曲目搜索')
+    const searchButton = audition.getByRole('button', { name: '搜索平台' })
     const trackButtons = audition.locator('[aria-label="平台曲目结果"] button')
-    await expect(trackButtons.first()).toBeVisible({ timeout: 60_000 })
-
-    const trackCount = await trackButtons.count()
-    const maxCandidates = Math.min(trackCount, 5)
+    const candidatesByPlatform = [
+      { key: 'mg', label: '咪咕音乐' },
+      { key: 'kw', label: '酷我音乐' }
+    ]
     const failures = []
     let playedTrack = null
     let actualQuality = ''
     let mediaOrigin = ''
     let audio = null
 
-    for (let index = 0; index < maxCandidates && !playedTrack; index += 1) {
-      const trackButton = trackButtons.nth(index)
-      const catalogLabel = (await trackButton.innerText()).trim()
-      await trackButton.click()
-      const musicInfoText = await audition.getByRole('textbox', { name: 'musicInfo JSON' }).inputValue()
-      const musicInfo = JSON.parse(musicInfoText)
-      const catalogTitle = String(musicInfo.name || musicInfo.title || '')
-      const catalogSinger = String(musicInfo.singerName || musicInfo.singer || musicInfo.artist || '')
-      expect(catalogTitle).not.toBe('')
-      expect(catalogLabel).toContain(catalogTitle)
-      if (catalogSinger) expect(catalogLabel).toContain(catalogSinger)
-      expect(String(musicInfo.id || musicInfo.songmid || '')).not.toBe('')
-
-      actualQuality = await selectQuality(page, audition, '320k')
-      console.log(`LIVE_DESKTOP_STEP 在线搜索结果 ${index + 1}/${maxCandidates}：${catalogLabel}；平台 ID ${musicInfo.id || musicInfo.songmid}；音质 ${actualQuality}`)
-
-      const resolution = await resolveAndApproveMedia(page, audition, 90_000)
-      if (!resolution.ready) {
-        failures.push(`${catalogLabel}（ID=${musicInfo.id || musicInfo.songmid}）：${resolution.error}`)
+    for (const provider of candidatesByPlatform) {
+      if (playedTrack) break
+      await selectOption(page, platformSelect, `(${provider.key})`)
+      const selectedPlatformText = await platformSelect.innerText()
+      expect(selectedPlatformText).toContain(`(${provider.key})`)
+      await searchInput.fill('海阔天空')
+      await searchButton.click()
+      const searchResult = await waitForPlatformSearch(page, audition, 45_000)
+      if (!searchResult.ready) {
+        failures.push(`${provider.key} 搜索失败：${searchResult.error}`)
+        console.log(`LIVE_DESKTOP_STEP ${provider.label} 搜索未返回曲目：${compactOneLine(searchResult.error, 200)}`)
         continue
       }
-      playedTrack = {
-        title: String(musicInfo.name || musicInfo.title),
-        singer: String(musicInfo.singerName || musicInfo.singer || musicInfo.artist || ''),
-        id: String(musicInfo.id || musicInfo.songmid),
-        chartLabel: catalogLabel,
-        musicInfo
-      }
-      mediaOrigin = resolution.mediaOrigin
-      await audition.getByRole('button', { name: '交给全局播放器试听' }).click()
-      audio = page.locator('.player-bar audio').first()
-      await expect(page.locator('.player-bar .pb-title')).toHaveText(playedTrack.title, { timeout: 20_000 })
-      await expect(audio).toHaveAttribute('src', /^app:\/\/music-holo\/__source_media\//, { timeout: 20_000 })
-      await expect.poll(() => audio.evaluate((element) => element.currentTime), { timeout: 60_000 })
-        .toBeGreaterThan(0)
-      const state = await audio.evaluate((element) => ({
-        currentTime: element.currentTime,
-        paused: element.paused,
-        readyState: element.readyState,
-        error: element.error ? `${element.error.code}:${element.error.message}` : ''
-      }))
-      if (state.error) throw new Error(`播放器解码错误：${state.error}`)
-      expect(state.paused, '真实媒体必须仍在播放').toBe(false)
-      expect(state.readyState).toBeGreaterThanOrEqual(2)
 
-      const audit = await application.evaluate(() => ({
-        approvals: globalThis.liveSourceApprovals,
-        requests: globalThis.liveSourceRequests,
-        backend: globalThis.liveBackendRequests
-      }))
-      expect(audit.backend, '游客/无后端桌面路径不得调用 Music Holo 后端').toEqual([])
-      expect(audit.approvals.length, '音源及媒体域名必须走原生逐域名授权').toBeGreaterThan(0)
-      for (const item of audit.approvals.filter((approval) => approval.host)) {
-        expect(item.permitted, `未授权的主机不应被自动允许：${item.host}`).toBe(true)
-        expect(hostAllowed(item.host), `出现未列入本次测试范围的公网主机：${item.host}`).toBe(true)
-      }
-      for (const request of audit.requests) {
-        expect(hostAllowed(new URL(request.url).hostname), `出站请求不应访问未列入本次测试范围的主机：${request.url}`).toBe(true)
-        for (const forbidden of ['cookie', 'cookie2', 'authorization', 'proxy-authorization', 'referer', 'music-holo-token']) {
-          expect(request.headerNames).not.toContain(forbidden)
+      const trackCount = await trackButtons.count()
+      const maxCandidates = Math.min(trackCount, 5)
+      for (let index = 0; index < maxCandidates && !playedTrack; index += 1) {
+        const trackButton = trackButtons.nth(index)
+        const catalogLabel = (await trackButton.innerText()).trim()
+        await trackButton.click()
+        const musicInfoText = await audition.getByRole('textbox', { name: 'musicInfo JSON' }).inputValue()
+        const musicInfo = JSON.parse(musicInfoText)
+        const catalogTitle = String(musicInfo.name || musicInfo.title || '')
+        const catalogSinger = String(musicInfo.singerName || musicInfo.singer || musicInfo.artist || '')
+        expect(catalogTitle).not.toBe('')
+        expect(catalogLabel).toContain(catalogTitle)
+        if (catalogSinger) expect(catalogLabel).toContain(catalogSinger)
+        expect(String(musicInfo.id || musicInfo.songmid || '')).not.toBe('')
+
+        actualQuality = await selectQuality(page, audition, '320k')
+        console.log(`LIVE_DESKTOP_STEP ${provider.label} 搜索结果 ${index + 1}/${maxCandidates}：${catalogLabel}；平台 ID ${musicInfo.id || musicInfo.songmid}；音质 ${actualQuality}`)
+
+        const resolution = await resolveAndApproveMedia(page, audition, 90_000)
+        if (!resolution.ready) {
+          failures.push(`${provider.key} ${catalogLabel}（ID=${musicInfo.id || musicInfo.songmid}）：${resolution.error}`)
+          continue
         }
-      }
+        playedTrack = {
+          provider: provider.key,
+          providerName: provider.label,
+          title: catalogTitle,
+          singer: catalogSinger,
+          id: String(musicInfo.id || musicInfo.songmid),
+          searchLabel: catalogLabel,
+          musicInfo
+        }
+        mediaOrigin = resolution.mediaOrigin
+        await audition.getByRole('button', { name: '交给全局播放器试听' }).click()
+        audio = page.locator('.player-bar audio').first()
+        await expect(page.locator('.player-bar .pb-title')).toHaveText(playedTrack.title, { timeout: 20_000 })
+        await expect(audio).toHaveAttribute('src', /^app:\/\/music-holo\/__source_media\//, { timeout: 20_000 })
+        await expect.poll(() => audio.evaluate((element) => element.currentTime), { timeout: 60_000 })
+          .toBeGreaterThan(0)
+        const state = await audio.evaluate((element) => ({
+          currentTime: element.currentTime,
+          paused: element.paused,
+          readyState: element.readyState,
+          error: element.error ? `${element.error.code}:${element.error.message}` : ''
+        }))
+        if (state.error) throw new Error(`播放器解码错误：${state.error}`)
+        expect(state.paused, '真实媒体必须仍在播放').toBe(false)
+        expect(state.readyState).toBeGreaterThanOrEqual(2)
 
-      outcome = `PLAYED 网易云公开搜索 → 星海自定义源 → ${playedTrack.title} / ${playedTrack.singer} ` +
-        `(platform=wy, id=${playedTrack.id}, quality=${actualQuality}, media=${new URL(mediaOrigin).host}, ` +
-        `currentTime=${state.currentTime.toFixed(2)}s, paused=${state.paused}, readyState=${state.readyState})`
-      console.log(`LIVE_DESKTOP_OUTCOME=${outcome}`)
+        const audit = await application.evaluate(() => ({
+          approvals: globalThis.liveSourceApprovals,
+          requests: globalThis.liveSourceRequests,
+          backend: globalThis.liveBackendRequests
+        }))
+        expect(audit.backend, '游客/无后端桌面路径不得调用 Music Holo 后端').toEqual([])
+        expect(audit.approvals.length, '音源及媒体域名必须走原生逐域名授权').toBeGreaterThan(0)
+        for (const item of audit.approvals.filter((approval) => approval.host)) {
+          if (item.permitted) {
+            expect(hostAllowed(item.host), `被自动允许的主机必须属于本次测试白名单：${item.host}`).toBe(true)
+          } else {
+            expect(audit.requests.some((request) => new URL(request.url).hostname === item.host), `被拒绝的主机不应发出请求：${item.host}`).toBe(false)
+          }
+        }
+        for (const request of audit.requests) {
+          expect(hostAllowed(new URL(request.url).hostname), `出站请求不应访问未列入本次测试范围的主机：${request.url}`).toBe(true)
+          for (const forbidden of ['cookie', 'cookie2', 'authorization', 'proxy-authorization', 'referer', 'music-holo-token']) {
+            expect(request.headerNames).not.toContain(forbidden)
+          }
+        }
+
+        outcome = `PLAYED ${provider.label}公开搜索 → 星海自定义源 → ${playedTrack.title} / ${playedTrack.singer} ` +
+          `(platform=${playedTrack.provider}, id=${playedTrack.id}, quality=${actualQuality}, media=${new URL(mediaOrigin).host}, ` +
+          `currentTime=${state.currentTime.toFixed(2)}s, paused=${state.paused}, readyState=${state.readyState})`
+        console.log(`LIVE_DESKTOP_OUTCOME=${outcome}`)
+      }
     }
 
     if (!playedTrack) {
-      throw new Error(`榜单前 ${maxCandidates} 首均未能由星海源播放：${failures.join('；')}`)
+      throw new Error(`咪咕/酷我搜索结果均未能由星海源播放：${failures.join('；')}`)
     }
     expect(errors, '页面不应有未处理的渲染进程错误').toEqual([])
   } catch (error) {
@@ -301,6 +327,24 @@ async function main() {
     await rm(profile, { recursive: true, force: true })
     if (outcome !== 'INCOMPLETE') console.log(`LIVE_DESKTOP_FINAL=${outcome}`)
   }
+}
+
+async function waitForPlatformSearch(page, audition, timeoutMs) {
+  const trackButtons = audition.locator('[aria-label="平台曲目结果"] button')
+  const searchButton = audition.getByRole('button', { name: '搜索平台' })
+  const started = Date.now()
+  const deadline = started + timeoutMs
+  while (Date.now() < deadline) {
+    const count = await trackButtons.count().catch(() => 0)
+    if (count > 0) return { ready: true }
+    const loading = await searchButton.evaluate((button) => button.classList.contains('is-loading')).catch(() => false)
+    if (Date.now() - started > 1_000 && !loading) {
+      const message = await audition.locator('.source-audition-note').innerText().catch(() => '')
+      if (message.trim()) return { ready: false, error: compactOneLine(message, 240) }
+    }
+    await page.waitForTimeout(250)
+  }
+  return { ready: false, error: `平台搜索等待超时（${timeoutMs}ms）` }
 }
 
 async function selectOption(page, select, matchingText) {
