@@ -139,15 +139,15 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           # 结论打成 job 注解，方便通过 API（而不是下载日志）查看。
           # 无论成功、失败还是第三方离线，都要留下一条能读到的记录。
-          outcome=$(grep -m1 'LIVE_OUTCOME=' /tmp/live-source.log || true)
+          outcome=$(grep 'LIVE_OUTCOME=' /tmp/live-source.log | tail -n 1 || true)
           if [ -n "$outcome" ]; then
             echo "::notice title=真实音源在线结果（退出码 $status）::${outcome#LIVE_OUTCOME=}"
           else
-            fallback=$(tail -n 25 /tmp/live-source.log | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            fallback=$(grep -n -E 'LIVE_STEP|LIVE_OUTCOME|Error:|waiting for' /tmp/live-source.log | tail -n 30 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
             echo "::notice title=真实音源在线结果（退出码 $status，未打印结论）::$fallback"
           fi
           if [ "$status" -ne 0 ]; then
-            taildetail=$(grep -n -E '✘|Error:|AssertionError|Timed out' /tmp/live-source.log | tail -n 30 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            taildetail=$(grep -n -E 'LIVE_STEP|✘|Error:|AssertionError|Timed out|waiting for' /tmp/live-source.log | tail -n 40 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
             echo "::warning title=真实音源旅程未通过（非阻断）::$taildetail"
           fi
           exit 0

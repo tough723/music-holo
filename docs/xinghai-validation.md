@@ -102,6 +102,9 @@
 - 对 `m701.music.126.net/…mp3` 与封面 jpg 的取回经外部探测通道返回 **HTTP 500**（该通道不支持二进制媒体验收，或 CDN 拒绝非播放器请求）→ **归类环境/通道限制**。
 - **2026-10-10 补记：@live 真实音源在线旅程**：新增 `music-holo-web/tests/e2e/live-xinghai-source.spec.js`——从公开地址下载**真实星海脚本**（sha256 钉死为 `807d6157…`，上游换文件会立刻失败），榜单页曲目 → 「使用自定义源播放」→ 填入真实平台曲目 ID（wy `songmid=347230`、320k）→ 真实后端解析。断言的是两条确定性行为：① 脚本指纹一致；② 结果要么落地为 https 直链且浏览器**真的解码**（`currentTime > 0`），要么因明文 http 直链/第三方离线而未落地，此时界面**必须有明确提示**，不允许静默失败。实际结果写进 `testInfo` 注解，可在 CI 日志与 job 摘要里看到。它依赖第三方服务，因此单独跑在非阻断 job（`ci.yml` 的 `live-source`，`continue-on-error`），主旅程 job 用 `--grep-invert @live` 排除它。沙箱内无法运行（无浏览器、平台域名不通），首次结果以 CI 为准。
 
+- **2026-10-10 补记：@live 旅程第一次真相（此前"通过"是假象）**：`live-source` job 是 `continue-on-error` 且脚本里 `exit 0`，所以**它一直显示绿色，即使用例是红的**。给 workflow 加上"无论成败都写一条 job 注解"之后才读到真实结果：**用例一直在 `locator.click` 上超时**。两个原因：① 真实星海脚本**声明 6 个平台**，宿主默认选中第一个（不是 wy），于是填入的 wy 平台 ID 被送进别的平台分支、音质列表也对不上；② 真实脚本**初始化阶段就联网**（IP 查询 / 版本检查），每个新域名都会弹「仅本次允许」，夹具旅程里没有这一步。修法：用例显式点开平台下拉选中 `wy`/`mg` 对应的项，并一边等结果一边把冒出来的域名授权点掉。同时把候选改成**先 mg 后 wy**——§4 记录里只有 mg（以及 wy 降级到 GD）实测返回 **https** 直链，网页端 HTTPS-only 边界下才有机会真播。
+- **2026-10-10 补记：单测顺序依赖导致的偶发红**：`tests/desktop-sources-route.test.js` 共用模块级 `router` 单例，若上一个用例的落点恰好是本次要跳的路由，vue-router 会判成**重复导航、不再执行守卫**，"应被重定向到 /home"的断言就假失败（用 `vitest --sequence.shuffle --sequence.seed=1234` 可稳定复现）。已改为每个用例先 `router.replace('/lyrics')` 回到无守卫的中性路由；三个随机种子下 296/296 全绿。
+
 - **2026-10-10 补记：榜单 → 自定义源播放的浏览器旅程**：新增 `music-holo-web/tests/e2e/charts-custom-source-playback.spec.js`——榜单页首行 → 「使用自定义源播放」→（受控音源夹具）信任/初始化 → 选平台与 320k → 解析并播放；媒体地址与封面由 Playwright 拦截回 `public/audio/song1.wav`（仓库里的真实 wav），因此断言的是**浏览器真的解码、进度真的前进**（`currentTime > 0`、`paused === false`），而不只是“src 变了”。音源仍是受控夹具，不代表第三方平台可用；无头 Chromium 默认拦自动播放，这条旅程显式加了 `--autoplay-policy=no-user-gesture-required`（解析是异步的，真正 play() 时手势已过期）。
 
 - **实际出声（播放）验收未完成**：需要能出网的桌面客户端（或 CI 联网 runner）走媒体票据流式加载。桌面媒体桥允许 `http://` 明文直链（带确认提示）、单段 Range、无 Cookie；网页沙箱 HTTPS-only 会拒绝 `http://` 直链（既有安全边界，保持）。
