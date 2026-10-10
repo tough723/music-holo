@@ -53,9 +53,8 @@ jobs:
         shell: bash
         run: |
           set +e
-          xvfb-run -a node music-holo-desktop/scripts/live-source-playback.cjs > /tmp/live-source-desktop.log 2>&1
-          status=$?
-          cat /tmp/live-source-desktop.log
+          xvfb-run -a node music-holo-desktop/scripts/live-source-playback.cjs 2>&1 | tee /tmp/live-source-desktop.log
+          status=${PIPESTATUS[0]}
           {
             echo "### 实际在线曲目 → 星海自定义源播放（非阻断）"
             echo

@@ -207,7 +207,7 @@ async function main() {
       expect(selectedPlatformText).toContain(`(${provider.key})`)
       await searchInput.fill('海阔天空')
       await searchButton.click()
-      const searchResult = await waitForPlatformSearch(page, audition, 45_000)
+      const searchResult = await waitForPlatformSearch(page, audition, 20_000)
       if (!searchResult.ready) {
         failures.push(`${provider.key} 搜索失败：${searchResult.error}`)
         console.log(`LIVE_DESKTOP_STEP ${provider.label} 搜索未返回曲目：${compactOneLine(searchResult.error, 200)}`)
@@ -215,7 +215,9 @@ async function main() {
       }
 
       const trackCount = await trackButtons.count()
-      const maxCandidates = Math.min(trackCount, 5)
+      // One actual top result per provider bounds the optional CI journey; a
+      // second provider is the fallback, so a broken resolver cannot fan out to 10 × 90s.
+      const maxCandidates = Math.min(trackCount, 1)
       for (let index = 0; index < maxCandidates && !playedTrack; index += 1) {
         const trackButton = trackButtons.nth(index)
         const catalogLabel = (await trackButton.innerText()).trim()
@@ -234,7 +236,9 @@ async function main() {
 
         const resolution = await resolveAndApproveMedia(page, audition, 90_000)
         if (!resolution.ready) {
-          failures.push(`${provider.key} ${catalogLabel}（ID=${musicInfo.id || musicInfo.songmid}）：${resolution.error}`)
+          const failure = `${provider.key} ${catalogLabel}（ID=${musicInfo.id || musicInfo.songmid}）：${resolution.error}`
+          failures.push(failure)
+          console.log(`LIVE_DESKTOP_STEP 解析未播放：${compactOneLine(failure, 240)}`)
           continue
         }
         playedTrack = {
@@ -403,7 +407,7 @@ async function resolveAndApproveMedia(page, audition, timeoutMs) {
     }
     const messages = await page.locator('.el-message').allInnerTexts().catch(() => [])
     const warning = messages.map((message) => message.trim()).find((message) => /解析失败|没有返回|网络请求|超时|不安全|拒绝|错误|无法/.test(message))
-    if (warning) lastMessage = warning.replace(/\\s+/g, ' ').slice(0, 240)
+    if (warning) lastMessage = compactOneLine(warning, 240)
     await page.waitForTimeout(200)
   }
   return { ready: false, error: lastMessage || `等待媒体确认超时（${timeoutMs}ms）` }
