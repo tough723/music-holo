@@ -132,13 +132,7 @@ async function attemptCandidate(page, candidate) {
   const approvals = await initializeSource(page, dialog)
 
   // 4. 显式选平台（脚本声明多个平台，默认选第一个，不是我们要的那个）
-  const platformSelect = dialog.locator('.source-playback-fields .el-select').nth(0)
-  const currentPlatform = (await platformSelect.innerText()).trim()
-  // 星海默认首项为 wy。若当前值已是本候选平台，就保留该值；Element Plus 对已选中的
-  // option 会在某些版本/焦点状态下关闭 popper，Playwright 再点它会等到超时。
-  const platform = currentPlatform.includes(`(${candidate.platform})`)
-    ? { picked: currentPlatform, labels: [], alreadySelected: true }
-    : await pickFromSelect(page, dialog, 0, (labels) => labels.find((label) => label.includes(`(${candidate.platform})`)))
+  const platform = await pickFromSelect(page, dialog, 0, (labels) => labels.find((label) => label.includes(`(${candidate.platform})`)))
   const quality = await pickFromSelect(page, dialog, 1, (labels) => (labels.includes(candidate.quality) ? candidate.quality : labels[0]))
   console.log(`LIVE_STEP 平台=${platform.picked} 可选=${platform.labels.join('/') || '已是目标值'}｜音质=${quality.picked} 可选=${quality.labels.join('/')}`)
   expect(platform.picked, `音源应声明 ${candidate.platform} 平台`).toContain(`(${candidate.platform})`)
@@ -203,10 +197,19 @@ async function pickFromSelect(page, dialog, index, picker) {
   const labels = (await options.allInnerTexts()).map((text) => text.trim()).filter(Boolean)
   if (!labels.length) throw new Error(`第 ${index + 1} 个下拉框没有任何可选项`)
   const picked = picker(labels) || labels[0]
+  const selectedOption = page.locator('.el-select-dropdown__item.is-selected:visible').first()
+  const selectedLabel = (await selectedOption.innerText().catch(() => '')).trim()
+  if (selectedLabel === picked) {
+    // Element Plus 在 selected option 上的 click 会关闭 popper，但有些 Chromium 组合
+    // 会把这个瞬间看成 target detached。键盘 Escape 只是关闭菜单，不改变当前值。
+    await page.keyboard.press('Escape')
+    console.log(`LIVE_ACTION 「${picked}」已经选中，不重复点击`)
+    return { picked, labels, alreadySelected: true }
+  }
   console.log(`LIVE_ACTION 下拉项：${labels.join(' / ')}，准备选择「${picked}」`)
   await clickWithApprovals(page, page.getByRole('option', { name: picked, exact: true }).first(), `下拉选项 ${picked}`)
   await page.waitForTimeout(200)
-  return { picked, labels }
+  return { picked, labels, alreadySelected: false }
 }
 
 /** 点「隔离解析并播放」，边等结果边处理授权弹窗，直到拿到媒体地址或出现明确失败提示。 */
