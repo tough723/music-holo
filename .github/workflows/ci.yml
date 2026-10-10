@@ -57,11 +57,11 @@ jobs:
         run: npm ci
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
-      - name: Run production-build browser journeys
+      - name: Run production-build browser journeys（排除 @live：第三方依赖另开非阻断 job）
         shell: bash
         run: |
           set +e
-          npm run test:e2e > /tmp/playwright-e2e.log 2>&1
+          npm run test:e2e:journeys > /tmp/playwright-e2e.log 2>&1
           status=$?
           cat /tmp/playwright-e2e.log
           if [ "$status" -ne 0 ]; then
@@ -75,6 +75,56 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: music-holo-playwright-debug
+          path: |
+            music-holo-web/playwright-report/
+            music-holo-web/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  live-source:
+    name: Live third-party source journey
+    runs-on: ubuntu-24.04
+    # 依赖第三方音源与其上游平台是否在线：失败只记录，不阻断合并。
+    continue-on-error: true
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: music-holo-web
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: music-holo-web/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Run live custom-source journey against the real service
+        shell: bash
+        run: |
+          set +e
+          npm run test:e2e:live > /tmp/live-source.log 2>&1
+          status=$?
+          cat /tmp/live-source.log
+          {
+            echo "### 真实第三方音源在线旅程（@live，非阻断）"
+            echo
+            echo "退出码：$status（0 = 真实直链已解码播放；非 0 见下方日志，可能是第三方离线或返回明文 http 直链被安全边界拒绝）"
+            echo
+            echo '```'
+            tail -n 60 /tmp/live-source.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+      - name: Upload live journey diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: music-holo-live-source-diagnostics
           path: |
             music-holo-web/playwright-report/
             music-holo-web/test-results/

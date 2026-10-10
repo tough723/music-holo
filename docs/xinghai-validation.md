@@ -100,6 +100,8 @@
 
 - 解析服务返回的直链带 `br/size` 元数据（GD 明示 `size:13,042,460` ≈ 320kbps 全曲），服务端已校验资源存在。
 - 对 `m701.music.126.net/…mp3` 与封面 jpg 的取回经外部探测通道返回 **HTTP 500**（该通道不支持二进制媒体验收，或 CDN 拒绝非播放器请求）→ **归类环境/通道限制**。
+- **2026-10-10 补记：@live 真实音源在线旅程**：新增 `music-holo-web/tests/e2e/live-xinghai-source.spec.js`——从公开地址下载**真实星海脚本**（sha256 钉死为 `807d6157…`，上游换文件会立刻失败），榜单页曲目 → 「使用自定义源播放」→ 填入真实平台曲目 ID（wy `songmid=347230`、320k）→ 真实后端解析。断言的是两条确定性行为：① 脚本指纹一致；② 结果要么落地为 https 直链且浏览器**真的解码**（`currentTime > 0`），要么因明文 http 直链/第三方离线而未落地，此时界面**必须有明确提示**，不允许静默失败。实际结果写进 `testInfo` 注解，可在 CI 日志与 job 摘要里看到。它依赖第三方服务，因此单独跑在非阻断 job（`ci.yml` 的 `live-source`，`continue-on-error`），主旅程 job 用 `--grep-invert @live` 排除它。沙箱内无法运行（无浏览器、平台域名不通），首次结果以 CI 为准。
+
 - **2026-10-10 补记：榜单 → 自定义源播放的浏览器旅程**：新增 `music-holo-web/tests/e2e/charts-custom-source-playback.spec.js`——榜单页首行 → 「使用自定义源播放」→（受控音源夹具）信任/初始化 → 选平台与 320k → 解析并播放；媒体地址与封面由 Playwright 拦截回 `public/audio/song1.wav`（仓库里的真实 wav），因此断言的是**浏览器真的解码、进度真的前进**（`currentTime > 0`、`paused === false`），而不只是“src 变了”。音源仍是受控夹具，不代表第三方平台可用；无头 Chromium 默认拦自动播放，这条旅程显式加了 `--autoplay-policy=no-user-gesture-required`（解析是异步的，真正 play() 时手势已过期）。
 
 - **实际出声（播放）验收未完成**：需要能出网的桌面客户端（或 CI 联网 runner）走媒体票据流式加载。桌面媒体桥允许 `http://` 明文直链（带确认提示）、单段 Range、无 Cookie；网页沙箱 HTTPS-only 会拒绝 `http://` 直链（既有安全边界，保持）。
