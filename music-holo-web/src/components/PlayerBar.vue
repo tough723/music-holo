@@ -1,5 +1,5 @@
 <template>
-  <div class="player-bar glass-panel">
+  <div class="player-bar glass-panel" :class="{ 'is-compact': isCompactView, 'is-mini': viewMode === 'mini', 'is-immersive': viewMode === 'immersive' }">
     <!-- 左侧：全息投影 + 歌曲信息 -->
     <div class="pb-left">
       <div class="pb-holo" @click="toggleLyric">
@@ -285,6 +285,17 @@
           </el-badge>
         </span>
       </el-tooltip>
+      <el-tooltip :content="`播放器形态：${viewModeLabel} · V`" placement="top">
+        <el-button
+          circle
+          text
+          class="pb-view-mode"
+          :aria-label="`播放器形态：${viewModeLabel}，点击切换到${nextViewModeLabel}`"
+          @click="cycleViewMode"
+        >
+          <el-icon><FullScreen v-if="viewMode === 'immersive'" /><Crop v-else-if="viewMode === 'mini'" /><View v-else /></el-icon>
+        </el-button>
+      </el-tooltip>
     </div>
 
     <!-- 原声播放器始终保留；空间音效使用独立媒体元素，确保跨域音源可安全回退原声。 -->
@@ -443,7 +454,7 @@
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { SLEEP_TIMER_MINUTES, usePlayerStore } from '@/store/player'
+import { PLAYER_VIEW_MODES, SLEEP_TIMER_MINUTES, usePlayerStore } from '@/store/player'
 import { useUserStore } from '@/store/user'
 import { useDislikeStore } from '@/store/dislike'
 import { useDownloadStore } from '@/store/downloads'
@@ -505,8 +516,49 @@ const SHORTCUT_HELP = Object.freeze([
   { keys: 'PageUp / PageDown', desc: '快退 / 快进 30 秒' },
   { keys: 'M', desc: '静音 / 取消静音' },
   { keys: 'L', desc: '打开 / 关闭歌词' },
-  { keys: 'Q', desc: '打开 / 关闭播放队列' }
+  { keys: 'Q', desc: '打开 / 关闭播放队列' },
+  { keys: 'V', desc: '切换播放器形态（标准 / 迷你 / 沉浸）' }
 ])
+
+// ---- 播放器形态：标准 / 迷你 / 沉浸 ----
+const viewMode = computed(() => playerStore.playerViewMode)
+const isCompactView = computed(() => viewMode.value !== 'standard')
+const viewModeLabel = computed(() => PLAYER_VIEW_MODES.find((mode) => mode.key === viewMode.value)?.label || '标准')
+const nextViewModeLabel = computed(() => {
+  const keys = PLAYER_VIEW_MODES.map((mode) => mode.key)
+  const next = keys[(Math.max(0, keys.indexOf(viewMode.value)) + 1) % keys.length]
+  return PLAYER_VIEW_MODES.find((mode) => mode.key === next)?.label || '标准'
+})
+/** 进入沉浸模式时由播放器打开的歌词舞台，退出时只关掉自己打开的那一层。 */
+let openedImmersiveLyric = false
+
+function cycleViewMode() {
+  const next = playerStore.cyclePlayerViewMode()
+  applyViewMode(next)
+  const mode = PLAYER_VIEW_MODES.find((item) => item.key === next)
+  ElMessage.info(`播放器形态：${mode?.label || next}${mode ? ` · ${mode.desc}` : ''}`)
+}
+
+function applyViewMode(mode) {
+  if (mode === 'immersive') {
+    playerStore.lyricVisible = true
+    playerStore.setLyricView({ immersive: true })
+    openedImmersiveLyric = true
+    return
+  }
+  if (openedImmersiveLyric) {
+    openedImmersiveLyric = false
+    playerStore.setLyricView({ immersive: false })
+    // 只在沉浸形态下自动打开过歌词：回到标准/迷你时一并收起，避免留下遮罩。
+    playerStore.lyricVisible = false
+  }
+}
+
+/** 迷你形态要同步改全局 --player-h，页面内容才不会被多余的留白顶住。 */
+function syncViewportClass(mode) {
+  if (typeof document === 'undefined') return
+  document.documentElement.classList.toggle('mh-player-mini', mode === 'mini' || mode === 'immersive')
+}
 const sleepClockNow = ref(Date.now())
 let sleepClockInterval = null
 const viewportWidth = ref(typeof window === 'undefined' ? 1280 : window.innerWidth)
@@ -973,6 +1025,9 @@ function onPlayerShortcut(event) {
   } else if (event.key.toLowerCase() === 'q') {
     event.preventDefault()
     queueVisible.value = !queueVisible.value
+  } else if (event.key.toLowerCase() === 'v') {
+    event.preventDefault()
+    cycleViewMode()
   }
 }
 
@@ -1725,6 +1780,8 @@ onUnmounted(() => {
   } catch {
     // Cleanup must not interrupt component teardown.
   }
+  // 形态类名加在 <html> 上，组件卸载时清掉，避免留下孤儿状态。
+  document.documentElement.classList.remove('mh-player-mini')
   window.removeEventListener('mh-seek', onLyricSeek)
   window.removeEventListener('keydown', onPlayerShortcut)
   window.removeEventListener('keydown', markUserGesture)
@@ -1733,6 +1790,19 @@ onUnmounted(() => {
   document.removeEventListener('visibilitychange', onVisibilityChange)
   clearSleepClock()
 })
+
+// 歌词舞台里手动退出沉浸（Esc / 按钮）时，播放器形态跟着回到标准，避免状态不一致。
+watch(() => playerStore.lyricView.immersive, (immersive) => {
+  if (playerStore.playerViewMode === 'immersive' && !immersive) {
+    openedImmersiveLyric = false
+    playerStore.setPlayerViewMode('standard')
+  }
+})
+
+watch(() => playerStore.playerViewMode, (mode) => {
+  applyViewMode(mode)
+  syncViewportClass(mode)
+}, { immediate: true })
 
 watch(() => userStore.isLogin, (loggedIn) => {
   if (loggedIn) loadFavorites()
@@ -1761,6 +1831,51 @@ watch(() => userStore.isLogin, (loggedIn) => {
   -webkit-backdrop-filter: blur(24px) saturate(1.4);
   box-shadow: 0 -18px 50px -34px var(--holo-glow), 0 -1px 0 rgba(255, 255, 255, 0.1) inset;
   transform-style: preserve-3d;
+}
+/* ---- 迷你 / 沉浸形态：只保留核心控制 ---- */
+.player-bar.is-compact {
+  gap: 12px;
+  padding: 0 14px;
+}
+.player-bar.is-compact .pb-left {
+  width: auto;
+  max-width: 32%;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.player-bar.is-compact .pb-radio,
+.player-bar.is-compact .pb-switch,
+.player-bar.is-compact .pb-download,
+.player-bar.is-compact .pb-dislike,
+.player-bar.is-compact .pb-sleep,
+.player-bar.is-compact .pb-spatial,
+.player-bar.is-compact .pb-volume,
+.player-bar.is-compact .pb-volume-value,
+.player-bar.is-compact .pb-rate,
+.player-bar.is-compact .pb-shortcuts {
+  display: none;
+}
+.player-bar.is-compact .pb-center {
+  padding: 0;
+}
+.player-bar.is-compact .pb-controls {
+  gap: 2px;
+}
+.player-bar.is-compact .pb-right {
+  width: auto;
+  justify-content: flex-end;
+  gap: 2px;
+}
+.player-bar.is-compact .pb-holo {
+  --holo-size: 40px;
+}
+.player-bar.is-compact .pb-progress {
+  gap: 8px;
+}
+.player-bar.is-immersive {
+  background: linear-gradient(180deg, rgba(20, 30, 62, 0.55), rgba(7, 11, 28, 0.35));
+  box-shadow: none;
+  border-top-color: color-mix(in srgb, var(--holo-primary) 22%, transparent);
 }
 .player-bar > audio {
   display: none;

@@ -26,6 +26,17 @@
   }
 }
 
+/* 迷你 / 沉浸形态：播放条收窄，页面留白同步变小（类名由播放器组件加在 <html> 上）。 */
+:root.mh-player-mini {
+  --player-h: 56px;
+}
+
+@media (max-width: 680px) {
+  :root.mh-player-mini {
+    --player-h: 64px;
+  }
+}
+
 * {
   margin: 0;
   padding: 0;

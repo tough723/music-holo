@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import {
   PLAYBACK_RATES,
+  PLAYER_VIEW_MODES,
   RESUME_MIN_SECONDS,
   normalizePlaybackRate,
   usePlayerStore
@@ -127,6 +128,34 @@ describe('输出偏好：空间音效记忆', () => {
     // 只有显式传入才会改写：脏值一律当关闭处理。
     expect(reloaded.setSpatialPreferred('no')).toBe(false)
     expect(reloaded.spatialPreferred).toBe(false)
+  })
+})
+
+describe('播放器形态：标准 / 迷你 / 沉浸', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    setActivePinia(createPinia())
+  })
+
+  it('形态按 标准 → 迷你 → 沉浸 → 标准 循环，非法值回落到标准', () => {
+    const store = usePlayerStore()
+    expect(store.playerViewMode).toBe('standard')
+    expect(store.cyclePlayerViewMode()).toBe('mini')
+    expect(store.cyclePlayerViewMode()).toBe('immersive')
+    expect(store.cyclePlayerViewMode()).toBe('standard')
+
+    expect(store.setPlayerViewMode('immersive')).toBe('immersive')
+    expect(store.setPlayerViewMode('huge')).toBe('standard')
+    expect(store.setPlayerViewMode(null)).toBe('standard')
+  })
+
+  it('形态会持久化，刷新后仍然保持', () => {
+    const store = usePlayerStore()
+    store.setPlayerViewMode('mini')
+    expect(JSON.parse(localStorage.getItem('mh_player')).playerViewMode).toBe('mini')
+    const reloaded = usePlayerStore(createPinia())
+    expect(reloaded.playerViewMode).toBe('mini')
+    expect(PLAYER_VIEW_MODES.map((mode) => mode.key)).toContain(reloaded.playerViewMode)
   })
 })
 

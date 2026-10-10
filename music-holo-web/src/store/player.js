@@ -23,6 +23,21 @@ export const RESUME_MIN_SECONDS = 5
 /** 距离结尾这么近就从头开始，避免续播后立刻切歌。 */
 export const RESUME_TAIL_GUARD_SECONDS = 15
 
+/**
+ * 播放器形态：标准（完整播放条）/ 迷你（收成一条，只留核心控制）/ 沉浸（全屏歌词舞台 + 极简条）。
+ * 只影响界面布局，不改变播放行为；桌面端可据此调整窗口，Web 端只改浮层形态。
+ */
+export const PLAYER_VIEW_MODES = Object.freeze([
+  { key: 'standard', label: '标准', desc: '完整播放条：全部控件与进度条' },
+  { key: 'mini', label: '迷你', desc: '收窄成一条，只留播放控制与进度' },
+  { key: 'immersive', label: '沉浸', desc: '全屏歌词舞台 + 极简控制条' }
+])
+const PLAYER_VIEW_MODE_KEYS = PLAYER_VIEW_MODES.map((mode) => mode.key)
+
+export function normalizePlayerViewMode(value) {
+  return PLAYER_VIEW_MODE_KEYS.includes(value) ? value : 'standard'
+}
+
 /** 歌词显示偏好：字号档位与缩放系数。 */
 export const LYRIC_FONT_SIZES = Object.freeze([
   { key: 'small', label: '小', scale: 0.86 },
@@ -153,7 +168,8 @@ function persist(state) {
     // 歌词显示偏好（译文/罗马音/逐字/沉浸/字号/时间校准）跨会话保留。
     lyricView: normalizeLyricView(state.lyricView),
     // 空间音效是输出偏好：记住用户上次的开关，下一次用户手势触发播放时自动套用。
-    spatialPreferred: Boolean(state.spatialPreferred)
+    spatialPreferred: Boolean(state.spatialPreferred),
+    playerViewMode: normalizePlayerViewMode(state.playerViewMode)
   }))
 }
 
@@ -194,6 +210,8 @@ export const usePlayerStore = defineStore('player', {
       lyricView: normalizeLyricView(saved.lyricView),
       /** 上次是否开着 3D 空间音效（只是偏好，实际是否生效取决于音源与浏览器）。 */
       spatialPreferred: saved.spatialPreferred === true,
+      /** 播放器形态：standard / mini / immersive。 */
+      playerViewMode: normalizePlayerViewMode(saved.playerViewMode),
       /** 原歌词与可选译文歌词 */
       lyrics: [],
       lyricTranslations: [],
@@ -715,6 +733,17 @@ export const usePlayerStore = defineStore('player', {
     /** 清除歌词时间校准。 */
     resetLyricOffset() {
       return this.setLyricView({ offsetMs: 0 }).offsetMs
+    },
+    /** 切换播放器形态（标准 / 迷你 / 沉浸）。 */
+    setPlayerViewMode(mode) {
+      this.playerViewMode = normalizePlayerViewMode(mode)
+      persist(this)
+      return this.playerViewMode
+    },
+    /** 按顺序循环：标准 → 迷你 → 沉浸 → 标准。 */
+    cyclePlayerViewMode() {
+      const index = PLAYER_VIEW_MODE_KEYS.indexOf(normalizePlayerViewMode(this.playerViewMode))
+      return this.setPlayerViewMode(PLAYER_VIEW_MODE_KEYS[(index + 1) % PLAYER_VIEW_MODE_KEYS.length])
     },
     /** 记住空间音效开关；音源不支持时不清除偏好，下次遇到可用音源仍会套用。 */
     setSpatialPreferred(preferred) {

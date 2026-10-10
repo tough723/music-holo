@@ -242,4 +242,78 @@ describe('底部播放器交互', () => {
     store.setSpatialPreferred(false)
     expect(JSON.parse(localStorage.getItem('mh_player')).spatialPreferred).toBe(false)
   })
+
+  it('播放器形态按钮在 标准 / 迷你 / 沉浸 之间循环，并同步页面留白', async () => {
+    const store = await mountPlayer()
+    store.playAll([song(1, '霓虹海')], 1)
+    await flush()
+
+    const bar = () => host.querySelector('.player-bar')
+    const modeButton = () => host.querySelector('.pb-view-mode')
+    expect(modeButton().getAttribute('aria-label')).toBe('播放器形态：标准，点击切换到迷你')
+    expect(document.documentElement.classList.contains('mh-player-mini')).toBe(false)
+
+    modeButton().click()
+    await flush()
+    expect(store.playerViewMode).toBe('mini')
+    expect(bar().classList.contains('is-mini')).toBe(true)
+    expect(bar().classList.contains('is-compact')).toBe(true)
+    // 迷你形态下页面底部留白跟着收窄（--player-h 由 <html> 上的类控制）。
+    expect(document.documentElement.classList.contains('mh-player-mini')).toBe(true)
+
+    modeButton().click()
+    await flush()
+    expect(store.playerViewMode).toBe('immersive')
+    expect(bar().classList.contains('is-immersive')).toBe(true)
+    // 沉浸形态自动打开沉浸式歌词舞台。
+    expect(store.lyricVisible).toBe(true)
+    expect(store.lyricView.immersive).toBe(true)
+
+    modeButton().click()
+    await flush()
+    expect(store.playerViewMode).toBe('standard')
+    expect(store.lyricView.immersive).toBe(false)
+    expect(store.lyricVisible).toBe(false)
+    expect(document.documentElement.classList.contains('mh-player-mini')).toBe(false)
+  })
+
+  it('V 键切换形态；歌词舞台里退出沉浸会让播放器回到标准形态', async () => {
+    const store = await mountPlayer()
+    store.playAll([song(1, '霓虹海')], 1)
+    await flush()
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', bubbles: true }))
+    await flush()
+    expect(store.playerViewMode).toBe('mini')
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'V', bubbles: true }))
+    await flush()
+    expect(store.playerViewMode).toBe('immersive')
+
+    // 模拟歌词面板里按 Esc 退出沉浸：播放器形态必须跟着回退，否则状态会打架。
+    store.setLyricView({ immersive: false })
+    await flush()
+    expect(store.playerViewMode).toBe('standard')
+  })
+
+  it('迷你形态隐藏次要控件、保留核心控制与形态切换入口', async () => {
+    const store = await mountPlayer()
+    store.playAll([song(1, '霓虹海')], 1)
+    await flush()
+
+    const bar = host.querySelector('.player-bar')
+    const controlsInBar = () => bar.querySelectorAll('.pb-right > *').length
+    const before = controlsInBar()
+    store.setPlayerViewMode('mini')
+    await flush()
+
+    // 次要控件只是被 CSS 隐藏，节点仍然在：切换形态不该打断正在进行的交互。
+    expect(controlsInBar()).toBe(before)
+    expect(bar.classList.contains('is-compact')).toBe(true)
+    // 核心控制与形态切换入口始终保留。
+    expect(bar.querySelector('.pb-view-mode')).toBeTruthy()
+    expect(bar.querySelector('.pb-mute')).toBeTruthy()
+    expect(bar.querySelector('button[aria-label="播放队列"]')).toBeTruthy()
+    expect(bar.querySelector('.pb-play')).toBeTruthy()
+    expect(bar.querySelector('.progress-track')).toBeTruthy()
+  })
 })
