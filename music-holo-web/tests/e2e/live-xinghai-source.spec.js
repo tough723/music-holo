@@ -144,22 +144,28 @@ async function attemptCandidate(page, candidate) {
 
   let played = false
   let position = 0
+  let paused = null
+  let readyState = 0
   let playError = ''
   if (resolution.src.startsWith('https://')) {
     const playback = await waitForPlayback(audio, 25_000)
     played = playback.played
     position = playback.position || 0
+    paused = playback.paused ?? null
+    readyState = playback.readyState || 0
     playError = playback.error || ''
   }
 
   const summary = played
-    ? `PLAYED 进度 ${position.toFixed(2)}s，主机 ${hostOf(resolution.src)}`
+    ? `PLAYED 进度 ${position.toFixed(2)}s，paused=${paused}，readyState=${readyState}，主机 ${hostOf(resolution.src)}`
     : `未播放（地址=${resolution.src ? hostOf(resolution.src) : '空'}，授权 ${approvals} 次，${compactText(playError || resolution.notices, 220)}）`
   return {
     src: resolution.src,
     notices: resolution.notices,
     played,
     position,
+    paused,
+    readyState,
     playError,
     summary
   }
