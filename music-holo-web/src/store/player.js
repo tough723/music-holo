@@ -2,7 +2,8 @@ import { defineStore } from 'pinia'
 import * as songApi from '@/api/song'
 import * as lyricApi from '@/api/lyric'
 import { useDislikeStore } from '@/store/dislike'
-import { findAdvanceIndex } from '@/utils/dislikeSkip'
+import { findAdvanceIndex, isSkippedByDislike } from '@/utils/dislikeSkip'
+import { heartWeight, nextHeartIndex, nextShuffleIndex, shuffleList } from '@/utils/playMode'
 import { EQ_FLAT_GAINS, EQ_PRESETS, matchEqualizerPreset, normalizeEqualizerGains, presetGains } from '@/utils/spatialAudio'
 
 const PLAYER_KEY = 'mh_player'
@@ -12,8 +13,12 @@ export const MODES = [
   { key: 'order', label: '顺序播放' },
   { key: 'loop', label: '列表循环' },
   { key: 'single', label: '单曲循环' },
-  { key: 'random', label: '随机播放' }
+  { key: 'random', label: '随机播放' },
+  { key: 'shuffle', label: '不重复随机' },
+  { key: 'heart', label: '心动模式' }
 ]
+/** 需要额外状态（随机袋 / 权重）的模式。 */
+export const STATEFUL_MODES = Object.freeze(['shuffle', 'heart'])
 
 export const SLEEP_TIMER_MINUTES = [15, 30, 45, 60]
 
@@ -37,6 +42,23 @@ const PLAYER_VIEW_MODE_KEYS = PLAYER_VIEW_MODES.map((mode) => mode.key)
 
 export function normalizePlayerViewMode(value) {
   return PLAYER_VIEW_MODE_KEYS.includes(value) ? value : 'standard'
+}
+
+/** 播放统计只保留最近/最常听的一批，避免 localStorage 无限增长。 */
+export const PLAY_STATS_LIMIT = 300
+
+export function normalizePlayStats(saved = {}) {
+  const source = saved && typeof saved === 'object' ? saved : {}
+  const entries = Object.entries(source)
+    .filter(([id, value]) => id && value && typeof value === 'object')
+    .map(([id, value]) => [String(id), {
+      count: Math.max(0, Number(value.count) || 0),
+      completed: Math.max(0, Number(value.completed) || 0),
+      skipped: Math.max(0, Number(value.skipped) || 0),
+      updatedAt: Number(value.updatedAt) || 0
+    }])
+  entries.sort((a, b) => (b[1].updatedAt || 0) - (a[1].updatedAt || 0))
+  return Object.fromEntries(entries.slice(0, PLAY_STATS_LIMIT))
 }
 
 /** 均衡器偏好：预设键 + 增益数组，非法值回落到原声。 */
@@ -181,7 +203,9 @@ function persist(state) {
     // 空间音效是输出偏好：记住用户上次的开关，下一次用户手势触发播放时自动套用。
     spatialPreferred: Boolean(state.spatialPreferred),
     playerViewMode: normalizePlayerViewMode(state.playerViewMode),
-    equalizer: normalizeEqualizerState(state.equalizer)
+    equalizer: normalizeEqualizerState(state.equalizer),
+    shuffleBag: (state.shuffleBag || []).slice(0, 500),
+    playStats: normalizePlayStats(state.playStats)
   }))
 }
 
@@ -226,6 +250,12 @@ export const usePlayerStore = defineStore('player', {
       playerViewMode: normalizePlayerViewMode(saved.playerViewMode),
       /** 均衡器：预设名 + 实际增益（dB，按 EQ_BANDS 顺序）。 */
       equalizer: normalizeEqualizerState(saved.equalizer),
+      /** 不重复随机的剩余曲目（存歌曲 id，队列增删后自动失效重洗）。 */
+      shuffleBag: Array.isArray(saved.shuffleBag) ? saved.shuffleBag.filter((id) => id != null).slice(0, 500) : [],
+      /** 本机播放统计（只是一份本地偏好，不上传服务端）：{ [songId]: { count, completed, skipped } } */
+      playStats: normalizePlayStats(saved.playStats),
+      /** 当前账号的收藏歌曲 id（由播放器写入，只用于心动模式加权，不持久化）。 */
+      favoriteIds: [],
       /** 原歌词与可选译文歌词 */
       lyrics: [],
       lyricTranslations: [],
@@ -538,6 +568,14 @@ export const usePlayerStore = defineStore('player', {
       if (this.mode === 'random' && this.queue.length === 1) {
         return afterPlay(this.playAt(0), { played: true, blocked: false, skippedCount: 0 })
       }
+      if (this.mode === 'shuffle' || this.mode === 'heart') {
+        const found = this.nextStatefulIndex()
+        if (found.index == null) {
+          this.playing = false
+          return { played: false, blocked: false, skippedCount: 0 }
+        }
+        return afterPlay(this.playAt(found.index), { played: true, blocked: false, skippedCount: 0 })
+      }
       const found = findAdvanceIndex(this.queue, this.currentIndex, 1, this.mode, currentDislikeRules())
       if (found.index == null) {
         this.playing = false
@@ -565,10 +603,12 @@ export const usePlayerStore = defineStore('player', {
     setMode(mode) {
       if (!MODES.some((item) => item.key === mode)) return false
       this.mode = mode
+      // 换模式就重开一轮，避免沿用上一个模式的随机袋。
+      this.shuffleBag = []
       persist(this)
       return true
     },
-    /** 切换播放模式（顺序 -> 列表循环 -> 单曲循环 -> 随机）。 */
+    /** 按 MODES 顺序切换（顺序 → 列表循环 → 单曲循环 → 随机 → 不重复随机 → 心动模式）。 */
     toggleMode() {
       const idx = MODES.findIndex((m) => m.key === this.mode)
       return this.setMode(MODES[(idx + 1) % MODES.length].key)
@@ -646,6 +686,7 @@ export const usePlayerStore = defineStore('player', {
       this.queue = activeSong ? [activeSong, ...rest] : rest
       this.currentIndex = activeSong ? 0 : -1
       this.priorityNextSongId = null
+      this.shuffleBag = []
       persist(this)
       return true
     },
@@ -671,6 +712,7 @@ export const usePlayerStore = defineStore('player', {
       this.queue = next
       this.currentIndex = activeSong ? this.queue.indexOf(activeSong) : -1
       this.priorityNextSongId = null
+      this.shuffleBag = []
       persist(this)
       releaseLocalSongs(removed)
       return removed.length
@@ -778,6 +820,59 @@ export const usePlayerStore = defineStore('player', {
       this.equalizer = { preset: 'flat', gains: EQ_FLAT_GAINS.slice() }
       persist(this)
       return 'flat'
+    },
+    /**
+     * 不重复随机 / 心动模式的下一首。
+     * 不重复随机用“随机袋”保证一轮内不重复；心动模式按收藏与本机播放统计加权。
+     */
+    nextStatefulIndex() {
+      const rules = currentDislikeRules()
+      const isSkipped = (song, ruleSet) => isSkippedByDislike(song, ruleSet)
+      if (this.mode === 'shuffle') {
+        const result = nextShuffleIndex({
+          queue: this.queue,
+          currentIndex: this.currentIndex,
+          bag: this.shuffleBag,
+          rules,
+          isSkipped
+        })
+        this.shuffleBag = result.bag
+        return { index: result.index }
+      }
+      if (this.mode === 'heart') {
+        const favorites = new Set(this.favoriteIds || [])
+        const entries = []
+        for (let i = 0; i < this.queue.length; i++) {
+          if (i === this.currentIndex) continue
+          const song = this.queue[i]
+          if (isSkipped(song, rules)) continue
+          entries.push({
+            index: i,
+            weight: heartWeight({ isFavorite: favorites.has(song?.id), stats: this.playStats[song?.id] })
+          })
+        }
+        return { index: nextHeartIndex({ entries }) }
+      }
+      return { index: null }
+    },
+    /** 收藏 id 由播放器写入，只用于心动模式加权。 */
+    setFavoriteIds(ids) {
+      this.favoriteIds = Array.isArray(ids) ? ids.filter((id) => id != null) : []
+    },
+    /** 记录一次播放结果（本机统计：完整播放 / 中途切走），只存在本地不上传。 */
+    recordPlayEvent(songId, type = 'play') {
+      if (songId === undefined || songId === null || songId === '') return null
+      const key = String(songId)
+      const stats = normalizePlayStats(this.playStats)
+      const current = stats[key] || { count: 0, completed: 0, skipped: 0, updatedAt: 0 }
+      current.count += 1
+      if (type === 'completed') current.completed += 1
+      if (type === 'skipped') current.skipped += 1
+      current.updatedAt = Date.now()
+      stats[key] = current
+      this.playStats = normalizePlayStats(stats)
+      persist(this)
+      return current
     },
     /** 切换播放器形态（标准 / 迷你 / 沉浸）。 */
     setPlayerViewMode(mode) {

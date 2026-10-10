@@ -99,6 +99,8 @@
             <el-icon v-if="playerStore.mode === 'loop'"><Refresh /></el-icon>
             <el-icon v-else-if="playerStore.mode === 'single'"><RefreshRight /></el-icon>
             <el-icon v-else-if="playerStore.mode === 'random'"><Switch /></el-icon>
+            <el-icon v-else-if="playerStore.mode === 'shuffle'"><Sort /></el-icon>
+            <el-icon v-else-if="playerStore.mode === 'heart'"><MagicStick /></el-icon>
             <el-icon v-else><Histogram /></el-icon>
           </el-button>
         </el-tooltip>
@@ -841,6 +843,7 @@ watch(() => playerStore.sleepTimerLastFinishedAt, (finishedAt, previous) => {
 async function loadFavorites() {
   if (!userStore.isLogin) {
     favoriteIds.value = []
+    playerStore.setFavoriteIds([])
     return
   }
   try {
@@ -848,6 +851,8 @@ async function loadFavorites() {
   } catch (e) {
     favoriteIds.value = []
   }
+  // 心动模式按收藏加权，收藏 id 交给 store（不持久化，属于账号数据）。
+  playerStore.setFavoriteIds(favoriteIds.value)
 }
 
 async function toggleFavorite() {
@@ -885,7 +890,18 @@ function notifyAdvance(result, direction) {
       : '后面的歌曲已设为不喜欢，仍可手动点播')
   })
 }
+/** 本机播放统计：手动切走且没听完算一次“跳过”，供心动模式加权使用（只存本地）。 */
+function recordManualSkip() {
+  const song = currentSong.value
+  if (!song || song.isLocal || song.isCustomSource) return
+  const duration = Number(playerStore.duration) || 0
+  const position = Number(playerStore.currentTime) || 0
+  if (duration > 0 && position / duration >= 0.9) return
+  playerStore.recordPlayEvent(song.id, 'skipped')
+}
+
 function next() {
+  recordManualSkip()
   notifyAdvance(playerStore.next(), 1)
 }
 function prev() {
@@ -894,6 +910,7 @@ function prev() {
     seekTo(0)
     return
   }
+  recordManualSkip()
   notifyAdvance(playerStore.prev(), -1)
 }
 
@@ -1762,6 +1779,10 @@ function onAudioLoadedMetadata(event) {
 function onAudioEnded(event) {
   const audio = event.currentTarget
   if (audio !== activeAudioElement()) return
+  const endedSong = currentSong.value
+  if (endedSong && !endedSong.isLocal && !endedSong.isCustomSource) {
+    playerStore.recordPlayEvent(endedSong.id, 'completed')
+  }
   if (playerStore.checkSleepTimer()) return
   if (playerStore.handleSleepTimerTrackEnd(currentSong.value?.id)) return
   if (playerStore.mode === 'single' && playerStore.priorityNextSongId === null) {
