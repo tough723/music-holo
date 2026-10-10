@@ -100,6 +100,8 @@
 
 - 解析服务返回的直链带 `br/size` 元数据（GD 明示 `size:13,042,460` ≈ 320kbps 全曲），服务端已校验资源存在。
 - 对 `m701.music.126.net/…mp3` 与封面 jpg 的取回经外部探测通道返回 **HTTP 500**（该通道不支持二进制媒体验收，或 CDN 拒绝非播放器请求）→ **归类环境/通道限制**。
+- **2026-10-10 补记：榜单 → 自定义源播放的浏览器旅程**：新增 `music-holo-web/tests/e2e/charts-custom-source-playback.spec.js`——榜单页首行 → 「使用自定义源播放」→（受控音源夹具）信任/初始化 → 选平台与 320k → 解析并播放；媒体地址与封面由 Playwright 拦截回 `public/audio/song1.wav`（仓库里的真实 wav），因此断言的是**浏览器真的解码、进度真的前进**（`currentTime > 0`、`paused === false`），而不只是“src 变了”。音源仍是受控夹具，不代表第三方平台可用；无头 Chromium 默认拦自动播放，这条旅程显式加了 `--autoplay-policy=no-user-gesture-required`（解析是异步的，真正 play() 时手势已过期）。
+
 - **实际出声（播放）验收未完成**：需要能出网的桌面客户端（或 CI 联网 runner）走媒体票据流式加载。桌面媒体桥允许 `http://` 明文直链（带确认提示）、单段 Range、无 Cookie；网页沙箱 HTTPS-only 会拒绝 `http://` 直链（既有安全边界，保持）。
 
 ## 5. 客户端兼容问题清单（本轮处置）
