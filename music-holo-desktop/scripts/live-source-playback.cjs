@@ -17,6 +17,10 @@ const ALLOWED_HOSTS = new Set([
 ])
 const HOST_SUFFIXES = ['.music.126.net']
 
+function compactOneLine(value, max = 300) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max)
+}
+
 function hostAllowed(hostname) {
   const host = String(hostname || '').toLowerCase().replace(/\.$/, '')
   return ALLOWED_HOSTS.has(host) || HOST_SUFFIXES.some((suffix) => host.endsWith(suffix))
@@ -163,9 +167,14 @@ async function main() {
     await expect(compatibility).toContainText('初始化声明 6 个平台', { timeout: 90_000 })
     console.log('LIVE_DESKTOP_STEP 已在隔离 Worker 中初始化真实脚本（声明 6 个平台）')
 
+    console.log('LIVE_DESKTOP_STEP 打开真实音源试听台')
     await compatibility.getByRole('button', { name: `打开试听台 ${SOURCE_NAME}` }).click()
     const audition = page.getByRole('dialog', { name: `隔离试听台 · ${SOURCE_NAME}` })
-    await expect(audition.getByLabel('选择自定义音源平台')).toBeVisible()
+    await expect(audition).toBeVisible({ timeout: 15_000 })
+    console.log('LIVE_DESKTOP_STEP 试听台对话框已打开')
+    const platformSelects = audition.locator('.source-audition-fields .el-select')
+    await expect(platformSelects.first()).toBeVisible({ timeout: 15_000 })
+    console.log('LIVE_DESKTOP_STEP 平台选择控件已就绪')
 
     // Select the same Netease provider declared by the script, then fetch a
     // genuine online Netease leaderboard and its actual song IDs via the host adapter.
@@ -264,7 +273,24 @@ async function main() {
     }
     expect(errors, '页面不应有未处理的渲染进程错误').toEqual([])
   } catch (error) {
-    outcome = `ERROR ${String(error?.message || error).replace(/\\s+/g, ' ').slice(0, 500)}`
+    let uiState = null
+    try {
+      uiState = await page?.evaluate(() => {
+        const visible = (element) => {
+          const style = getComputedStyle(element)
+          return style.display !== 'none' && style.visibility !== 'hidden' && element.getBoundingClientRect().width > 0
+        }
+        return {
+          hash: location.hash,
+          dialogs: [...document.querySelectorAll('.el-dialog, .el-message-box')]
+            .filter(visible).map((element) => (element.innerText || '').slice(0, 180)).slice(0, 5),
+          buttons: [...document.querySelectorAll('button')]
+            .filter(visible).map((button) => (button.innerText || button.getAttribute('aria-label') || '').trim()).filter(Boolean).slice(-15),
+          tail: (document.body?.innerText || '').slice(-700)
+        }
+      })
+    } catch { /* the page may already be closing */ }
+    outcome = `ERROR ${compactOneLine(error?.message || error, 500)} UI=${compactOneLine(JSON.stringify(uiState), 1100)}`
     console.log(`LIVE_DESKTOP_OUTCOME=${outcome}`)
     try {
       await page?.screenshot({ path: path.join(artifacts, 'live-source-failure.png') })
