@@ -353,6 +353,35 @@ describe('底部播放器交互', () => {
     }
   })
 
+  it('「下一首」按钮与队列头部会预告下一首，不确定时不显示', async () => {
+    const store = await mountPlayer()
+    store.playAll([song(1, '霓虹海'), song(2, '云端信使'), song(3, '全息之恋')], 1)
+    store.setMode('order')
+    await flush()
+    const nextButton = () => host.querySelector('button[aria-label="播放下一首"]')
+
+    // 队列头部：共 3 首 · 下一首《云端信使》
+    host.querySelector('button[aria-label="播放队列"]').click()
+    await flush()
+    expect(document.querySelector('.queue-count').textContent).toContain('下一首《云端信使》')
+
+    // 队尾：顺序播放没有下一首，不预告
+    store.playAt(2)
+    await flush()
+    expect(document.querySelector('.queue-count').textContent).not.toContain('下一首《')
+
+    // 列表循环：绕回队首
+    store.setMode('loop')
+    await flush()
+    expect(document.querySelector('.queue-count').textContent).toContain('下一首《霓虹海》')
+    expect(nextButton().getAttribute('aria-label')).toBe('播放下一首') // aria 保持稳定，e2e 选择器不受影响
+
+    // 随机类模式：下一首不确定，不给假预告
+    store.setMode('random')
+    await flush()
+    expect(document.querySelector('.queue-count').textContent).not.toContain('下一首《')
+  })
+
   it('队列条目可用键盘操作：回车播放、Delete 移除、Alt+方向键移动', async () => {
     const store = await mountPlayer()
     store.playAll([song(1, '霓虹海'), song(2, '云端信使'), song(3, '全息之恋')], 1)

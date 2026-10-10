@@ -116,3 +116,25 @@ export function nextIndexAfterFailure(options = {}) {
   if (mode === 'order' && index >= length - 1) return -1
   return (index + 1) % length
 }
+
+/**
+ * 「下一首」的预告下标：只覆盖**按得动**的情况。
+ *
+ * 随机类模式下一首根本不确定，顺序/单曲循环到队尾按下「下一首」也不会前进，
+ * 这几种都返回 -1——宁可不显示，也不给用户一个假的预告。
+ * 列表循环会绕回队首，所以总能给出下一首。
+ *
+ * @param {{ queueLength?: number, currentIndex?: number, mode?: string }} options
+ * @returns {number} 下一首下标，不确定则返回 -1
+ */
+export function nextPreviewIndex(options = {}) {
+  const { queueLength = 0, currentIndex = -1, mode = 'order' } = options
+  const length = Number(queueLength)
+  const index = Number(currentIndex)
+  if (mode === 'random' || mode === 'shuffle' || mode === 'heart') return -1
+  if (!Number.isInteger(length) || length <= 1) return -1
+  if (!Number.isInteger(index) || index < 0 || index >= length) return -1
+  if (mode === 'loop') return (index + 1) % length
+  if (index >= length - 1) return -1
+  return index + 1
+}

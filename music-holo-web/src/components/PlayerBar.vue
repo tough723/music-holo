@@ -126,7 +126,7 @@
             <el-icon v-else><VideoPlay /></el-icon>
           </el-button>
         </el-tooltip>
-        <el-tooltip content="下一首 · Shift + →" placement="top">
+        <el-tooltip :content="nextButtonTooltip" placement="top">
           <el-button circle :disabled="!hasSong" aria-label="播放下一首" @click="next">
             <el-icon><DArrowRight /></el-icon>
           </el-button>
@@ -565,6 +565,7 @@
     <div class="queue-toolbar">
       <span class="queue-count">
         共 {{ playerStore.queue.length }} 首<template v-if="playerStore.queueDuration"> · {{ fmtDuration(playerStore.queueDuration) }}</template>
+        <template v-if="nextSongPreview"> · 下一首《{{ nextSongPreview }}》</template>
       </span>
       <el-button
         size="small"
@@ -798,7 +799,7 @@ import * as playlistApi from '@/api/playlist'
 import { fmtDuration } from '@/utils/format'
 import { MEDIA_ERR_NETWORK, isPlaybackStalled, isTransientAudioError, nextRetryDelay, hasProgress } from '@/utils/audioRetry'
 import { nextPreloadIndex, shouldPreloadNext } from '@/utils/audioPreload'
-import { nextIndexAfterFailure } from '@/utils/playMode'
+import { nextIndexAfterFailure, nextPreviewIndex } from '@/utils/playMode'
 import {
   describeQueueSaveResult,
   partitionQueueForPlaylist,
@@ -2031,6 +2032,20 @@ const canSkipFailed = computed(() => {
   if (mode === 'random' || mode === 'shuffle' || mode === 'heart') return true
   return nextIndexAfterFailure({ queueLength: length, currentIndex: playerStore.currentIndex, mode }) >= 0
 })
+
+/** 「下一首」的预告：只在下一首确定的时候给，随机类模式与队尾都不显示。 */
+const nextSongPreview = computed(() => {
+  const index = nextPreviewIndex({
+    queueLength: playerStore.queue.length,
+    currentIndex: playerStore.currentIndex,
+    mode: playerStore.mode
+  })
+  if (index < 0) return ''
+  return String(playerStore.queue[index]?.title || '')
+})
+const nextButtonTooltip = computed(() => (nextSongPreview.value
+  ? `下一首 · Shift + →（${nextSongPreview.value}）`
+  : '下一首 · Shift + →'))
 
 const autoSkipOnError = computed({
   get: () => playerStore.autoSkipOnError,

@@ -5,6 +5,7 @@ import {
   heartWeight,
   nextHeartIndex,
   nextIndexAfterFailure,
+  nextPreviewIndex,
   nextShuffleIndex,
   pickWeightedIndex,
   shuffleList
@@ -195,5 +196,24 @@ describe('播放失败后跳到下一首的兜底下标', () => {
     expect(nextIndexAfterFailure({})).toBe(-1)
     expect(nextIndexAfterFailure()).toBe(-1)
     expect(nextIndexAfterFailure({ queueLength: 'x', currentIndex: 0 })).toBe(-1)
+  })
+})
+
+describe('下一首预告只覆盖按得动的情况', () => {
+  it('顺序/单曲到队尾没有下一首，列表循环绕回队首', () => {
+    expect(nextPreviewIndex({ queueLength: 3, currentIndex: 0, mode: 'order' })).toBe(1)
+    expect(nextPreviewIndex({ queueLength: 3, currentIndex: 2, mode: 'order' })).toBe(-1)
+    expect(nextPreviewIndex({ queueLength: 3, currentIndex: 2, mode: 'single' })).toBe(-1)
+    expect(nextPreviewIndex({ queueLength: 3, currentIndex: 2, mode: 'loop' })).toBe(0)
+    expect(nextPreviewIndex({ queueLength: 3, currentIndex: 0, mode: 'loop' })).toBe(1)
+  })
+
+  it('随机类模式不确定下一首，直接不给预告', () => {
+    for (const mode of ['random', 'shuffle', 'heart']) {
+      expect(nextPreviewIndex({ queueLength: 3, currentIndex: 0, mode })).toBe(-1)
+    }
+    expect(nextPreviewIndex({ queueLength: 1, currentIndex: 0, mode: 'loop' })).toBe(-1)
+    expect(nextPreviewIndex({ queueLength: 3, currentIndex: 9, mode: 'loop' })).toBe(-1)
+    expect(nextPreviewIndex()).toBe(-1)
   })
 })
