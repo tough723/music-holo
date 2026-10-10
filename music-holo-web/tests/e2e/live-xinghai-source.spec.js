@@ -2,48 +2,36 @@ import { createHash } from 'node:crypto'
 import { test, expect } from '@playwright/test'
 
 /**
- * 真实第三方音源的在线解析旅程（@live）。
+ * 真实平台搜索 → 真实星海音源 → 真实媒体解码的在线旅程（@live）。
  *
- * 与其余 e2e 的区别：这里用的不是夹具，而是**真实的星海音源脚本 + 真实平台曲目 ID**，
- * 脚本从它的公开地址下载，解析请求打到它自己的后端，因此结果依赖第三方服务是否在线。
- * 所以这个用例单独放在非阻断的 CI job 里（见 .github/workflows/ci.yml 的 live-source）。
+ * Music Holo 的 /charts 是本站 Mock/业务曲库榜单，不是第三方实时榜；本旅程不再从该页借用
+ * 一首无关的演示歌名。它打开设置中的隔离试听台，使用 Music Holo 的网易平台适配器实时搜索，
+ * 只接受搜索响应中歌名、歌手、ID 都匹配的同一条曲目，再将该响应填入并交给真实星海脚本解析。
+ * 已验证的网易 ID 只用于匹配真实搜索响应，不会被直接手工填入；结果来自响应后再断言三项一致。
  *
- * 断言的是几段确定性行为，不管第三方给出什么结果都必须成立：
- *   1. 脚本内容与已验证版本一致（sha256 钉死，防止上游换文件而我们还以为是同一份）；
- *   2. 解析如果落地成 https 直链，浏览器必须真的解码（currentTime 前进）；
- *   3. 如果落到明文 http 直链 / 第三方报错 / 直链无法加载，界面必须给出明确提示而不是静默失败。
- * 实际结果写进 testInfo 注解并打成 LIVE_OUTCOME= 日志行，由 workflow 转成 job 注解，
- * 这样即使 CI 日志主机不在白名单里，也能通过 API 读到结论。
- *
- * 候选曲目取自 docs/xinghai-validation.md 的真实解析记录：
- *   - wy（网易）songmid=347230 / 320k：已在此前 CI run `38060067706` 中经 GD HTTPS fallback 真正解码播放；
- *   - mg（咪咕）songmid=1135162566 / 320k：§4 实测返回 https 直链，作为第二个候选。
- * 按顺序尝试，第一个真正播起来的就作为结论；都没播起来时，逐个核对「必须有明确提示」。
- *
- * 与真实脚本相关的两个额外交互（夹具旅程里不会出现）：
- * - 初始化阶段脚本会立即联网（IP 查询、版本检查），每个新域名都会弹「仅本次允许」；
- * - 版本检查还可能弹「音源更新提示」，用例会选「稍后处理」（不会擅自打开作者链接）；
- * - 解析阶段可能再经过聚合后端 → GD 等多跳，同样逐个域名授权。
- * 因此这里不是点一次就完事，而是**每一次点击都要先清一遍授权弹窗**——
- * 模态遮罩会把解析对话框挡住，让 click 一直重试到超时（第一轮就是这么红的）。
+ * 脚本 SHA-256 固定，第三方服务依赖因此单独放入非阻断 CI job。解析若返回 HTTPS 地址，
+ * Chromium 必须真正解码并推进 currentTime；否则必须记录界面明确给出的失败/安全提示。
+ * 网页端 HTTPS-only、匿名 CORS、逐域名授权均保持原样。
  */
 
 const SOURCE_URL = 'https://zrcdy.dpdns.org/lx/xinghai-music-sourcev2.3.15.js'
 const SOURCE_SHA256 = '807d6157e4fd7cdd05b8727efd73778b54a3b05a0b5e4c6bb28dedc0668e94e9'
+const LIVE_TRACK = {
+  platform: 'wy',
+  query: '海阔天空',
+  name: '海阔天空',
+  singerPattern: /beyond/i,
+  id: '347230',
+  quality: '320k'
+}
 
-const CANDIDATES = [
-  // The pinned source declares wy first, so the default selection is already
-  // correct; this known-good ID exercises the GD HTTPS fallback that played in CI.
-  { platform: 'wy', platformIds: '{"songmid":"347230"}', quality: '320k', why: 'wy 真实曲目 ID；GD 降级返回 https 直链' },
-  { platform: 'mg', platformIds: '{"songmid":"1135162566"}', quality: '320k', why: 'mg 实测返回 https 直链' }
-]
-
-const FAILURE_HINT = /失败|不安全|拒绝|不支持|http|错误|超时|无法|未能/
+const FAILURE_HINT = /失败|不安全|拒绝|不支持|http|错误|超时|无法|未能|error|aborted|blocked|denied/i
 
 test.use({ launchOptions: { args: ['--autoplay-policy=no-user-gesture-required'] } })
 
-test('@live 榜单曲目用真实星海音源在线解析（第三方依赖，非阻断）', async ({ page }, testInfo) => {
+test('@live 网易实时搜索曲目用真实星海音源解析并播放（第三方依赖，非阻断）', async ({ page }, testInfo) => {
   test.slow()
+  test.setTimeout(8 * 60_000)
 
   // 结论必须**无论如何**都能打印出来（包括用例中途失败）：
   // CI 日志主机不在出网白名单里，workflow 会把这行转成 job 注解，靠 API 读取。
@@ -60,7 +48,7 @@ test('@live 榜单曲目用真实星海音源在线解析（第三方依赖，�
 })
 
 async function runLiveJourney(page, testInfo) {
-  // 1. 下载真实脚本并核对指纹（Node 侧请求，CI runner 有公网出口）
+  // 1. 下载真实脚本并核对指纹（Node 侧请求，CI runner 有公网出口）。
   const response = await page.request.get(SOURCE_URL, { timeout: 30_000 })
   expect(response.status(), '音源脚本地址应可访问').toBe(200)
   const script = await response.text()
@@ -81,122 +69,196 @@ async function runLiveJourney(page, testInfo) {
     script
   }
 
+  // 先把脚本放入 demo 账号的本机源库；内容只留在 localStorage，不会上传。
   await page.goto('/')
   await page.evaluate((saved) => {
-    localStorage.setItem('mh_custom_sources_v1:local', JSON.stringify([saved]))
+    localStorage.setItem('mh_custom_sources_v1:2', JSON.stringify([saved]))
   }, source)
+  await page.goto('/login')
+  await page.getByPlaceholder('用户名').fill('demo')
+  await page.getByPlaceholder('密码').fill('123456')
+  await page.getByRole('button', { name: /登\s*录/ }).click()
+  await expect(page).toHaveURL(/\/home$/)
+  await page.locator('.sidebar .app-nav-menu').getByRole('menuitem', { name: '设置', exact: true }).click()
+  await expect(page).toHaveURL(/\/settings$/)
+  await page.getByRole('tab', { name: '自定义源' }).click()
 
-  const results = []
-  for (const candidate of CANDIDATES) {
-    const result = await attemptCandidate(page, candidate)
-    console.log(`LIVE_STEP ${candidate.platform}/${candidate.quality} → ${compactText(result.summary, 240)}`)
-    testInfo.annotations.push({ type: `live-${candidate.platform}`, description: result.summary })
-    results.push({ candidate, ...result })
-    if (result.played) break
+  const sourceCard = page.locator(`[data-source-id="${source.id}"]`)
+  await expect(sourceCard).toBeVisible()
+  const compatibilityApprovals = await initializeSourceManager(page, sourceCard, source.name)
+  const result = await attemptCandidate(page, sourceCard, source, LIVE_TRACK, compatibilityApprovals)
+
+  const trackSummary = `平台搜索结果《${result.track.name}》/ ${result.track.singer} / ${result.track.id}`
+  testInfo.annotations.push({ type: 'live-track', description: `${trackSummary}（${result.track.platform}，来自同一条实时搜索响应）` })
+  console.log(`LIVE_STEP ${trackSummary}（来自网易平台实时搜索响应）`)
+  console.log(`LIVE_STEP wy/${LIVE_TRACK.quality} → ${compactText(result.summary, 240)}`)
+  testInfo.annotations.push({ type: 'live-wy', description: result.summary })
+
+  if (result.played) {
+    return `PLAYED ${result.track.platform}/${LIVE_TRACK.quality} 《${result.track.name}》/${result.track.singer} ` +
+      `(平台 ID ${result.track.id}，同一条实时搜索结果)；https 直链已解码，进度 ` +
+      `${result.position.toFixed(2)}s，paused=${result.paused}，readyState=${result.readyState}，` +
+      `媒体主机 ${hostOf(result.src)}`
   }
 
-  // 汇总：只要有一个候选真的播起来就算 PLAYED；否则每个候选都必须给出明确提示。
-  const played = results.find((item) => item.played)
-  if (played) {
-    return `PLAYED ${played.candidate.platform}/${played.candidate.quality} https 直链已解码播放，` +
-      `进度 ${played.position.toFixed(2)}s，paused=${played.paused}，readyState=${played.readyState}，` +
-      `主机 ${hostOf(played.src)}（${results.length} 个候选中第 ${results.indexOf(played) + 1} 个成功）`
-  }
-
-  const details = results.map((item) => {
-    const label = `${item.candidate.platform}/${item.candidate.quality}`
-    if (item.src) return `${label} 直链已到播放器但没播起来（${compactText(item.playError || '进度未前进', 120)}，主机 ${hostOf(item.src)}）`
-    return `${label} 未落地（${compactText(item.notices || '无提示', 180)}）`
-  })
-  // 没播起来的每个候选，界面都必须有明确提示，不允许静默失败
-  for (const item of results) {
-    expect(item.notices + (item.playError || ''), `${item.candidate.platform} 没播起来时必须给出明确提示`).toMatch(FAILURE_HINT)
-  }
-  return `BLOCKED 所有候选都没播起来：${details.join('；')}`
+  // 解析未能起播时必须给出安全/网络/媒体错误，不接受静默失败。
+  expect(result.notices + (result.playError || ''), '真实搜索曲目没播起来时必须有明确提示').toMatch(FAILURE_HINT)
+  return `BLOCKED ${trackSummary} 已从实时搜索选中，但没有完成 HTTPS 媒体播放：` +
+    `${compactText(result.playError || result.notices, 220)}（媒体主机 ${hostOf(result.src)}）`
 }
 
-async function attemptCandidate(page, candidate) {
-  // 2. 榜单页 → 使用自定义源播放
-  await page.goto('/charts')
-  const firstRow = page.locator('.el-table__row').first()
-  await expect(firstRow).toBeVisible()
-  const sourceButton = firstRow.locator('[data-testid^="custom-source-play-"]')
-  const title = String(await sourceButton.getAttribute('aria-label') || '')
-    .replace(/^使用自定义源播放《/, '').replace(/》$/, '')
-  expect(title).not.toBe('')
-  await sourceButton.click()
+async function initializeSourceManager(page, sourceCard, sourceName) {
+  await clickWithApprovals(
+    page,
+    sourceCard.getByRole('button', { name: `隔离兼容检测 ${sourceName}` }),
+    '隔离兼容检测'
+  )
+  await clickWithApprovals(page, page.getByRole('button', { name: '我信任并检测' }), '确认隔离兼容检测')
 
-  const dialog = page.getByRole('dialog', { name: `自定义源解析 · ${title}` })
-  await expect(dialog.locator('.source-playback-source .el-select')).toContainText('星海音乐源')
-  await dialog.getByRole('textbox', { name: '平台专属曲目字段 JSON' }).fill(candidate.platformIds)
+  const auditionButton = sourceCard.getByRole('button', { name: `打开试听台 ${sourceName}` })
+  const failure = sourceCard.locator('.source-runtime-result.is-error')
+  const deadline = Date.now() + 90_000
+  let approvals = 0
+  while (Date.now() < deadline) {
+    approvals += await drainApprovals(page)
+    if (await auditionButton.isVisible().catch(() => false)) return approvals
+    const message = await failure.innerText().catch(() => '')
+    if (message.trim()) throw new Error(`真实音源隔离初始化失败：${compactText(message, 220)}`)
+    await page.waitForTimeout(300)
+  }
+  throw new Error('真实音源隔离初始化超时：未出现可用的「打开试听台」入口')
+}
 
-  // 3. 初始化（真实脚本这一步就会联网，逐个域名授权）
-  const approvals = await initializeSource(page, dialog)
+async function attemptCandidate(page, sourceCard, source, candidate, initialApprovals) {
+  await clickWithApprovals(
+    page,
+    sourceCard.getByRole('button', { name: `打开试听台 ${source.name}` }),
+    '打开真实音源试听台'
+  )
+  const dialog = page.getByRole('dialog', { name: `隔离试听台 · ${source.name}` })
+  await expect(dialog).toBeVisible()
 
-  // 4. 显式选平台（脚本声明多个平台，默认选第一个，不是我们要的那个）
-  const platformSelect = dialog.locator('.source-playback-fields .el-select').nth(0)
-  const currentPlatform = (await platformSelect.innerText()).trim()
-  const platform = candidate.platform === 'wy' && currentPlatform.includes('网易云音乐')
-    ? { picked: currentPlatform.includes('(wy)') ? currentPlatform : `${currentPlatform} (wy)`, labels: [], alreadySelected: true }
-    : await pickFromSelect(page, dialog, 0, (labels) => labels.find((label) => label.includes(`(${candidate.platform})`)))
-  const quality = await pickFromSelect(page, dialog, 1, (labels) => (labels.includes(candidate.quality) ? candidate.quality : labels[0]))
-  console.log(`LIVE_STEP 平台=${platform.picked} 可选=${platform.labels.join('/') || '已是目标值'}｜音质=${quality.picked} 可选=${quality.labels.join('/')}`)
+  const platform = await pickFromSelect(
+    page,
+    dialog,
+    0,
+    (labels) => labels.find((label) => label.includes(`(${candidate.platform})`)),
+    '.source-audition-fields'
+  )
   expect(platform.picked, `音源应声明 ${candidate.platform} 平台`).toContain(`(${candidate.platform})`)
+  const quality = await pickFromSelect(
+    page,
+    dialog,
+    1,
+    (labels) => labels.find((label) => label === candidate.quality),
+    '.source-audition-fields'
+  )
+  expect(quality.picked, '应明确选择测试所需音质').toBe(candidate.quality)
 
-  // 5. 解析（可能多跳：聚合后端 → GD，逐域名授权）
-  const audio = page.locator('.player-bar audio').first()
-  const resolution = await resolveAndCollect(page, dialog, audio, 90_000)
+  const search = dialog.locator('.source-audition-search').first()
+  await search.locator('input').fill(candidate.query)
+  await clickWithApprovals(page, search.getByRole('button', { name: '搜索平台' }), '搜索真实平台曲目')
+  const track = await selectVerifiedSearchResult(page, dialog, candidate)
+  const musicInfoInput = dialog.locator('.source-audition-info textarea')
+  expect(JSON.parse(await musicInfoInput.inputValue()), '送入星海脚本前，表单 JSON 必须与同一条搜索结果完全一致')
+    .toEqual(track.musicInfo)
 
+  const resolution = await resolveAuditionAndCollect(page, dialog, initialApprovals)
+  expect(JSON.parse(await musicInfoInput.inputValue()), '解析完成后确认提交的 musicInfo 未被替换')
+    .toEqual(track.musicInfo)
   let played = false
   let position = 0
   let paused = null
   let readyState = 0
   let playError = ''
-  if (resolution.src.startsWith('https://')) {
+  let src = ''
+
+  if (resolution.ready) {
+    const ready = dialog.locator('.source-audition-ready')
+    await expect(ready).toContainText(track.name)
+    await expect(ready).toContainText(track.singer)
+    await clickWithApprovals(
+      page,
+      ready.getByRole('button', { name: '交给全局播放器试听' }),
+      '将真实平台搜索曲目交给全局播放器'
+    )
+
+    const title = page.locator('.player-bar .pb-title')
+    const artist = page.locator('.player-bar .pb-artist')
+    await expect(title).toHaveText(track.name)
+    await expect(artist).toHaveText(track.singer)
+    const audio = page.locator('.player-bar audio').first()
+    await expect(audio).toHaveAttribute('src', /^https:\/\//)
+    await expect(audio).toHaveAttribute('crossorigin', 'anonymous')
+    await expect(audio).toHaveAttribute('referrerpolicy', 'no-referrer')
+    src = (await audio.getAttribute('src')) || ''
     const playback = await waitForPlayback(audio, 25_000)
     played = playback.played
     position = playback.position || 0
     paused = playback.paused ?? null
     readyState = playback.readyState || 0
     playError = playback.error || ''
+  } else {
+    playError = resolution.playError
   }
 
   const summary = played
-    ? `PLAYED 进度 ${position.toFixed(2)}s，paused=${paused}，readyState=${readyState}，主机 ${hostOf(resolution.src)}`
-    : `未播放（地址=${resolution.src ? hostOf(resolution.src) : '空'}，授权 ${approvals} 次，${compactText(playError || resolution.notices, 220)}）`
-  return {
-    src: resolution.src,
-    notices: resolution.notices,
-    played,
-    position,
-    paused,
-    readyState,
-    playError,
-    summary
-  }
+    ? `PLAYED 《${track.name}》/${track.singer} id=${track.id}，进度 ${position.toFixed(2)}s，` +
+      `paused=${paused}，readyState=${readyState}，媒体主机 ${hostOf(src)}`
+    : `未播放（曲目=${track.name}/${track.singer} id=${track.id}，媒体地址主机=${hostOf(src)}，` +
+      `${compactText(playError || resolution.notices, 220)}）`
+  return { track, src, notices: resolution.notices, played, position, paused, readyState, playError, summary }
 }
 
-/** 点「信任并初始化」→「我信任并继续」，再把初始化期间冒出来的域名授权逐个点掉。 */
-async function initializeSource(page, dialog) {
-  await clickWithApprovals(page, dialog.getByRole('button', { name: '信任并初始化自定义音源' }), '信任并初始化')
-  await clickWithApprovals(page, page.getByRole('button', { name: '我信任并继续' }), '确认隔离初始化')
-  const platformSelect = dialog.getByLabel('选择自定义音源平台')
+async function selectVerifiedSearchResult(page, dialog, candidate) {
+  const buttons = dialog.locator('[aria-label="平台曲目结果"] button')
+  const note = dialog.locator('.source-audition-note')
   const deadline = Date.now() + 60_000
-  let approvals = 0
   while (Date.now() < deadline) {
-    approvals += await drainApprovals(page)
-    if (await platformSelect.isVisible().catch(() => false)) return approvals
-    const error = await dialog.locator('.source-playback-error').innerText().catch(() => '')
-    if (error.trim()) throw new Error(`初始化失败：${error.trim().slice(0, 200)}`)
+    await drainApprovals(page)
+    if (await buttons.count().catch(() => 0)) break
+    const message = await note.innerText().catch(() => '')
+    if (message && !message.startsWith('搜索或加载榜单后')) {
+      throw new Error(`网易真实平台搜索失败：${compactText(message, 220)}`)
+    }
     await page.waitForTimeout(300)
   }
-  throw new Error('初始化超时：60 秒内既没出现平台选择，也没有明确错误')
+  const count = await buttons.count()
+  if (!count) throw new Error('60 秒内网易平台搜索没有返回曲目结果')
+
+  const labels = await buttons.allInnerTexts()
+  const matchingIndexes = labels
+    .map((label, index) => ({ label: String(label).replace(/\s+/g, ' ').trim(), index }))
+    .filter(({ label }) => label.includes(candidate.name) && candidate.singerPattern.test(label))
+  if (!matchingIndexes.length) {
+    throw new Error(`实时搜索未返回预期歌名/歌手「${candidate.name} / Beyond」；实际结果：${compactText(labels.join(' | '), 260)}`)
+  }
+
+  const musicInfoInput = dialog.locator('.source-audition-info textarea')
+  const rejected = []
+  for (const result of matchingIndexes) {
+    await clickWithApprovals(page, buttons.nth(result.index), `选择搜索结果 ${result.label}`)
+    let musicInfo
+    try {
+      musicInfo = JSON.parse(await musicInfoInput.inputValue())
+    } catch {
+      throw new Error('所选真实搜索结果没有生成有效的 musicInfo JSON')
+    }
+    const id = String(musicInfo.id ?? musicInfo.songmid ?? musicInfo.hash ?? '')
+    const name = String(musicInfo.name ?? musicInfo.title ?? '').trim()
+    const singer = String(musicInfo.singer ?? musicInfo.singerName ?? musicInfo.artist ?? '').trim()
+    console.log(`LIVE_STEP 已从实际搜索结果读取曲目 name=${name} singer=${singer} id=${id}`)
+    if (id === candidate.id && name === candidate.name && candidate.singerPattern.test(singer)) {
+      return { platform: candidate.platform, id, name, singer, musicInfo }
+    }
+    rejected.push(`${name}/${singer} id=${id}`)
+  }
+  throw new Error(`搜索结果里没有与已验证媒体 ID ${candidate.id} 同时匹配的曲目；匹配歌名/歌手的实际条目：${rejected.join(' | ')}`)
 }
 
-/** 打开第 index 个下拉框，读出候选，按 picker 选一个（选不到就用第一个）。 */
-async function pickFromSelect(page, dialog, index, picker) {
+async function pickFromSelect(page, dialog, index, picker, fieldsSelector) {
   const selectLabel = index === 0 ? '音源平台下拉框' : '音质下拉框'
-  const select = dialog.locator('.source-playback-fields .el-select').nth(index)
+  const select = dialog.locator(`${fieldsSelector} .el-select`).nth(index)
   console.log(`LIVE_ACTION 开始：点击${selectLabel}`)
   await clickWithApprovals(page, select, selectLabel)
   const options = page.locator('.el-select-dropdown__item:visible')
@@ -208,12 +270,11 @@ async function pickFromSelect(page, dialog, index, picker) {
   }
   const labels = (await options.allInnerTexts()).map((text) => text.trim()).filter(Boolean)
   if (!labels.length) throw new Error(`第 ${index + 1} 个下拉框没有任何可选项`)
-  const picked = picker(labels) || labels[0]
+  const picked = picker(labels)
+  if (!picked) throw new Error(`下拉框没有目标选项：${labels.join(' / ')}`)
   const selectedOption = page.locator('.el-select-dropdown__item.is-selected:visible').first()
   const selectedLabel = (await selectedOption.innerText().catch(() => '')).trim()
   if (selectedLabel === picked) {
-    // Element Plus 在 selected option 上的 click 会关闭 popper，但有些 Chromium 组合
-    // 会把这个瞬间看成 target detached。键盘 Escape 只是关闭菜单，不改变当前值。
     await page.keyboard.press('Escape')
     console.log(`LIVE_ACTION 「${picked}」已经选中，不重复点击`)
     return { picked, labels, alreadySelected: true }
@@ -224,32 +285,36 @@ async function pickFromSelect(page, dialog, index, picker) {
   return { picked, labels, alreadySelected: false }
 }
 
-/** 点「隔离解析并播放」，边等结果边处理授权弹窗，直到拿到媒体地址或出现明确失败提示。 */
-async function resolveAndCollect(page, dialog, audio, timeoutMs) {
-  console.log('LIVE_ACTION 开始：按所选平台发起真实 musicUrl 解析')
-  await clickWithApprovals(page, dialog.getByRole('button', { name: '隔离解析并播放歌曲' }), '隔离解析并播放')
+async function resolveAuditionAndCollect(page, dialog, initialApprovals, timeoutMs = 90_000) {
+  console.log('LIVE_ACTION 开始：用同一条网易实时搜索结果调用星海 musicUrl')
+  await clickWithApprovals(page, dialog.getByRole('button', { name: '解析音频' }), '解析真实平台曲目')
+  await clickWithApprovals(page, page.getByRole('button', { name: '我信任并解析' }), '确认执行真实音源')
+
+  const ready = dialog.locator('.source-audition-ready')
+  const resolveButton = dialog.getByRole('button', { name: '解析音频' })
   const notices = new Set()
   const deadline = Date.now() + timeoutMs
-  let src = ''
+  let approvals = initialApprovals
   while (Date.now() < deadline) {
-    await drainApprovals(page)
-    await clickVisible(page, '允许并播放')
-    const error = await dialog.locator('.source-playback-error').innerText().catch(() => '')
-    if (error.trim()) notices.add(error.trim())
+    approvals += await drainApprovals(page)
+    if (await clickVisible(page, '允许加载音频')) approvals += 1
+    if (await ready.isVisible().catch(() => false)) {
+      const summary = await ready.innerText().catch(() => '')
+      return { ready: true, notices: [...notices].join(' | '), approvals, summary, playError: '' }
+    }
     for (const text of await page.locator('.el-message').allInnerTexts().catch(() => [])) {
-      if (String(text).trim()) notices.add(String(text).trim())
+      const cleaned = String(text).trim()
+      if (cleaned && FAILURE_HINT.test(cleaned)) notices.add(cleaned)
     }
-    src = (await audio.getAttribute('src').catch(() => '')) || ''
-    if (src) break
-    if (error.trim()) {
-      // 已经给出明确失败：再等一下确认没有后发的地址，然后收尾
-      await page.waitForTimeout(1_000)
-      src = (await audio.getAttribute('src').catch(() => '')) || ''
-      break
+    const isLoading = await resolveButton.evaluate((button) => button.classList.contains('is-loading')).catch(() => false)
+    if (notices.size && !isLoading) {
+      await page.waitForTimeout(800)
+      if (!(await ready.isVisible().catch(() => false))) break
     }
-    await page.waitForTimeout(400)
+    await page.waitForTimeout(350)
   }
-  return { src, notices: [...notices].join(' | ') }
+  const message = [...notices].join(' | ') || `解析试听在 ${timeoutMs}ms 内未生成可播放音频`
+  return { ready: false, notices: message, approvals, summary: '', playError: message }
 }
 
 /** 真实直链落地后，无头 Chromium 也会真解码：等进度前进；出错就把错误带回去。 */
@@ -349,7 +414,7 @@ async function summarizeBlockers(page) {
 }
 
 function compactText(value, maxLength = 240) {
-  return String(value || '').replace(/\\s+/g, ' ').trim().slice(0, maxLength)
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLength)
 }
 
 function hostOf(value) {
