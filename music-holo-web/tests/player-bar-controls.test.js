@@ -10,9 +10,13 @@ import { useStatsStore } from '../src/store/stats.js'
 import { useLoudnessStore } from '../src/store/loudness.js'
 import { useUserStore } from '../src/store/user.js'
 
-const { playlistCalls } = vi.hoisted(() => ({ playlistCalls: { save: [], addSongs: [], added: null } }))
+const { playlistCalls } = vi.hoisted(() => ({ playlistCalls: { save: [], addSongs: [], page: [], added: null } }))
 vi.mock('@/api/playlist', () => ({
   save: async (data) => { playlistCalls.save.push(data); return { id: 99, name: data.name } },
+  page: async (params) => {
+    playlistCalls.page.push(params)
+    return { records: [{ id: 7, name: '深夜电台' }, { id: 8, name: '通勤清单' }], total: 2 }
+  },
   addSongs: async (id, ids) => {
     playlistCalls.addSongs.push([id, ids])
     return typeof playlistCalls.added === 'number' ? playlistCalls.added : ids.length
@@ -949,8 +953,24 @@ describe('底部播放器交互', () => {
 
 describe('队列存为歌单', () => {
   beforeEach(() => {
+    localStorage.clear()
+    HTMLMediaElement.prototype.play = function () { return Promise.resolve() }
+    HTMLMediaElement.prototype.pause = function () {}
+    HTMLMediaElement.prototype.load = function () {}
+    delete window.AudioContext
+    delete window.webkitAudioContext
+  })
+  afterEach(() => {
+    app?.unmount()
+    app = null
+    host?.remove()
+    host = null
+    document.body.innerHTML = ''
+  })
+  beforeEach(() => {
     playlistCalls.save.length = 0
     playlistCalls.addSongs.length = 0
+    playlistCalls.page.length = 0
     playlistCalls.added = null
   })
 
@@ -1020,3 +1040,49 @@ describe('队列存为歌单', () => {
     }
   })
 })
+
+  it('选中的队列歌曲可加入已有歌单，本地文件不上传', async () => {
+    const store = await mountPlayer()
+    const user = useUserStore()
+    user.token = 'fake-token'
+    try {
+      store.playAll([
+        song(1, '霓虹海', 240),
+        song(2, '云端信使', 240),
+        { id: 3, title: '本地文件', artist: '本机', duration: 100, audioUrl: 'blob:x', isLocal: true }
+      ], 1)
+      await flush()
+      host.querySelector('button[aria-label="播放队列"]').click()
+      await flush()
+      document.querySelector('.queue-select-toggle').click()
+      await flush()
+
+      const rows = () => Array.from(document.querySelectorAll('.queue-item'))
+      rows()[0].click()
+      rows()[2].dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true }))
+      await flush()
+      expect(document.querySelector('.queue-batch-note').textContent).toContain('已选 3 首')
+
+      document.querySelector('.queue-add-playlist').click()
+      await flush()
+      await flush()
+      expect(playlistCalls.page).toEqual([{ pageNum: 1, pageSize: 50, onlyMine: true }])
+
+      const dialog = document.querySelector('.el-dialog')
+      expect(dialog).toBeTruthy()
+      const radios = Array.from(dialog.querySelectorAll('input[type="radio"]'))
+      expect(radios).toHaveLength(2)
+      radios[1].click() // 通勤清单
+      await flush()
+      dialog.querySelector('.queue-add-playlist-confirm').click()
+      await flush()
+      await flush()
+
+      expect(playlistCalls.addSongs).toEqual([[8, [1, 2]]]) // 本地那首不上传
+      await wait(60)
+      // 加入成功后弹窗关闭（Element Plus 是给外层 overlay 加 display:none）
+      expect(document.querySelector('.el-dialog')?.closest('.el-overlay')?.style.display).toBe('none')
+    } finally {
+      user.token = ''
+    }
+  })

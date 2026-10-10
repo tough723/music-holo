@@ -595,13 +595,34 @@
           </el-button>
         </el-tooltip>
         <el-button size="small" class="queue-save-playlist" plain :disabled="playerStore.queue.length === 0" @click="saveQueueAsPlaylist">
-          存为歌单
+          存为新歌单
         </el-button>
         <el-button size="small" type="danger" plain :disabled="playerStore.queue.length === 0" @click="clearQueue">
           清空队列
         </el-button>
       </div>
     </div>
+    <el-dialog v-model="playlistPickerVisible" title="把选中的歌曲加入歌单" width="min(440px, calc(100vw - 32px))" append-to-body>
+      <p v-if="playlistsLoading">正在读取你的歌单…</p>
+      <p v-else-if="!myPlaylists.length">还没有自己的歌单。可以先「存为新歌单」，或到歌单页创建后再回来。</p>
+      <fieldset v-else class="playlist-picker">
+        <legend>选择要加入的歌单</legend>
+        <label v-for="item in myPlaylists" :key="item.id" class="playlist-option">
+          <input v-model="targetPlaylistId" type="radio" name="queue-target-playlist" :value="String(item.id)">
+          <span>{{ item.name }}</span>
+        </label>
+      </fieldset>
+      <template #footer>
+        <el-button @click="playlistPickerVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          class="queue-add-playlist-confirm"
+          :loading="addingToPlaylist"
+          :disabled="!targetPlaylistId || playlistsLoading"
+          @click="confirmAddSelectedToPlaylist"
+        >加入</el-button>
+      </template>
+    </el-dialog>
     <section class="local-library" aria-label="本机音乐与离线副本">
       <div class="local-library-row">
         <button type="button" class="local-library-button" :disabled="!persistentHandlesSupported" @click="rememberLocalFiles">记住本地文件</button>
@@ -643,6 +664,7 @@
       <div class="queue-batch-actions">
         <el-button size="small" round :disabled="selectedQueueIndices.length === 0" @click="setSelectedAsNext">排到下一首</el-button>
         <el-button size="small" round :disabled="selectedQueueIndices.length === 0" @click="moveSelectedToTop">移到队首</el-button>
+        <el-button size="small" round class="queue-add-playlist" :disabled="selectedQueueIndices.length === 0" @click="openAddSelectedToPlaylist">加入歌单</el-button>
         <el-button size="small" round type="danger" plain :disabled="selectedQueueIndices.length === 0" @click="removeSelected">移除所选</el-button>
         <el-button size="small" text @click="clearQueueSelection">清空选择</el-button>
       </div>
@@ -2486,6 +2508,69 @@ async function onLocalFilesSelected(event) {
     if (result.skipped > 0) ElMessage.warning(`另有 ${result.skipped} 个文件未能导入`)
   } catch {
     ElMessage.error('本地音乐导入失败，请检查文件格式后重试')
+  }
+}
+
+// ---- 选中的队列歌曲加入已有歌单 ----
+const playlistPickerVisible = ref(false)
+const myPlaylists = ref([])
+const playlistsLoading = ref(false)
+const targetPlaylistId = ref('')
+const addingToPlaylist = ref(false)
+
+function selectedQueueSongs() {
+  return selectedQueueIndices.value.map((index) => playerStore.queue[index]).filter(Boolean)
+}
+
+async function openAddSelectedToPlaylist() {
+  const picked = selectedQueueSongs()
+  if (picked.length === 0) return
+  if (!userStore.isLogin) {
+    ElMessage.warning('请先登录后再加入歌单')
+    return
+  }
+  playlistPickerVisible.value = true
+  playlistsLoading.value = true
+  targetPlaylistId.value = ''
+  myPlaylists.value = []
+  try {
+    const res = await playlistApi.page({ pageNum: 1, pageSize: 50, onlyMine: true })
+    myPlaylists.value = res?.records || []
+    if (myPlaylists.value.length === 1) targetPlaylistId.value = String(myPlaylists.value[0].id)
+  } catch {
+    myPlaylists.value = []
+    ElMessage.warning('读取歌单失败，请稍后再试')
+  } finally {
+    playlistsLoading.value = false
+  }
+}
+
+async function confirmAddSelectedToPlaylist() {
+  if (!targetPlaylistId.value || addingToPlaylist.value) return
+  const { ids, skipped } = partitionQueueForPlaylist(selectedQueueSongs())
+  if (ids.length === 0) {
+    ElMessage.warning('所选的都是本地文件或自定义源歌曲，这些不会上传到服务器')
+    return
+  }
+  const target = myPlaylists.value.find((item) => String(item.id) === String(targetPlaylistId.value))
+  const targetId = Number(targetPlaylistId.value)
+  if (!Number.isInteger(targetId) || targetId <= 0) return
+  addingToPlaylist.value = true
+  try {
+    const added = await playlistApi.addSongs(targetId, ids)
+    const summary = describeQueueSaveResult({
+      name: target?.name || '',
+      requested: ids.length,
+      added,
+      skippedCount: skipped.length,
+      action: '加入'
+    })
+    ElMessage({ type: summary.type, message: summary.text })
+    playlistPickerVisible.value = false
+  } catch (e) {
+    ElMessage.error(e?.message || '加入歌单失败，请稍后再试')
+  } finally {
+    addingToPlaylist.value = false
   }
 }
 

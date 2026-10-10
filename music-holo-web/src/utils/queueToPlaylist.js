@@ -51,7 +51,7 @@ export function suggestQueuePlaylistName(queue, now = new Date()) {
  * @returns {{ type: 'success'|'warning'|'error', text: string }}
  */
 export function describeQueueSaveResult(result = {}) {
-  const { name = '', requested = 0, added = 0, skippedCount = 0 } = result
+  const { name = '', requested = 0, added = 0, skippedCount = 0, action = '存入' } = result
   const addedCount = Number.isFinite(Number(added)) ? Number(added) : 0
   if (addedCount <= 0) {
     return {
@@ -60,7 +60,7 @@ export function describeQueueSaveResult(result = {}) {
     }
   }
   const missing = Math.max(0, Number(requested) - addedCount)
-  const parts = [`已存入歌单《${name}》${addedCount} 首`]
+  const parts = [`已${action}歌单《${name}》${addedCount} 首`]
   if (missing > 0) parts.push(`另有 ${missing} 首服务端未收录`)
   if (skippedCount > 0) parts.push(`${skippedCount} 首本地/自定义源歌曲不上传`)
   return { type: missing > 0 ? 'warning' : 'success', text: parts.join('，') }
