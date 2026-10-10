@@ -29,6 +29,21 @@ test.use({ launchOptions: { args: ['--autoplay-policy=no-user-gesture-required']
 test('@live 榜单曲目用真实星海音源在线解析（第三方依赖，非阻断）', async ({ page }, testInfo) => {
   test.slow()
 
+  // 结论必须**无论如何**都能打印出来（包括用例中途失败）：
+  // CI 日志主机不在出网白名单里，workflow 会把这行转成 job 注解，靠 API 读取。
+  let outcome = `INCOMPLETE 用例在得出结论前就结束了（见 CI 日志）`
+  try {
+    outcome = await runLiveJourney(page, testInfo)
+  } catch (error) {
+    outcome = `ERROR ${String(error && error.message ? error.message : error).split('\n')[0].slice(0, 300)}`
+    throw error
+  } finally {
+    testInfo.annotations.push({ type: 'live-outcome', description: outcome })
+    console.log(`LIVE_OUTCOME=${outcome.replace(/\n/g, ' ')}`)
+  }
+})
+
+async function runLiveJourney(page, testInfo) {
   // 1. 下载真实脚本并核对指纹（Node 侧请求，CI runner 有公网出口）
   const response = await page.request.get(SOURCE_URL, { timeout: 30_000 })
   expect(response.status(), '音源脚本地址应可访问').toBe(200)
@@ -102,7 +117,6 @@ test('@live 榜单曲目用真实星海音源在线解析（第三方依赖，�
     expect(noticeText, '解析没落地时必须给出明确提示，不能静默').toMatch(/失败|不安全|拒绝|不支持|http|错误|超时|无法/)
     outcome = `BLOCKED 未落地（地址=${mediaSrc ? mediaSrc.slice(0, 60) : '空'}），界面提示：${noticeText.slice(0, 160)}`
   }
-  testInfo.annotations.push({ type: 'live-outcome', description: outcome })
-  // CI 日志主机不在白名单时也能拿到结论：打成一行标记，由 workflow 转成 job 注解。
-  console.log(`LIVE_OUTCOME=${outcome.replace(/\n/g, ' ')}`)
-})
+  testInfo.annotations.push({ type: 'live-source-detail', description: `主机=${mediaSrc ? new URL(mediaSrc, 'https://example.invalid').host : '空'}` })
+  return outcome
+}
