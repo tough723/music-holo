@@ -88,7 +88,7 @@ async function runLiveJourney(page, testInfo) {
   const results = []
   for (const candidate of CANDIDATES) {
     const result = await attemptCandidate(page, candidate)
-    console.log(`LIVE_STEP ${candidate.platform}/${candidate.quality} → ${result.summary}`)
+    console.log(`LIVE_STEP ${candidate.platform}/${candidate.quality} → ${compactText(result.summary, 240)}`)
     testInfo.annotations.push({ type: `live-${candidate.platform}`, description: result.summary })
     results.push({ candidate, ...result })
     if (result.played) break
@@ -103,8 +103,8 @@ async function runLiveJourney(page, testInfo) {
 
   const details = results.map((item) => {
     const label = `${item.candidate.platform}/${item.candidate.quality}`
-    if (item.src) return `${label} 直链已到播放器但没播起来（${item.playError || '进度未前进'}，主机 ${hostOf(item.src)}）`
-    return `${label} 未落地（${(item.notices || '无提示').slice(0, 120)}）`
+    if (item.src) return `${label} 直链已到播放器但没播起来（${compactText(item.playError || '进度未前进', 120)}，主机 ${hostOf(item.src)}）`
+    return `${label} 未落地（${compactText(item.notices || '无提示', 180)}）`
   })
   // 没播起来的每个候选，界面都必须有明确提示，不允许静默失败
   for (const item of results) {
@@ -132,9 +132,15 @@ async function attemptCandidate(page, candidate) {
   const approvals = await initializeSource(page, dialog)
 
   // 4. 显式选平台（脚本声明多个平台，默认选第一个，不是我们要的那个）
-  const platform = await pickFromSelect(page, dialog, 0, (labels) => labels.find((label) => label.includes(`(${candidate.platform})`)))
+  const platformSelect = dialog.locator('.source-playback-fields .el-select').nth(0)
+  const currentPlatform = (await platformSelect.innerText()).trim()
+  // 星海默认首项为 wy。若当前值已是本候选平台，就保留该值；Element Plus 对已选中的
+  // option 会在某些版本/焦点状态下关闭 popper，Playwright 再点它会等到超时。
+  const platform = currentPlatform.includes(`(${candidate.platform})`)
+    ? { picked: currentPlatform, labels: [], alreadySelected: true }
+    : await pickFromSelect(page, dialog, 0, (labels) => labels.find((label) => label.includes(`(${candidate.platform})`)))
   const quality = await pickFromSelect(page, dialog, 1, (labels) => (labels.includes(candidate.quality) ? candidate.quality : labels[0]))
-  console.log(`LIVE_STEP 平台=${platform.picked} 可选=${platform.labels.join('/')}｜音质=${quality.picked} 可选=${quality.labels.join('/')}`)
+  console.log(`LIVE_STEP 平台=${platform.picked} 可选=${platform.labels.join('/') || '已是目标值'}｜音质=${quality.picked} 可选=${quality.labels.join('/')}`)
   expect(platform.picked, `音源应声明 ${candidate.platform} 平台`).toContain(`(${candidate.platform})`)
 
   // 5. 解析（可能多跳：聚合后端 → GD，逐域名授权）
@@ -153,7 +159,7 @@ async function attemptCandidate(page, candidate) {
 
   const summary = played
     ? `PLAYED 进度 ${position.toFixed(2)}s，主机 ${hostOf(resolution.src)}`
-    : `未播放（地址=${resolution.src ? hostOf(resolution.src) : '空'}，授权 ${approvals} 次，${playError || resolution.notices.slice(0, 140)}）`
+    : `未播放（地址=${resolution.src ? hostOf(resolution.src) : '空'}，授权 ${approvals} 次，${compactText(playError || resolution.notices, 220)}）`
   return {
     src: resolution.src,
     notices: resolution.notices,
@@ -316,6 +322,10 @@ async function summarizeBlockers(page) {
     `dialogs=${JSON.stringify(sourceDialogs.map((text) => text.trim().slice(0, 100)))}`,
     `buttons=${JSON.stringify(buttons.map((text) => text.trim()).filter(Boolean).slice(-12))}`
   ].join(' ')
+}
+
+function compactText(value, maxLength = 240) {
+  return String(value || '').replace(/\\s+/g, ' ').trim().slice(0, maxLength)
 }
 
 function hostOf(value) {
