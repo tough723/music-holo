@@ -357,6 +357,7 @@ async function resolveAuditionAndCollect(page, dialog, initialApprovals, timeout
 async function waitForPlayback(audio, timeoutMs) {
   const deadline = Date.now() + timeoutMs
   let lastState = null
+  let firstPlayingPosition = null
   while (Date.now() < deadline) {
     const state = await audio.evaluate((element) => ({
       time: element.currentTime,
@@ -367,15 +368,20 @@ async function waitForPlayback(audio, timeoutMs) {
     if (state) {
       lastState = state
       if (state.error) return { played: false, error: state.error }
-      if (state.time > 0 && !state.paused) {
-        return { played: true, position: state.time, paused: state.paused, readyState: state.readyState }
+      if (state.time > 0 && !state.paused && state.readyState >= 2) {
+        firstPlayingPosition ??= state.time
+        if (state.time >= 1 && state.time - firstPlayingPosition >= 0.5) {
+          return { played: true, position: state.time, paused: state.paused, readyState: state.readyState }
+        }
+      } else {
+        firstPlayingPosition = null
       }
     }
     await new Promise((resolve) => setTimeout(resolve, 400))
   }
   return {
     played: false,
-    error: `${timeoutMs}ms 内未能保持播放（currentTime=${lastState?.time ?? 0}, paused=${lastState?.paused ?? 'unknown'}, readyState=${lastState?.readyState ?? 0}）`
+    error: `${timeoutMs}ms 内未能持续解码播放至少 1 秒（currentTime=${lastState?.time ?? 0}, paused=${lastState?.paused ?? 'unknown'}, readyState=${lastState?.readyState ?? 0}）`
   }
 }
 
