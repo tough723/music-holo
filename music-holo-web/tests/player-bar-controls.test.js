@@ -67,7 +67,9 @@ describe('底部播放器交互', () => {
     HTMLMediaElement.prototype.pause = function () {
       this.__pauseCalls = (this.__pauseCalls || 0) + 1
     }
-    HTMLMediaElement.prototype.load = () => {}
+    HTMLMediaElement.prototype.load = function () {
+      this.__loadCalls = (this.__loadCalls || 0) + 1
+    }
     // jsdom 没有 Web Audio，空间音效应当优雅回退到原声而不是崩掉。
     delete window.AudioContext
     delete window.webkitAudioContext
@@ -788,6 +790,69 @@ describe('底部播放器交互', () => {
       expect(document.querySelector('.pb-audio-retry')).toBeNull()
     } finally {
       delete window.AudioContext
+    }
+  })
+
+  it('音频加载中断会自动重试（退避三次），仍失败才交回手动重试', async () => {
+    vi.useFakeTimers()
+    try {
+      const store = await mountPlayer()
+      // 自定义源：跳过“改用本机离线副本”的异步分支，错误路径是同步的
+      store.playAll([{ ...song(1, '霓虹海', 240), isCustomSource: true }, song(2, '云端信使', 240)], 1)
+      await flush()
+      const [nativeAudio] = document.querySelectorAll('audio')
+      const failWith = (code) => {
+        Object.defineProperty(nativeAudio, 'error', { value: { code }, configurable: true })
+        nativeAudio.dispatchEvent(new Event('error'))
+      }
+      const plays = () => nativeAudio.__playCalls || 0
+
+      // 地址不支持：不自动重试，立刻给出手动重试入口
+      failWith(4)
+      await flush()
+      expect(document.querySelector('.pb-retry')).not.toBeNull()
+
+      // 手动重试清掉错误态，并重新给满三次自动重试机会；失败时播放被按停，这里恢复播放意图
+      document.querySelector('.pb-retry').click()
+      await flush()
+      expect(document.querySelector('.pb-retry')).toBeNull()
+      expect(nativeAudio.__loadCalls || 0).toBeGreaterThan(0)
+      store.playing = true
+      await flush()
+
+      // 网络中断：先自动重试，不立刻弹错误
+      failWith(2)
+      await flush()
+      expect(document.querySelector('.pb-retry')).toBeNull()
+      const before = plays()
+      vi.advanceTimersByTime(900)
+      await flush()
+      expect(plays()).toBeGreaterThan(before) // 重试时恢复播放
+
+      // 第二次：仍然自动重试（退避间隔更长）
+      failWith(2)
+      await flush()
+      expect(document.querySelector('.pb-retry')).toBeNull()
+      vi.advanceTimersByTime(2600)
+      await flush()
+
+      // 第三次：用掉最后一次自动重试
+      failWith(2)
+      await flush()
+      expect(document.querySelector('.pb-retry')).toBeNull()
+      vi.advanceTimersByTime(6100)
+      await flush()
+
+      // 第四次：超出上限，交回手动重试
+      failWith(2)
+      await flush()
+      expect(document.querySelector('.pb-retry')).not.toBeNull()
+      // 之后不再自动重试
+      vi.advanceTimersByTime(10000)
+      await flush()
+      expect(document.querySelector('.pb-retry')).not.toBeNull()
+    } finally {
+      vi.useRealTimers()
     }
   })
 })

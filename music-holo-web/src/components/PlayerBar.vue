@@ -755,6 +755,7 @@ import { LOUDNESS_TARGETS, applyGainToVolume, describeLufs, measureAudioLoudness
 import { formatSeconds, formatPercent } from '@/utils/playStats'
 import * as favoriteApi from '@/api/favorite'
 import { fmtDuration } from '@/utils/format'
+import { isTransientAudioError, nextRetryDelay } from '@/utils/audioRetry'
 import { createMediaSessionController } from '@/utils/mediaSession'
 import {
   EQ_BANDS,
@@ -970,6 +971,7 @@ function persistSession({ force = false } = {}) {
 }
 
 function handlePageHide() {
+  resetAutoRetry()
   persistSession({ force: true })
   statsStore.flush()
 }
@@ -1832,13 +1834,76 @@ function playActiveAudio(audio) {
   safePlay(audio).catch((error) => handlePlayFailure(audio, error))
 }
 
+/**
+ * 重新拉取同一个地址：光把 src 再赋一遍浏览器不会重新请求，必须显式 load()。
+ * （手动重试与自动重试都走这里，避免两处各写一套。）
+ */
+function reloadAudio(audio, song) {
+  if (!audio || !song?.audioUrl) return
+  setAudioSource(audio, song.audioUrl, { anonymous: Boolean(song.isCustomSource) })
+  try {
+    audio.load()
+  } catch {
+    // jsdom 等环境没有实现 load()，重试的逻辑不依赖它。
+  }
+}
+
+/** 自动重试的状态：按曲目记次数，切歌即清零。 */
+const autoRetry = { timer: null, attempts: 0, songId: null, wasPlaying: false, notified: false }
+
+function cancelAutoRetry() {
+  if (autoRetry.timer !== null) {
+    clearTimeout(autoRetry.timer)
+    autoRetry.timer = null
+  }
+}
+
+function resetAutoRetry() {
+  cancelAutoRetry()
+  autoRetry.attempts = 0
+  autoRetry.songId = null
+  autoRetry.wasPlaying = false
+  autoRetry.notified = false
+}
+
+function runAutoRetry(song) {
+  autoRetry.timer = null
+  if (!song || currentSong.value?.id !== song.id) return
+  const audio = activeAudioElement()
+  if (!audio || !song.audioUrl) return
+  audioError.value = false
+  buffering.value = true
+  reloadAudio(audio, song)
+  seekAudioWhenReady(audio, playerStore.currentTime)
+  if (autoRetry.wasPlaying) playActiveAudio(audio)
+}
+
+/** 失败后安排一次自动重试。返回 true 表示已经接管（这次先不弹错误提示）。 */
+function scheduleAutoRetry(song, code) {
+  if (!song?.audioUrl || !isTransientAudioError(code)) return false
+  const delay = nextRetryDelay(autoRetry.attempts + 1)
+  if (delay === null) return false
+  autoRetry.attempts += 1
+  autoRetry.songId = song.id
+  cancelAutoRetry()
+  autoRetry.timer = setTimeout(() => runAutoRetry(song), delay)
+  if (!autoRetry.notified) {
+    autoRetry.notified = true
+    ElMessage.info('音频加载中断，正在自动重试…')
+  }
+  buffering.value = true
+  return true
+}
+
 function retryAudio() {
   const song = currentSong.value
   const audio = activeAudioElement()
   if (!song?.audioUrl || !audio) return
+  // 用户手动重试：清空自动重试的账本，重新给满三次机会。
+  resetAutoRetry()
   audioError.value = false
   offlineFallbackAttempted.value = null
-  setAudioSource(audio, song.audioUrl, { anonymous: Boolean(song.isCustomSource) })
+  reloadAudio(audio, song)
   seekAudioWhenReady(audio, playerStore.currentTime)
   if (playerStore.playing) playActiveAudio(audio)
 }
@@ -2318,6 +2383,7 @@ watch(queueVisible, async (open) => {
 })
 
 watch(currentSong, (song) => {
+  resetAutoRetry()
   offlineFallbackAttempted.value = null
   demoCached.value = false
   audioError.value = false
@@ -2473,6 +2539,8 @@ function onAudioPlaying(event) {
 }
 
 function onAudioCanPlay(event) {
+  // 能播了就说明上一次的失败是瞬时的：清空重试账本。
+  resetAutoRetry()
   if (event.currentTarget !== activeAudioElement()) return
   buffering.value = false
   updateBuffered()
@@ -2536,32 +2604,39 @@ function onAudioError(event) {
     }
   }
   const song = currentSong.value
+  const errorCode = event.currentTarget?.error?.code ?? event.error?.code
   const canFallback = song && !song.isCustomSource && !song.isLocal && offlineFallbackAttempted.value !== song.id
   if (canFallback) {
     const audio = event.currentTarget
     offlineFallbackAttempted.value = song.id
     objectUrlForCachedDemo(song.audioUrl, window.location.href).then((cachedUrl) => {
       if (!cachedUrl || currentSong.value?.id !== song.id) {
-        reportAudioLoadFailure(song)
+        reportAudioLoadFailure(song, errorCode)
         return
       }
       setAudioSource(audio, cachedUrl)
       if (playerStore.playing) safePlay(audio).catch(() => { playerStore.playing = false })
       ElMessage.info('网络音频不可用，已改用本机保存的演示副本')
-    }).catch(() => reportAudioLoadFailure(song))
+    }).catch(() => reportAudioLoadFailure(song, errorCode))
     return
   }
-  reportAudioLoadFailure(song)
+  reportAudioLoadFailure(song, errorCode)
 }
 
-function reportAudioLoadFailure(song) {
+function reportAudioLoadFailure(song, code) {
+  // 瞬时故障先自动重试（带退避），重试完了还是不行才把错误交给用户。
+  const wasPlaying = playerStore.playing
+  playerStore.playing = false
+  if (scheduleAutoRetry(song, code)) {
+    autoRetry.wasPlaying = wasPlaying
+    return
+  }
   audioError.value = true
   if (song?.isCustomSource) {
     ElMessage.error(`《${song.title}》加载失败：链接可能已过期，或音频站未开放匿名 CORS`)
   } else if (song) {
     ElMessage.error(`《${song.title}》音频加载失败，可点播放器上的重试按钮再试一次`)
   }
-  playerStore.playing = false
 }
 
 function onLyricSeek(event) {
