@@ -1361,6 +1361,8 @@ function onQueueDragEnd() {
 let activeAudioName = 'native'
 let crossfadeTimers = []
 let crossfading = false
+// 淡变期间用户改了音量：不能当场打断曲线，也别把这次调整丢了，记下来等淡变结束补同步。
+let pendingVolumeSync = false
 
 function activeAudioElement() {
   if (processedEnabled.value) return spatialAudioRef.value
@@ -1376,6 +1378,7 @@ function stopCrossfade() {
   for (const timer of crossfadeTimers) clearInterval(timer)
   crossfadeTimers = []
   crossfading = false
+  pendingVolumeSync = false
 }
 
 function fadeVolume(audio, from, to, durationMs, onDone) {
@@ -1430,6 +1433,8 @@ function startCrossfade(song, resumeAt = 0) {
     // 新音轨起不来就退回普通切源，不能把播放卡住。
     stopCrossfade()
     incoming.pause()
+    // 旧音轨正淡出到一半：不还原音量就会留下一首“变小声”的歌。
+    outgoing.volume = volume
     handlePlayFailure(outgoing, error)
   })
 
@@ -1440,6 +1445,8 @@ function startCrossfade(song, resumeAt = 0) {
     crossfading = false
     // 新音轨成为当前播放元素，直到下一次切歌再交换。
     activeAudioName = activeAudioName === 'spatial' ? 'native' : 'spatial'
+    // 淡变期间改过的音量/增益在这里补上（当时没打断曲线，现在才落地）。
+    if (pendingVolumeSync) syncAudioOutput()
   })
   return true
 }
@@ -1828,8 +1835,12 @@ function syncAudioOutput({ skipCrossfade = false } = {}) {
   // 响度补偿：原声模式只能缩放元素音量，处理链路里交给增益节点。
   const gain = currentLoudnessGain.value
   const nativeVolume = applyGainToVolume(volume, gain)
-  // 交叉淡入期间音量由淡变器接管，这里不能抢，否则会把淡入/淡出的音量曲线打乱。
-  if (!crossfading || !skipCrossfade) {
+  // 交叉淡入期间音量由淡变器接管：这里插手会把淡入/淡出的曲线打平，
+  // 但用户此刻的调整也不能丢，先记下来，淡变结束再补一次同步。
+  if (crossfading || skipCrossfade) {
+    pendingVolumeSync = true
+  } else {
+    pendingVolumeSync = false
     if (nativeAudio) {
       nativeAudio.volume = nativeVolume
       nativeAudio.muted = playerStore.muted
@@ -3183,8 +3194,7 @@ watch(() => playerStore.equalizerGains.join(','), () => {
 watch(
   () => [currentLoudnessGain.value, playerStore.currentSong?.id, loudnessStore.target],
   () => {
-    // 交叉淡入期间音量归淡变器管，这里插手会把淡入曲线打平。
-    if (crossfading) return
+    // 淡变期间 syncAudioOutput 会记账，等淡变结束再补，不会把曲线打平。
     syncAudioOutput()
   }
 )

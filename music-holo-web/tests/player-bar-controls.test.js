@@ -719,6 +719,67 @@ describe('底部播放器交互', () => {
     expect(store.currentSong.title).toBe('云端信使')
   })
 
+  it('淡变途中改音量：不打断曲线，淡变结束后补上新音量', async () => {
+    vi.useFakeTimers()
+    try {
+      const store = await mountPlayer()
+      store.setVolume(0.8)
+      store.playAll([song(1, '霓虹海'), song(2, '云端信使')], 1)
+      store.setCrossfade(60)
+      await flush()
+
+      const [nativeAudio, spatialAudio] = document.querySelectorAll('audio')
+      store.next()
+      await flush()
+      vi.advanceTimersByTime(20)
+      await flush()
+      // 淡入进行中：新音轨音量还在往上爬，还没到目标 0.8
+      expect(spatialAudio.volume).toBeLessThan(0.8)
+
+      // 途中把音量改成 0.2：不能当场把曲线打平（新音轨仍按原曲线爬），也不能丢掉这次调整
+      store.setVolume(0.2)
+      await flush()
+      expect(spatialAudio.volume).not.toBeCloseTo(0.2, 2)
+      expect(spatialAudio.volume).toBeLessThan(0.8)
+
+      // 淡变结束后补同步：新音轨停在 0.2
+      vi.advanceTimersByTime(200)
+      await flush()
+      expect(spatialAudio.volume).toBeCloseTo(0.2, 2)
+      expect(nativeAudio.__pauseCalls || 0).toBeGreaterThan(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('新音轨起播失败时，旧音轨的音量要还原（别留下一首变小声的歌）', async () => {
+    vi.useFakeTimers()
+    try {
+      const store = await mountPlayer()
+      store.setVolume(0.7)
+      store.playAll([song(1, '霓虹海'), song(2, '云端信使')], 1)
+      store.setCrossfade(60)
+      await flush()
+
+      const [nativeAudio, spatialAudio] = document.querySelectorAll('audio')
+      // 新音轨淡出开始一会儿后才起播失败：这时旧音轨已经被淡到一半
+      spatialAudio.play = () => new Promise((resolve, reject) => {
+        setTimeout(() => reject(new Error('起播失败')), 30)
+      })
+      store.next()
+      await flush()
+      vi.advanceTimersByTime(20)
+      await flush()
+      expect(nativeAudio.volume).toBeLessThan(0.7) // 确实淡到一半了
+
+      vi.advanceTimersByTime(60) // 起播失败回调执行
+      await flush()
+      expect(nativeAudio.volume).toBeCloseTo(0.7, 2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('关闭交叉淡入时立即切源，不做淡入淡出', async () => {
     const store = await mountPlayer()
     store.playAll([song(1, '霓虹海'), song(2, '云端信使')], 1)
