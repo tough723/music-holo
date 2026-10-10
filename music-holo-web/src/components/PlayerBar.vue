@@ -605,6 +605,12 @@
         <el-button size="small" type="danger" plain :disabled="playerStore.queue.length === 0" @click="clearQueue">
           清空队列
         </el-button>
+        <el-button size="small" class="queue-copy-text" text :disabled="playerStore.queue.length === 0" @click="copyQueueAsText">
+          复制文本
+        </el-button>
+        <el-button size="small" class="queue-export-m3u" text :disabled="playerStore.queue.length === 0" @click="exportQueueAsM3u">
+          导出 m3u8
+        </el-button>
         <label class="queue-auto-skip">
           <input v-model="autoSkipOnError" type="checkbox">
           <span>播放失败自动跳下一首</span>
@@ -799,6 +805,7 @@ import {
   suggestQueuePlaylistName
 } from '@/utils/queueToPlaylist'
 import { createMediaSessionController } from '@/utils/mediaSession'
+import { formatQueueAsM3u, formatQueueAsText, queueExportFileName } from '@/utils/queueExport'
 import {
   EQ_BANDS,
   EQ_GAIN_LIMIT,
@@ -2018,6 +2025,63 @@ const autoSkipOnError = computed({
   get: () => playerStore.autoSkipOnError,
   set: (enabled) => playerStore.setAutoSkipOnError(enabled)
 })
+
+/** 把队列拷成「1. 歌名 — 歌手」的纯文本，方便贴到聊天窗口或备忘录。 */
+async function copyQueueAsText() {
+  const text = formatQueueAsText(playerStore.queue)
+  if (!text) {
+    ElMessage.warning('队列是空的')
+    return
+  }
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+    } else {
+      // 没有剪贴板 API（或非安全上下文）时退回选中复制。
+      const area = document.createElement('textarea')
+      area.value = text
+      area.setAttribute('readonly', 'readonly')
+      area.style.position = 'fixed'
+      area.style.opacity = '0'
+      document.body.appendChild(area)
+      area.select()
+      const ok = document.execCommand?.('copy')
+      document.body.removeChild(area)
+      if (!ok) throw new Error('copy failed')
+    }
+    ElMessage.success(`已复制 ${playerStore.queue.length} 首歌的清单`)
+  } catch {
+    ElMessage.warning('浏览器不允许写入剪贴板，请改用「导出 m3u8」')
+  }
+}
+
+/**
+ * 导出 m3u8。本地 blob 与自定义源的一次性地址只在本次会话有效，写进文件也打不开，因此跳过并如实报数。
+ */
+function exportQueueAsM3u() {
+  const { content, exported, skipped } = formatQueueAsM3u(playerStore.queue)
+  if (exported === 0) {
+    ElMessage.warning('队列里没有可以导出的网络地址（本地文件与自定义源链接只在本次会话有效）')
+    return
+  }
+  try {
+    const blob = new Blob([content], { type: 'audio/x-mpegurl;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = queueExportFileName()
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    // 立刻 revoke 某些浏览器会来不及下载，稍后再释放。
+    setTimeout(() => URL.revokeObjectURL(url), 10_000)
+    ElMessage.success(skipped > 0
+      ? `已导出 ${exported} 首，另有 ${skipped} 首本地/自定义源歌曲不写入文件`
+      : `已导出 ${exported} 首`)
+  } catch {
+    ElMessage.error('导出失败，请稍后再试')
+  }
+}
 
 /**
  * 失败收口：能自动跳就跳，否则把错误交回给用户。

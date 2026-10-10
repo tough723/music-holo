@@ -289,6 +289,70 @@ describe('底部播放器交互', () => {
     }
   })
 
+  it('队列可复制成文本，也可导出 m3u8（本地与自定义源不写入文件）', async () => {
+    const copied = []
+    Object.defineProperty(window.navigator, 'clipboard', {
+      value: { writeText: async (text) => { copied.push(text) } },
+      configurable: true
+    })
+    const created = []
+    const realBlob = window.Blob
+    // jsdom 的 Blob 没有 text()：包一层把内容记下来
+    window.Blob = class extends realBlob {
+      constructor(parts, options) {
+        super(parts, options)
+        created.push({ text: String(parts?.[0] ?? ''), type: options?.type, blob: this })
+      }
+    }
+    const realCreate = URL.createObjectURL
+    const realRevoke = URL.revokeObjectURL
+    URL.createObjectURL = () => 'blob:mock'
+    URL.revokeObjectURL = () => {}
+    const clicks = []
+    const realClick = HTMLAnchorElement.prototype.click
+    HTMLAnchorElement.prototype.click = function () { clicks.push({ href: this.href, download: this.download }) }
+    try {
+      const store = await mountPlayer()
+      store.playAll([
+        song(1, '霓虹海', 240),
+        song(2, '云端信使', 240),
+        { id: 3, title: '本地文件', artist: '本机', duration: 100, audioUrl: 'blob:x', isLocal: true }
+      ], 1)
+      await flush()
+      host.querySelector('button[aria-label="播放队列"]').click()
+      await flush()
+
+      document.querySelector('.queue-copy-text').click()
+      await flush()
+      expect(copied).toHaveLength(1)
+      expect(copied[0]).toBe('1. 霓虹海 — 演示歌手\n2. 云端信使 — 演示歌手\n3. 本地文件 — 本机')
+
+      document.querySelector('.queue-export-m3u').click()
+      await flush()
+      expect(created).toHaveLength(1)
+      expect(created[0].type).toContain('mpegurl')
+      expect(clicks).toHaveLength(1)
+      expect(clicks[0].download).toMatch(/^music-holo-队列-\d{8}-\d{4}\.m3u8$/)
+      expect(created[0].text).toContain('/audio/1.wav')
+      expect(created[0].text).not.toContain('blob:x') // 本地地址只在本次会话有效
+
+      // 队列里全是本地文件时明确提示，而不是导出一个打不开的空文件
+      created.length = 0
+      clicks.length = 0
+      store.playAll([{ id: 9, title: '本地文件', artist: '本机', duration: 100, audioUrl: 'blob:x', isLocal: true }], 9)
+      await flush()
+      document.querySelector('.queue-export-m3u').click()
+      await flush()
+      expect(created).toHaveLength(0)
+    } finally {
+      URL.createObjectURL = realCreate
+      URL.revokeObjectURL = realRevoke
+      window.Blob = realBlob
+      HTMLAnchorElement.prototype.click = realClick
+      delete window.navigator.clipboard
+    }
+  })
+
   it('队列条目可用键盘操作：回车播放、Delete 移除、Alt+方向键移动', async () => {
     const store = await mountPlayer()
     store.playAll([song(1, '霓虹海'), song(2, '云端信使'), song(3, '全息之恋')], 1)
