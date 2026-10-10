@@ -56,8 +56,8 @@ async function main() {
       timeout: 30_000
     })
 
-    await application.evaluate(({ BrowserWindow, dialog, net }) => {
-      if (require('electron').app.commandLine.hasSwitch('no-sandbox')) {
+    await application.evaluate(({ app, BrowserWindow, dialog, net }) => {
+      if (app.commandLine.hasSwitch('no-sandbox')) {
         throw new Error('Live source journey requires Chromium sandbox')
       }
       const requireFromMain = process.mainModule.require.bind(process.mainModule)
