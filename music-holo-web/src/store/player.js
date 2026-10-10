@@ -275,6 +275,7 @@ function persist(state) {
     playerViewMode: normalizePlayerViewMode(state.playerViewMode),
     playerBarDock: normalizePlayerDock(state.playerBarDock),
     playerBarAutoHide: state.playerBarAutoHide !== false,
+    autoSkipOnError: state.autoSkipOnError === true,
     equalizer: normalizeEqualizerState(state.equalizer),
     shuffleBag: (state.shuffleBag || []).slice(0, 500),
     playStats: normalizePlayStats(state.playStats)
@@ -327,6 +328,7 @@ export const usePlayerStore = defineStore('player', {
       /** 迷你/沉浸形态的停靠位置与贴边自动隐藏。 */
       playerBarDock: normalizePlayerDock(saved.playerBarDock),
       playerBarAutoHide: saved.playerBarAutoHide !== false,
+      autoSkipOnError: saved.autoSkipOnError === true,
       /** 均衡器：预设名 + 实际增益（dB，按 EQ_BANDS 顺序）。 */
       equalizer: normalizeEqualizerState(saved.equalizer),
       /** 不重复随机的剩余曲目（存歌曲 id，队列增删后自动失效重洗）。 */
@@ -1059,6 +1061,12 @@ export const usePlayerStore = defineStore('player', {
       this.playerBarAutoHide = enabled !== false
       persist(this)
       return this.playerBarAutoHide
+    },
+    /** 播放失败（自动重试也用尽）后是否自动跳到下一首。默认关闭：静默换歌比停在那里更容易让人困惑。 */
+    setAutoSkipOnError(enabled) {
+      this.autoSkipOnError = enabled === true
+      persist(this)
+      return this.autoSkipOnError
     },
     /** 切换播放器形态（标准 / 迷你 / 沉浸）。 */
     setPlayerViewMode(mode) {

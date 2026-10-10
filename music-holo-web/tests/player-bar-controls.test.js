@@ -171,6 +171,124 @@ describe('底部播放器交互', () => {
     expect(store.queue).toHaveLength(3)
   })
 
+  it('播放失败后可手动跳到下一首，单曲循环也一样', async () => {
+    const store = await mountPlayer()
+    // 自定义源：跳过“改用本机离线副本”的异步分支，错误路径是同步的
+    store.playAll([
+      { ...song(1, '霓虹海', 240), isCustomSource: true },
+      song(2, '云端信使', 240),
+      song(3, '全息之恋', 240)
+    ], 1)
+    store.setMode('single') // 单曲循环下 next() 不会前进，得靠兜底下标
+    await flush()
+    const [nativeAudio] = document.querySelectorAll('audio')
+    Object.defineProperty(nativeAudio, 'error', { value: { code: 4 }, configurable: true })
+    nativeAudio.dispatchEvent(new Event('error'))
+    await flush()
+
+    expect(document.querySelector('.pb-retry')).not.toBeNull()
+    const skip = document.querySelector('.pb-skip-failed')
+    expect(skip).not.toBeNull()
+    skip.click()
+    await flush()
+    expect(store.currentSong.title).toBe('云端信使')
+    expect(document.querySelector('.pb-skip-failed')).toBeNull()
+    expect(document.querySelector('.pb-retry')).toBeNull()
+  })
+
+  it('队列只有一首时不提供跳转入口', async () => {
+    const store = await mountPlayer()
+    store.playAll([{ ...song(1, '霓虹海', 240), isCustomSource: true }], 1)
+    await flush()
+    const [nativeAudio] = document.querySelectorAll('audio')
+    Object.defineProperty(nativeAudio, 'error', { value: { code: 4 }, configurable: true })
+    nativeAudio.dispatchEvent(new Event('error'))
+    await flush()
+    expect(document.querySelector('.pb-retry')).not.toBeNull()
+    expect(document.querySelector('.pb-skip-failed')).toBeNull()
+  })
+
+  it('开启自动跳过后会自己跳到下一首，连着坏太多则停手', async () => {
+    const store = await mountPlayer()
+    const songs = [1, 2, 3, 4, 5, 6].map((id) => ({ ...song(id, `曲目${id}`, 240), isCustomSource: true }))
+    store.playAll(songs, 1)
+    await flush()
+
+    // 开关在队列面板里
+    host.querySelector('button[aria-label="播放队列"]').click()
+    await flush()
+    const toggle = document.querySelector('.queue-auto-skip input')
+    expect(toggle).toBeTruthy()
+    expect(toggle.checked).toBe(false)
+    toggle.click()
+    await flush()
+    expect(store.autoSkipOnError).toBe(true)
+
+    const failCurrent = async () => {
+      const [nativeAudio] = document.querySelectorAll('audio')
+      Object.defineProperty(nativeAudio, 'error', { value: { code: 4 }, configurable: true })
+      nativeAudio.dispatchEvent(new Event('error'))
+      await flush()
+    }
+
+    // 前三首坏掉：自动跳到下一首，界面不留在错误态
+    for (let i = 0; i < 3; i += 1) {
+      const before = store.currentSong.title
+      await failCurrent()
+      expect(document.querySelector('.pb-retry')).toBeNull()
+      expect(store.currentSong.title).not.toBe(before)
+    }
+    expect(store.currentSong.title).toBe('曲目4')
+
+    // 连着失败太多次：不再自动跳，把错误交回给用户（避免整列坏歌时空转）
+    await failCurrent()
+    expect(document.querySelector('.pb-retry')).not.toBeNull()
+    expect(store.currentSong.title).toBe('曲目4')
+  })
+
+  it('单曲循环下不开自动跳过（不能替用户放弃重复播放）', async () => {
+    const store = await mountPlayer()
+    store.playAll([
+      { ...song(1, '霓虹海', 240), isCustomSource: true },
+      song(2, '云端信使', 240)
+    ], 1)
+    store.setMode('single')
+    store.setAutoSkipOnError(true)
+    await flush()
+    const [nativeAudio] = document.querySelectorAll('audio')
+    Object.defineProperty(nativeAudio, 'error', { value: { code: 4 }, configurable: true })
+    nativeAudio.dispatchEvent(new Event('error'))
+    await flush()
+    expect(store.currentSong.title).toBe('霓虹海') // 停在原地
+    expect(document.querySelector('.pb-retry')).not.toBeNull()
+    expect(document.querySelector('.pb-skip-failed')).not.toBeNull() // 手动仍可跳
+  })
+
+  it('缓冲卡死且开着自动跳过时，会自己挪到下一首', async () => {
+    vi.useFakeTimers()
+    try {
+      const store = await mountPlayer()
+      store.playAll([song(1, '霓虹海', 240), song(2, '云端信使', 240), song(3, '全息之恋', 240)], 1)
+      store.setAutoSkipOnError(true)
+      await flush()
+      const [nativeAudio] = document.querySelectorAll('audio')
+      Object.defineProperty(nativeAudio, 'paused', { value: false, configurable: true })
+      Object.defineProperty(nativeAudio, 'readyState', { value: 2, configurable: true })
+      store.playing = true
+      await flush()
+
+      // 每首都会卡 8 秒 × 3 次重试后判定失败，然后自动跳过；连着坏太多就停手。
+      for (let i = 0; i < 16; i += 1) {
+        vi.advanceTimersByTime(12000)
+        await flush()
+      }
+      expect(store.currentSong.title).not.toBe('霓虹海')
+      expect(document.querySelector('.pb-retry')).not.toBeNull() // 用尽机会后回到手动
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('队列条目可用键盘操作：回车播放、Delete 移除、Alt+方向键移动', async () => {
     const store = await mountPlayer()
     store.playAll([song(1, '霓虹海'), song(2, '云端信使'), song(3, '全息之恋')], 1)

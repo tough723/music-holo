@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { MODES, PLAY_STATS_LIMIT, normalizePlayStats, usePlayerStore } from '../src/store/player.js'
-import { heartWeight, nextHeartIndex, nextShuffleIndex, pickWeightedIndex, shuffleList } from '../src/utils/playMode.js'
+import {
+  heartWeight,
+  nextHeartIndex,
+  nextIndexAfterFailure,
+  nextShuffleIndex,
+  pickWeightedIndex,
+  shuffleList
+} from '../src/utils/playMode.js'
 
 const song = (id, title) => ({
   id,
@@ -168,5 +175,25 @@ describe('播放模式：不重复随机 / 心动模式', () => {
       heartWeight({ isFavorite: false, stats: { count: 0, skipped: 5 } })
     )
     expect(heartWeight({ stats: { skipped: 100 } })).toBeGreaterThan(0)
+  })
+})
+
+describe('播放失败后跳到下一首的兜底下标', () => {
+  it('顺序模式到队尾就没有下一首，其余模式绕回队首', () => {
+    expect(nextIndexAfterFailure({ queueLength: 4, currentIndex: 1, mode: 'order' })).toBe(2)
+    expect(nextIndexAfterFailure({ queueLength: 4, currentIndex: 3, mode: 'order' })).toBe(-1)
+    expect(nextIndexAfterFailure({ queueLength: 4, currentIndex: 3, mode: 'loop' })).toBe(0)
+    expect(nextIndexAfterFailure({ queueLength: 4, currentIndex: 3, mode: 'single' })).toBe(0)
+    expect(nextIndexAfterFailure({ queueLength: 4, currentIndex: 0, mode: 'single' })).toBe(1)
+  })
+
+  it('只有一首歌或下标非法时没有下一首', () => {
+    expect(nextIndexAfterFailure({ queueLength: 1, currentIndex: 0, mode: 'loop' })).toBe(-1)
+    expect(nextIndexAfterFailure({ queueLength: 0, currentIndex: 0, mode: 'order' })).toBe(-1)
+    expect(nextIndexAfterFailure({ queueLength: 4, currentIndex: 9, mode: 'loop' })).toBe(-1)
+    expect(nextIndexAfterFailure({ queueLength: 4, currentIndex: -1, mode: 'loop' })).toBe(-1)
+    expect(nextIndexAfterFailure({})).toBe(-1)
+    expect(nextIndexAfterFailure()).toBe(-1)
+    expect(nextIndexAfterFailure({ queueLength: 'x', currentIndex: 0 })).toBe(-1)
   })
 })

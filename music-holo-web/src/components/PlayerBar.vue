@@ -146,6 +146,11 @@
             <el-icon><RefreshRight /></el-icon>
           </el-button>
         </el-tooltip>
+        <el-tooltip v-if="audioError && canSkipFailed" content="跳过这首，播放队列里的下一首" placement="top">
+          <el-button class="pb-skip-failed" circle text aria-label="播放失败，跳到下一首" @click="skipFailedSong">
+            <el-icon><DArrowRight /></el-icon>
+          </el-button>
+        </el-tooltip>
       </div>
       <div class="pb-progress">
         <span class="pb-time">{{ fmtDuration(displayTime) }}</span>
@@ -600,6 +605,10 @@
         <el-button size="small" type="danger" plain :disabled="playerStore.queue.length === 0" @click="clearQueue">
           清空队列
         </el-button>
+        <label class="queue-auto-skip">
+          <input v-model="autoSkipOnError" type="checkbox">
+          <span>播放失败自动跳下一首</span>
+        </label>
       </div>
     </div>
     <el-dialog v-model="playlistPickerVisible" title="把选中的歌曲加入歌单" width="min(440px, calc(100vw - 32px))" append-to-body>
@@ -783,6 +792,7 @@ import * as playlistApi from '@/api/playlist'
 import { fmtDuration } from '@/utils/format'
 import { MEDIA_ERR_NETWORK, isPlaybackStalled, isTransientAudioError, nextRetryDelay, hasProgress } from '@/utils/audioRetry'
 import { nextPreloadIndex, shouldPreloadNext } from '@/utils/audioPreload'
+import { nextIndexAfterFailure } from '@/utils/playMode'
 import {
   describeQueueSaveResult,
   partitionQueueForPlaylist,
@@ -1986,6 +1996,76 @@ watch(
 )
 
 /**
+ * 播放失败后的「跳到下一首」。
+ * 自动重试机会用尽后，与其停在错误态等人来点，不如给一条明确的出路；
+ * 是否自动跳由队列面板里的开关决定（默认关），连续失败 3 次后不再自动跳，
+ * 避免整列都是坏歌时一圈圈空转。
+ */
+const AUTO_SKIP_MAX_CONSECUTIVE = 3
+const consecutiveFailures = ref(0)
+
+/** 队列里是否还有别的歌可跳：随机类模式交给 next() 抽，其余按位置判定。 */
+const canSkipFailed = computed(() => {
+  if (!audioError.value) return false
+  const length = playerStore.queue.length
+  if (length <= 1) return false
+  const mode = playerStore.mode
+  if (mode === 'random' || mode === 'shuffle' || mode === 'heart') return true
+  return nextIndexAfterFailure({ queueLength: length, currentIndex: playerStore.currentIndex, mode }) >= 0
+})
+
+const autoSkipOnError = computed({
+  get: () => playerStore.autoSkipOnError,
+  set: (enabled) => playerStore.setAutoSkipOnError(enabled)
+})
+
+/**
+ * 失败收口：能自动跳就跳，否则把错误交回给用户。
+ * @returns {boolean} 是否已经自动跳走（true 时调用方不要再弹错误提示）
+ */
+function autoSkipIfEnabled() {
+  if (
+    playerStore.autoSkipOnError &&
+    playerStore.mode !== 'single' &&
+    consecutiveFailures.value <= AUTO_SKIP_MAX_CONSECUTIVE &&
+    canSkipFailed.value
+  ) {
+    skipFailedSong({ auto: true })
+    return true
+  }
+  return false
+}
+
+function skipFailedSong({ auto = false } = {}) {
+  const failed = currentSong.value
+  const fromIndex = playerStore.currentIndex
+  // next() 是异步的（要等歌词），但 currentIndex 是同步就改的：按它判断是否真的动了。
+  const advancing = playerStore.next()
+  if (advancing && typeof advancing.catch === 'function') advancing.catch(() => {})
+  let moved = playerStore.currentIndex !== fromIndex
+  if (!moved) {
+    // next() 在单曲循环、顺序模式到队尾时不前进，这里按位置强行往后挪一格。
+    const index = nextIndexAfterFailure({
+      queueLength: playerStore.queue.length,
+      currentIndex: playerStore.currentIndex,
+      mode: playerStore.mode
+    })
+    if (index >= 0) {
+      const started = playerStore.playAt(index)
+      if (started && typeof started.catch === 'function') started.catch(() => {})
+      moved = true
+    }
+  }
+  resetAutoRetry()
+  audioError.value = false
+  if (!moved) {
+    ElMessage.info('后面没有别的歌了')
+    return
+  }
+  ElMessage.info(auto ? `《${failed?.title || '当前歌曲'}》播放失败，已跳到下一首` : `已跳过《${failed?.title || '当前歌曲'}》`)
+}
+
+/**
  * 缓冲卡死的兜底：浏览器在连接中断时常常既不报错也不前进，
  * 只留一个转圈的 buffering。检测到长时间没有进展就当成一次网络中断重新加载。
  */
@@ -2025,6 +2105,8 @@ function checkPlaybackStall() {
   if (hasProgress(lastProgressTime, audio.currentTime)) {
     lastProgressTime = audio.currentTime
     stallSince = 0
+    // 真的在往前播了：这一首没坏，连续失败计数清零。
+    consecutiveFailures.value = 0
     return
   }
   const now = Date.now()
@@ -2047,7 +2129,10 @@ function recoverFromStall(song) {
   }
   audioError.value = true
   buffering.value = false
-  ElMessage.warning(`《${song.title}》缓冲卡住了，可点播放器上的重试按钮再试一次`)
+  consecutiveFailures.value += 1
+  if (autoSkipIfEnabled()) return
+  const tail = canSkipFailed.value ? '重试，或点箭头跳到下一首' : '重试按钮再试一次'
+  ElMessage.warning(`《${song.title}》缓冲卡住了，可点播放器上的${tail}`)
 }
 
 function retryAudio() {
@@ -2901,10 +2986,14 @@ function reportAudioLoadFailure(song, code) {
     return
   }
   audioError.value = true
+  consecutiveFailures.value += 1
+  // 自动跳过只在「用户开了开关 + 不是单曲循环 + 还没连着失败太多次 + 确实有下一首」时生效。
+  if (autoSkipIfEnabled()) return
   if (song?.isCustomSource) {
     ElMessage.error(`《${song.title}》加载失败：链接可能已过期，或音频站未开放匿名 CORS`)
   } else if (song) {
-    ElMessage.error(`《${song.title}》音频加载失败，可点播放器上的重试按钮再试一次`)
+    const tail = canSkipFailed.value ? '重试，或点箭头跳到下一首' : '重试按钮再试一次'
+    ElMessage.error(`《${song.title}》音频加载失败，可点播放器上的${tail}`)
   }
 }
 
@@ -3766,6 +3855,9 @@ watch(() => userStore.isLogin, (loggedIn) => {
 .pb-retry {
   color: #ffb4a2;
 }
+.pb-skip-failed {
+  color: #ffd479;
+}
 .pb-play.is-buffering {
   color: var(--holo-primary);
 }
@@ -3915,6 +4007,21 @@ watch(() => userStore.isLogin, (loggedIn) => {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+.queue-auto-skip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-sub);
+  cursor: pointer;
+  user-select: none;
+}
+.queue-auto-skip input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--holo-primary, #38bdf8);
+  cursor: pointer;
 }
 .queue-batch-note {
   color: var(--text-sub);

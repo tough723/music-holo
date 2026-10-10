@@ -96,3 +96,23 @@ export function heartWeight({ isFavorite = false, stats = null } = {}) {
     Math.min(1.5, skipped * 0.3)
   return Math.max(0.2, Math.round(weight * 100) / 100)
 }
+
+/**
+ * 播放失败后「跳到下一首」的兜底下标。
+ *
+ * next() 会按模式与不喜欢规则选曲，单曲循环或顺序播放到队尾时它不前进；
+ * 用户明确点了「跳到下一首」时，卡在一首坏掉的歌上更糟，所以这里按位置强行往后挪。
+ * 顺序模式到队尾就是真的没有下一首（-1），其余模式绕回队首。
+ *
+ * @param {{ queueLength?: number, currentIndex?: number, mode?: string }} options
+ * @returns {number} 下一首下标，没有则返回 -1
+ */
+export function nextIndexAfterFailure(options = {}) {
+  const { queueLength = 0, currentIndex = -1, mode = 'order' } = options
+  const length = Number(queueLength)
+  const index = Number(currentIndex)
+  if (!Number.isInteger(length) || length <= 1) return -1
+  if (!Number.isInteger(index) || index < 0 || index >= length) return -1
+  if (mode === 'order' && index >= length - 1) return -1
+  return (index + 1) % length
+}
