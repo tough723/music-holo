@@ -47,7 +47,7 @@
       <div class="results-heading">
         <div>
           <div class="section-title">“{{ results.keyword || route.query.q }}” 的搜索结果</div>
-          <div class="minor-title">歌曲 {{ results.songs.length }} · 歌手 {{ results.singers.length }} · 歌单 {{ results.playlists.length }}</div>
+          <div class="minor-title">本站歌曲 {{ results.songs.length }} · 歌手 {{ results.singers.length }} · 歌单 {{ results.playlists.length }} · 在线平台 {{ onlineResults.length }}</div>
         </div>
         <el-button text type="primary" @click="router.push('/charts')">
           <el-icon><TrendCharts /></el-icon> 去排行榜发现
@@ -65,7 +65,7 @@
             @toggle-favorite="onToggleFavorite"
             @add-queue="onAddQueue"
           />
-          <el-empty v-else description="没有找到相关歌曲，试试歌词中的另一段文字。" :image-size="90" />
+          <el-empty v-else description="本站曲库未找到相关歌曲；可以切换到“在线平台”搜索实时平台曲目。" :image-size="90" />
         </el-tab-pane>
         <el-tab-pane :label="`歌手 ${results.singers.length}`" name="singers">
           <div v-if="results.singers.length" class="entity-grid">
@@ -87,43 +87,41 @@
           </div>
           <el-empty v-else description="没有找到公开歌单。" :image-size="90" />
         </el-tab-pane>
+        <el-tab-pane :label="`在线平台 ${onlineResults.length}`" name="online">
+          <div class="online-tab-toolbar">
+            <div class="online-actions">
+              <el-select v-model="onlinePlatform" size="small" aria-label="在线搜索平台" style="width: 150px">
+                <el-option label="网易云音乐" value="wy" />
+                <el-option label="酷我音乐" value="kw" />
+                <el-option label="酷狗音乐" value="kg" />
+                <el-option label="咪咕音乐" value="mg" />
+              </el-select>
+              <el-button size="small" type="primary" :loading="onlineLoading" @click="loadOnlineResults">搜索在线平台</el-button>
+            </div>
+            <span class="minor-title">{{ onlinePlatformName }} · {{ onlineLoaded ? '已加载' : '等待搜索' }}</span>
+          </div>
+          <div v-if="onlineError" class="online-error">{{ onlineError }}</div>
+          <div v-else-if="onlineResults.length" class="online-results" aria-label="在线平台结果">
+            <div v-for="track in onlineResults" :key="`${track.platform}-${track.musicInfo?.id || track.musicInfo?.songmid || track.name}`" class="online-track">
+              <div class="online-track-copy">
+                <strong>{{ track.name }}</strong>
+                <span>{{ track.singer || '未知歌手' }}<template v-if="track.album"> · {{ track.album }}</template></span>
+              </div>
+              <el-button size="small" type="primary" :loading="onlinePlaying === track" @click="playOnline(track)">播放</el-button>
+            </div>
+          </div>
+          <el-empty v-else-if="onlineLoaded" description="在线平台未找到曲目" :image-size="70" />
+          <div v-else class="online-hint">切换或点击“搜索在线平台”加载实时平台结果。</div>
+        </el-tab-pane>
       </el-tabs>
     </section>
 
-    <section v-if="route.query.q" class="online-panel glass-panel">
-      <div class="results-heading">
-        <div>
-          <div class="section-title">在线平台结果</div>
-          <div class="minor-title">通过公开平台适配器搜索；播放时使用已导入的自动音源解析地址。</div>
-        </div>
-        <div class="online-actions">
-          <el-select v-model="onlinePlatform" size="small" aria-label="在线搜索平台" style="width: 150px">
-            <el-option label="网易云音乐" value="wy" />
-            <el-option label="酷我音乐" value="kw" />
-            <el-option label="酷狗音乐" value="kg" />
-            <el-option label="咪咕音乐" value="mg" />
-          </el-select>
-          <el-button type="primary" size="small" :loading="onlineLoading" @click="loadOnlineResults">搜索平台</el-button>
-        </div>
-      </div>
-      <div v-if="onlineError" class="online-error">{{ onlineError }}</div>
-      <div v-else-if="onlineResults.length" class="online-results" aria-label="在线平台结果">
-        <div v-for="track in onlineResults" :key="`${track.platform}-${track.musicInfo?.id || track.musicInfo?.songmid || track.name}`" class="online-track">
-          <div class="online-track-copy">
-            <strong>{{ track.name }}</strong>
-            <span>{{ track.singer || '未知歌手' }}<template v-if="track.album"> · {{ track.album }}</template></span>
-          </div>
-          <el-button size="small" type="primary" :loading="onlinePlaying === track" @click="playOnline(track)">播放</el-button>
-        </div>
-      </div>
-      <el-empty v-else-if="onlineLoaded" description="在线平台没有返回结果" :image-size="70" />
-      <div v-else class="online-hint">输入关键词后点击“搜索平台”，即可查找不在本站演示曲库中的歌曲。</div>
-    </section>
+
   </div>
 </template>
 
 <script setup>
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import * as searchApi from '@/api/search'
@@ -154,6 +152,7 @@ const onlineLoading = ref(false)
 const onlineLoaded = ref(false)
 const onlineError = ref('')
 const onlinePlaying = ref(null)
+const onlinePlatformName = computed(() => ({ wy: '网易云音乐', kw: '酷我音乐', kg: '酷狗音乐', mg: '咪咕音乐' }[onlinePlatform.value] || onlinePlatform.value))
 
 const readRecent = () => {
   if (!preferences.rememberSearchHistory) {
@@ -222,6 +221,7 @@ watch(() => route.query.q, (value) => {
   onlineResults.value = []
   onlineLoaded.value = false
   onlineError.value = ''
+  activeTab.value = 'songs'
   loadResults(value)
   if (String(value || '').trim()) loadOnlineResults()
 }, { immediate: true })
@@ -251,6 +251,7 @@ const loadOnlineResults = async () => {
   try {
     await bootstrapOnlineSources()
     onlineResults.value = await searchOnlineTracks(onlinePlatform.value, q, { limit: 10 })
+    if (!results.value.songs.length && onlineResults.value.length) activeTab.value = 'online'
   } catch (error) {
     onlineResults.value = []
     onlineError.value = error?.message || '在线平台搜索失败，请检查网络或浏览器跨域授权'
@@ -375,6 +376,7 @@ h1 {
 .result-tabs :deep(.el-tabs__content) {
   padding-top: 4px;
 }
+.online-tab-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .online-panel {
   padding: 22px 30px;
   border-radius: 18px;

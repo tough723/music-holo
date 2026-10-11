@@ -4,12 +4,17 @@
       <div>
         <div class="eyebrow"><el-icon><TrendCharts /></el-icon> HOLO CHARTS</div>
         <h1>此刻，大家正在听</h1>
-        <p>这是本站曲库的播放量榜，不是第三方平台的实时榜。点前三名或下面的列表都会从这一榜开始播放。</p>
+        <p>默认展示在线平台实时榜单；切换到“本站播放榜”可查看 Music Holo 本地曲库热度。</p>
       </div>
       <div class="hero-mark"><el-icon><Headset /></el-icon></div>
     </section>
 
     <section class="chart-panel glass-panel">
+      <div class="chart-source-tabs" role="tablist" aria-label="排行榜来源">
+        <el-button :type="chartSource === 'online' ? 'primary' : 'default'" @click="chartSource = 'online'">在线平台榜单</el-button>
+        <el-button :type="chartSource === 'local' ? 'primary' : 'default'" @click="chartSource = 'local'">本站播放榜</el-button>
+      </div>
+      <template v-if="chartSource === 'local'">
       <div class="chart-heading">
         <div>
           <div class="section-title">{{ selectedName }}</div>
@@ -48,15 +53,22 @@
         @add-queue="onAddQueue"
       />
       <el-empty v-if="!loading && songs.length === 0" description="这个分类暂时还没有歌曲。" :image-size="100" />
+      </template>
     </section>
 
-    <section class="chart-panel glass-panel online-chart-panel">
+    <section v-if="chartSource === 'online'" class="chart-panel glass-panel online-chart-panel">
       <div class="chart-heading">
         <div>
           <div class="section-title">在线平台榜单</div>
-          <div class="section-sub">默认尝试加载网易云公开榜单；播放时使用已导入的自动音源解析。</div>
+          <div class="section-sub">动态读取平台公开榜单，不是本站固定播放榜。</div>
         </div>
-        <el-button size="small" :loading="onlineLoading" @click="loadOnlineCharts">刷新在线榜单</el-button>
+        <div class="online-chart-actions">
+          <el-select v-model="onlinePlatform" size="small" aria-label="在线榜单平台" style="width: 150px" @change="loadOnlineCharts">
+            <el-option label="网易云音乐" value="wy" />
+            <el-option label="酷我音乐" value="kw" />
+          </el-select>
+          <el-button size="small" :loading="onlineLoading" @click="loadOnlineCharts">刷新榜单</el-button>
+        </div>
       </div>
       <div v-if="onlineError" class="online-error">{{ onlineError }}</div>
       <template v-else>
@@ -69,7 +81,8 @@
             <el-button size="small" type="primary" :loading="onlinePlaying === track" @click="playOnlineTrack(track)">播放</el-button>
           </div>
         </div>
-        <el-empty v-else-if="onlineLoaded" description="暂无在线榜单曲目" :image-size="70" />
+        <el-empty v-if="onlineLoaded && !onlineCharts.length" description="该平台没有返回可用榜单" :image-size="70" />
+        <el-empty v-else-if="onlineLoaded && onlineChartId && !onlineTracks.length" description="该榜单没有返回曲目" :image-size="70" />
       </template>
     </section>
   </div>
@@ -98,6 +111,8 @@ const categoryId = ref(null)
 const selectedName = computed(() => categoryId.value === null
   ? '全站热歌榜'
   : `${categories.value.find((item) => item.id === categoryId.value)?.name || '分类'}热歌榜`)
+const chartSource = ref('online')
+const onlinePlatform = ref('wy')
 const onlineCharts = ref([])
 const onlineChartId = ref('')
 const onlineTracks = ref([])
@@ -134,7 +149,7 @@ const loadOnlineCharts = async () => {
   onlineLoaded.value = false
   try {
     await bootstrapOnlineSources()
-    onlineCharts.value = await listOnlineCharts('wy')
+    onlineCharts.value = await listOnlineCharts(onlinePlatform.value)
     onlineChartId.value = onlineCharts.value[0]?.id || ''
     if (onlineChartId.value) await loadOnlineTracks()
   } catch (error) {
@@ -148,7 +163,7 @@ const loadOnlineCharts = async () => {
 }
 const loadOnlineTracks = async () => {
   if (!onlineChartId.value) return
-  try { onlineTracks.value = await fetchOnlineChartTracks('wy', onlineChartId.value, { limit: 20 }) } catch (error) { onlineError.value = error?.message || '在线榜单曲目加载失败' }
+  try { onlineTracks.value = await fetchOnlineChartTracks(onlinePlatform.value, onlineChartId.value, { limit: 20 }) } catch (error) { onlineError.value = error?.message || '在线榜单曲目加载失败' }
 }
 const playOnlineTrack = async (track) => {
   onlinePlaying.value = track
@@ -195,6 +210,7 @@ onMounted(async () => {
   padding: 26px 30px;
   border-radius: 18px;
 }
+.chart-source-tabs { display: flex; gap: 10px; margin-bottom: 16px; }
 .charts-hero {
   display: flex;
   align-items: center;
@@ -246,6 +262,7 @@ h1 {
   margin-top: 6px;
 }
 .online-chart-panel { margin-top: 0; }
+.online-chart-actions { display: flex; align-items: center; gap: 8px; }
 .online-chart-tracks { display: grid; gap: 8px; margin-top: 14px; }
 .online-chart-track { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 10px; }
 .online-error { color: var(--el-color-danger); font-size: 13px; margin: 10px 0; }
