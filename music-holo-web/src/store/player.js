@@ -241,9 +241,14 @@ function loadPersisted() {
 }
 
 function persist(state) {
-  // Local blobs and custom-source signed URLs are session-only; never persist them.
-  const persistentQueue = state.queue.filter((song) => !song?.isLocal && !song?.isCustomSource)
+  // 本地 blob 与自定义源签名 URL 不落盘；在线曲目只保留平台引用，地址下次重新解析。
+  const persistentQueue = state.queue
+    .filter((song) => !song?.isLocal && (!song?.isCustomSource || song?.onlineQueueReference))
+    .map((song) => song?.isCustomSource && song?.onlineQueueReference
+      ? { ...song, audioUrl: '', onlineQueueReference: { ...song.onlineQueueReference, audioUrl: '' } }
+      : song)
   const currentSong = state.currentIndex >= 0 ? state.queue[state.currentIndex] : null
+  // 在线曲目可持久化身份，但临时地址清空后不能在冷启动时假装可直接播放。
   const hasTransientCurrent = Boolean(currentSong?.isLocal || currentSong?.isCustomSource)
   const currentIndex = currentSong && !hasTransientCurrent
     ? persistentQueue.findIndex((song) => song.id === currentSong.id)
@@ -289,8 +294,8 @@ export const usePlayerStore = defineStore('player', {
     const saved = loadPersisted()
     const persistedQueue = Array.isArray(saved.queue) ? saved.queue : []
     const persistedCurrentSong = Number.isInteger(saved.currentIndex) ? persistedQueue[saved.currentIndex] : null
-    const queue = persistedQueue.filter((song) => !song?.isLocal && !song?.isCustomSource)
-    const currentIndex = persistedCurrentSong && !persistedCurrentSong.isLocal && !persistedCurrentSong.isCustomSource
+    const queue = persistedQueue.filter((song) => !song?.isLocal && (!song?.isCustomSource || song?.onlineQueueReference))
+    const currentIndex = persistedCurrentSong && !persistedCurrentSong.isLocal && (!persistedCurrentSong.isCustomSource || persistedCurrentSong.onlineQueueReference)
       ? queue.findIndex((song) => song.id === persistedCurrentSong.id)
       : -1
     const priorityNextIndex = currentIndex >= 0 ? currentIndex + 1 : 0
@@ -303,7 +308,9 @@ export const usePlayerStore = defineStore('player', {
       : null
     return {
       /** 本地播放队列（持久化） */
-      queue,
+      queue: queue.map((song) => song?.isCustomSource && song?.onlineQueueReference
+        ? { ...song, audioUrl: '' }
+        : song),
       currentIndex,
       /** 用户指定的单次下一首优先项 */
       priorityNextSongId,

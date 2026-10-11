@@ -201,6 +201,28 @@ describe('本地音乐播放', () => {
     expect(lyricRequest).not.toHaveBeenCalled()
   })
 
+  it('在线自定义源只持久化平台引用，不持久化临时音频地址', async () => {
+    const onlineTrack = {
+      id: 'online-wy-123',
+      title: '实时曲目',
+      audioUrl: 'https://media.example.test/signed/short-lived',
+      isCustomSource: true,
+      onlineQueueReference: {
+        platform: 'wy',
+        platformTrackId: '123',
+        musicInfo: { id: '123' },
+        audioUrl: 'https://media.example.test/signed/short-lived',
+        audioExpiresAt: Date.now() + 60000
+      }
+    }
+    const player = usePlayerStore()
+    player.queue = [onlineTrack]
+    await player.playAt(0)
+    const saved = JSON.parse(localStorage.getItem('mh_player'))
+    expect(saved.queue[0]).toMatchObject({ id: 'online-wy-123', onlineQueueReference: { platform: 'wy', platformTrackId: '123', audioUrl: '' } })
+    expect(JSON.stringify(saved)).not.toContain('signed/short-lived')
+  })
+
   it('清空或替换队列时释放残留的本地 Blob URL', async () => {
     const revokeObjectURL = vi.fn()
     vi.stubGlobal('URL', {
