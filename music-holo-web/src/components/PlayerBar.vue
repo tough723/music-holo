@@ -144,8 +144,8 @@
             <el-icon v-else><Histogram /></el-icon>
           </el-button>
         </el-tooltip>
-        <el-tooltip v-if="audioError" content="重新加载当前音频" placement="top">
-          <el-button class="pb-retry" circle text aria-label="重新加载当前音频" @click="retryAudio">
+        <el-tooltip v-if="audioError" :content="currentSong?.isCustomSource ? '临时音频地址可能已过期，重新解析当前音频' : '重新加载当前音频'" placement="top">
+          <el-button class="pb-retry" circle text :aria-label="currentSong?.isCustomSource ? '重新解析当前在线音频' : '重新加载当前音频'" @click="retryAudio">
             <el-icon><RefreshRight /></el-icon>
           </el-button>
         </el-tooltip>
