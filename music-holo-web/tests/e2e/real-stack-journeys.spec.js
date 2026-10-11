@@ -29,7 +29,7 @@ async function apiIn(page, method, path, body) {
 
 async function playNeonSea(page) {
   await page.goto('/search?q=霓虹海')
-  const songRow = page.locator('.result-tabs .el-tab-pane.is-active .el-table__row').filter({ hasText: '霓虹海' }).first()
+  const songRow = page.locator('.result-tabs .el-table__row').filter({ hasText: '霓虹海' }).first()
   await expect(songRow).toBeVisible({ timeout: 15_000 })
   await songRow.getByRole('button', { name: '播放《霓虹海》' }).click()
   await expect(page.locator('.player-bar .pb-title')).toHaveText('霓虹海')

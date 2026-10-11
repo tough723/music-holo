@@ -241,7 +241,7 @@ const onAddQueue = (song) => {
   ElMessage.success(`已加入播放队列：《${song.title}》`)
 }
 
-const loadOnlineResults = async (platform = activeOnlinePlatform.value, force = false) => {
+async function loadOnlineResults(platform = activeOnlinePlatform.value, force = false) {
   const q = String(route.query.q || keyword.value || '').trim()
   if (!q || !onlineStateByPlatform[platform] || (onlineStateByPlatform[platform].loaded && !force)) return
   const generation = onlineSearchGeneration
