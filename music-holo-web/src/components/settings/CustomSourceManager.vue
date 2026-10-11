@@ -96,10 +96,10 @@
               <h3>{{ source.name }}</h3>
               <el-tag size="small" effect="plain">v{{ source.version }}</el-tag>
               <el-tag v-if="!compatibilityBySource[source.id]" size="small" type="info" effect="plain">已导入 · 自动初始化中</el-tag>
-              <el-tag v-else-if="!compatibilityBySource[source.id].error" size="small" type="success" effect="plain">隔离检测通过</el-tag>
+              <el-tag v-else-if="compatibilityBySource[source.id].error" size="small" type="danger" effect="plain">检测失败</el-tag>
+              <el-tag v-else size="small" type="success" effect="plain">隔离检测通过</el-tag>
               <el-tag v-if="source.autoRun !== false" size="small" type="warning" effect="plain">自动运行已启用</el-tag>
               <el-tag v-if="source.autoApproveNetwork !== false" size="small" type="danger" effect="plain">公网请求自动授权</el-tag>
-              <el-tag v-else size="small" type="danger" effect="plain">检测失败</el-tag>
             </div>
             <p v-if="source.description" class="source-description">{{ source.description }}</p>
             <p v-else class="source-description source-filename">{{ source.fileName }}</p>
@@ -122,6 +122,7 @@
           </div>
           <div class="source-file-actions">
             <el-button text size="small" :loading="checkingSourceId === source.id" :aria-label="`隔离兼容检测 ${source.name}`" @click="checkCompatibility(source)">兼容检测</el-button>
+            <el-button text size="small" :type="source.autoRun !== false ? 'warning' : 'primary'" @click="toggleSourceAutomation(source)">{{ source.autoRun !== false ? '关闭自动模式' : '启用自动模式' }}</el-button>
             <el-button text size="small" @click="renameSource(source)">重命名</el-button>
             <el-button text size="small" @click="toggleSourceCode(source.id)">{{ expandedSourceId === source.id ? '收起代码' : '查看代码' }}</el-button>
             <el-button text size="small" @click="exportSource(source)">导出</el-button>
@@ -418,6 +419,28 @@ function persist(nextSources) {
   }
   sources.value = nextSources
   return true
+}
+
+async function toggleSourceAutomation(source) {
+  const enabling = source.autoRun === false
+  if (enabling) {
+    try {
+      await ElMessageBox.confirm(
+        `启用后「${source.name}」会在应用启动时自动执行，并自动允许其访问合法公网 HTTPS 域名。仍不会携带 Cookie、令牌或访问内网。`,
+        '启用音源自动模式',
+        { type: 'warning', confirmButtonText: '启用自动模式', cancelButtonText: '保持关闭', closeOnClickModal: false }
+      )
+    } catch { return }
+  }
+  const next = sources.value.map((item) => item.id === source.id
+    ? { ...item, autoRun: enabling, autoApproveNetwork: enabling ? item.autoApproveNetwork !== false : false }
+    : item)
+  persist(next)
+  if (enabling) {
+    ElMessage.success(`已启用「${source.name}」自动运行`)
+  } else {
+    ElMessage.info(`已关闭「${source.name}」自动运行与自动授权`)
+  }
 }
 
 function openFilePicker() {
