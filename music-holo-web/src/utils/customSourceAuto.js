@@ -2,6 +2,7 @@ import { createCustomSourceSession, runCustomSourceCompatibility, validateCustom
 import { createCustomSourceRequestBridge } from './customSourceConsent'
 import { customSourceStorageKeyForOwner, readCustomSources } from './customSources'
 import { desktopMediaUrl } from './desktopSource'
+import { createOnlineQueueReference } from './onlineQueue'
 
 const capabilityCache = new Map()
 const sessionCache = new Map()
@@ -95,13 +96,22 @@ export async function resolveAutoTrack(track, { quality = '320k' } = {}) {
   if (platform.actions.includes('pic')) {
     try { cover = String(await session.request({ source: platformKey, action: 'pic', info: { musicInfo } }) || '') } catch { /* optional */ }
   }
+  const resolvedAt = Date.now()
+  const audioUrl = await desktopMediaUrl(media.href)
+  const onlineQueueReference = createOnlineQueueReference(track, {
+    sourceId: source.id,
+    sourceName: source.name,
+    audioUrl,
+    resolvedAt
+  })
   return {
     id: `online-${platformKey}-${musicInfo.id || musicInfo.songmid || musicInfo.hash || Date.now()}`,
+    onlineQueueReference,
     title: musicInfo.title || '在线曲目',
     singerName: musicInfo.singerName || '未知歌手',
     album: musicInfo.albumName || '',
     cover,
-    audioUrl: await desktopMediaUrl(media.href),
+    audioUrl,
     audioOrigin: media.origin,
     customLyrics: lyricBundle.lines,
     customTranslationLyrics: lyricBundle.translationLines,
