@@ -53,6 +53,9 @@
           {{ currentSong?.title || '暂无播放' }}
         </div>
         <div class="pb-artist">{{ currentSong?.singerName || 'Music Holo' }}</div>
+        <div v-if="currentSong?.isCustomSource || currentSong?.sourcePlatform" class="pb-source-badge" :title="sourceStatusLabel">
+          <span class="pb-source-dot" aria-hidden="true"></span>{{ sourceStatusLabel }}
+        </div>
       </div>
       <el-tooltip v-if="currentSong && !currentSong.isLocal && !currentSong.isCustomSource" :content="isFav ? '取消收藏' : '收藏'" placement="top">
         <el-button
@@ -1182,6 +1185,13 @@ let resumeSavedAt = 0
 const currentSong = computed(() => playerStore.currentSong)
 const playing = computed(() => playerStore.playing)
 const hasSong = computed(() => !!currentSong.value)
+const sourceStatusLabel = computed(() => {
+  const song = currentSong.value
+  if (!song) return ''
+  if (song.sourcePlatform && song.sourceName) return `${song.sourcePlatform} · ${song.sourceName}`
+  if (song.sourcePlatform) return song.sourcePlatform
+  return song.sourceName || '自定义源'
+})
 const sleepTimerActive = computed(() => playerStore.sleepTimerMode !== null)
 const sleepTimerRemainingSeconds = computed(() => {
   if (playerStore.sleepTimerMode !== 'duration' || !playerStore.sleepTimerEndAt) return 0
@@ -3759,6 +3769,25 @@ watch(() => userStore.isLogin, (loggedIn) => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.pb-source-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 220px;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--holo-primary) 76%, var(--text-sub));
+  font-size: 10px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.pb-source-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: var(--holo-primary);
+  box-shadow: 0 0 9px var(--holo-glow);
 }
 .pb-fav,
 .pb-radio {
