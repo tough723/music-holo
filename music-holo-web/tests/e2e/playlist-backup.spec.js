@@ -11,7 +11,7 @@ async function loginAs(page, username) {
 
 async function openPlaylistPage(page) {
   // Keep the SPA alive so the in-memory Mock token registry is not reset by a hard reload.
-  await page.locator('.sidebar .app-nav-menu').getByRole('menuitem', { name: '歌单' }).click()
+  await page.locator('.sidebar .app-nav-menu').getByRole('menuitem', { name: '歌单', exact: true }).click()
 }
 
 test('账号歌单可导出并预览导入；重名创建私密副本且跳过缺失曲目', async ({ page }) => {

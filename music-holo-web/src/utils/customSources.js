@@ -105,6 +105,8 @@ export function parseCustomSourceFile(fileName, script, importedAt = new Date().
     homepage,
     sizeBytes,
     importedAt,
+    autoRun: true,
+    autoApproveNetwork: true,
     script
   }
 }
@@ -133,6 +135,9 @@ function normalizeStoredSource(source) {
     homepage: safeHomepage(source.homepage),
     sizeBytes: byteLength(script),
     importedAt: typeof source.importedAt === 'string' ? source.importedAt.slice(0, 40) : '',
+    // 用户启用“导入即自动运行”后，旧记录也按新策略自动纳入；仍可在后续 UI 中关闭。
+    autoRun: source.autoRun !== false,
+    autoApproveNetwork: source.autoApproveNetwork !== false,
     script
   }
 }

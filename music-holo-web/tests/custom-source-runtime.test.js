@@ -4,8 +4,11 @@ import {
   MAX_CUSTOM_SOURCE_RESPONSE_BYTES,
   buildCustomSourceMusicInfo,
   mergeCustomSourceMusicInfo,
+  normalizeCustomSourceUpdateAlert,
   normalizeLxSourceCapabilities,
+  parseCustomSourceLyricBundle,
   parseCustomSourceLyrics,
+  parseCustomSourceVerbatimLyrics,
   performCustomSourceRequest,
   validateCustomSourceMediaUrl
 } from '@/utils/customSourceRuntime'
@@ -27,7 +30,6 @@ describe('隔离自定义音源兼容检测', () => {
     })
     expect(info).toEqual({
       musicHoloId: '42',
-      id: '42',
       title: '云端信使',
       name: '云端信使',
       singerName: '星港',
@@ -40,18 +42,23 @@ describe('隔离自定义音源兼容检测', () => {
     expect(() => buildCustomSourceMusicInfo({ id: 1 })).toThrow('缺少有效标题')
   })
 
-  it('合并可选的平台曲目 ID，同时保护曲库标题并拒绝凭据字段', () => {
+  it('合并平台曲目 ID 时允许平台 id/songmid/hash，同时保护曲库标题与 musicHoloId', () => {
     const merged = mergeCustomSourceMusicInfo({ id: 42, title: '云端信使', singerName: '星港' }, JSON.stringify({
       songmid: 'provider-song-42',
-      id: 'attempted-override',
-      title: 'attempted-title-override'
+      id: '347230',
+      hash: 'abc123def456',
+      interval: 326,
+      title: 'attempted-title-override',
+      musicHoloId: 'attempted-id-override'
     }))
     expect(merged).toMatchObject({
-      id: '42',
+      id: '347230',
       musicHoloId: '42',
       title: '云端信使',
       name: '云端信使',
-      songmid: 'provider-song-42'
+      songmid: 'provider-song-42',
+      hash: 'abc123def456',
+      interval: 326
     })
     expect(() => mergeCustomSourceMusicInfo({ id: 1, title: '歌曲' }, '{broken')).toThrow('有效 JSON')
     expect(() => mergeCustomSourceMusicInfo({ id: 1, title: '歌曲' }, '[]')).toThrow('JSON 对象')
@@ -170,6 +177,65 @@ describe('隔离自定义音源兼容检测', () => {
       { time: 1, text: '一' },
       { time: 2, text: '二' }
     ])
+  })
+
+  it('解析 LX 完整歌词包：主歌词、译文、罗马音与逐字', () => {
+    const bundle = parseCustomSourceLyricBundle({
+      lyric: '[00:01.00]海阔天空\\n[00:04.00]原谅我这一生不羁放纵爱自由',
+      tlyric: '[00:01.00]Boundless Oceans, Vast Skies\\n[00:04.00]Forgive me my unruly life',
+      rlyric: '[00:01.00]hai kuo tian kong',
+      lxlyric: '[00:01.00]<0,200>海<200,200>阔<400,200>天<600,200>空'
+    })
+    expect(bundle.lines).toEqual([
+      { time: 1, text: '海阔天空' },
+      { time: 4, text: '原谅我这一生不羁放纵爱自由' }
+    ])
+    expect(bundle.translationLines.map((line) => line.text)).toEqual(['Boundless Oceans, Vast Skies', 'Forgive me my unruly life'])
+    expect(bundle.romajiLines.map((line) => line.text)).toEqual(['hai kuo tian kong'])
+    expect(bundle.verbatimLines).toEqual([{
+      time: 1,
+      words: [
+        { time: 0, duration: 200, text: '海' },
+        { time: 200, duration: 200, text: '阔' },
+        { time: 400, duration: 200, text: '天' },
+        { time: 600, duration: 200, text: '空' }
+      ]
+    }])
+  })
+
+  it('逐字歌词缺失主歌词时用逐字文本合成歌词行', () => {
+    const bundle = parseCustomSourceLyricBundle({ lxlyric: '[00:02.50]<0,150>你<150,150>好' })
+    expect(bundle.lines).toEqual([{ time: 2.5, text: '你好' }])
+    expect(parseCustomSourceVerbatimLyrics('没有逐字标记')).toEqual([])
+  })
+
+  it('updateAlert 必须带 log，更新地址只能是 HTTP(S)，且每次运行只交付一次', () => {
+    expect(() => normalizeCustomSourceUpdateAlert({ updateUrl: 'https://example.org' })).toThrow('缺少 log')
+    // 超长日志按协议截到 1024 字符，而不是让整个解析失败。
+    expect(normalizeCustomSourceUpdateAlert({ log: 'x'.repeat(2000) }).log).toHaveLength(1024)
+    expect(normalizeCustomSourceUpdateAlert({ log: '  修复解析  ', updateUrl: 'https://example.org/v3.js' })).toEqual({
+      log: '修复解析',
+      updateUrl: 'https://example.org/v3.js'
+    })
+    expect(normalizeCustomSourceUpdateAlert({ log: '无地址' })).toEqual({ log: '无地址', updateUrl: '' })
+    expect(() => normalizeCustomSourceUpdateAlert({ log: '坏地址', updateUrl: 'javascript:alert(1)' })).toThrow('HTTP(S)')
+    expect(() => normalizeCustomSourceUpdateAlert({ log: '坏地址', updateUrl: 'file:///tmp/x.js' })).toThrow('HTTP(S)')
+    expect(() => normalizeCustomSourceUpdateAlert(null)).toThrow('格式无效')
+  })
+
+  it('记录音源请求的 openDevTools 调试声明', () => {
+    expect(normalizeLxSourceCapabilities({
+      sources: { wy: { name: '网易云', type: 'music', actions: ['musicUrl'], qualitys: ['320k'] } }
+    }).devToolsRequested).toBe(false)
+    expect(normalizeLxSourceCapabilities({
+      openDevTools: true,
+      sources: { wy: { name: '网易云', type: 'music', actions: ['musicUrl'], qualitys: ['320k'] } }
+    }).devToolsRequested).toBe(true)
+    // 部分第三方脚本使用 openDevMode 变体名。
+    expect(normalizeLxSourceCapabilities({
+      openDevMode: true,
+      sources: { qs: { name: '全民K歌', type: 'music', actions: ['musicUrl'], qualitys: ['128k'] } }
+    }).devToolsRequested).toBe(true)
   })
 
   it('仅接受公网 HTTPS 试听 URL，拒绝内网与可执行协议', () => {

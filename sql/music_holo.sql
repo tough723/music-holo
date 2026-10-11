@@ -86,6 +86,7 @@ CREATE TABLE `song` (
   `lyric_romaji` TEXT                                COMMENT '罗马音歌词内容（LRC 格式，仅用户导入）',
   `status`      TINYINT      DEFAULT 1               COMMENT '状态：0下架 1正常',
   `play_count`  BIGINT       DEFAULT 0               COMMENT '播放量',
+  `loudness`    DECIMAL(6,2) NULL                    COMMENT 'LUFS 实测响度（预扫描未实现前恒为 NULL）',
   `deleted`     TINYINT      DEFAULT 0               COMMENT '逻辑删除',
   `create_time` DATETIME     DEFAULT NULL,
   `update_time` DATETIME     DEFAULT NULL,
@@ -170,6 +171,43 @@ CREATE TABLE `user_song_dislike` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_user_song_dislike` (`user_id`, `song_id`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '用户不喜欢的歌曲';
+
+-- ------------------------------------------------------------
+-- 歌词时间轴校正上报（众包，只记偏移不记歌词内容）
+-- ------------------------------------------------------------
+DROP TABLE IF EXISTS `lyric_offset_correction`;
+CREATE TABLE `lyric_offset_correction` (
+  `id`          BIGINT   NOT NULL COMMENT '主键',
+  `user_id`     BIGINT   NOT NULL COMMENT '提交账号',
+  `song_id`     BIGINT   NOT NULL COMMENT '歌曲 id',
+  `offset_ms`   INT      NOT NULL DEFAULT 0 COMMENT '偏移毫秒，正值＝歌词提前出现',
+  `create_time` DATETIME DEFAULT NULL COMMENT '创建时间',
+  `update_time` DATETIME DEFAULT NULL COMMENT '更新时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_user_song_offset` (`user_id`, `song_id`),
+  KEY `idx_song_offset` (`song_id`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '歌词时间轴校正上报';
+
+-- ------------------------------------------------------------
+-- 用户收听事件（客户端批量上报，按 (user_id, event_id) 幂等；保留 90 天）
+-- 清理 SQL：DELETE FROM user_stat_event WHERE occurred_at < DATE_SUB(NOW(), INTERVAL 90 DAY);（自动清理任务未实现）
+-- ------------------------------------------------------------
+DROP TABLE IF EXISTS `user_stat_event`;
+CREATE TABLE `user_stat_event` (
+  `id`           BIGINT      NOT NULL                COMMENT '主键',
+  `user_id`      BIGINT      NOT NULL                COMMENT '上报账号',
+  `event_id`     VARCHAR(64) NOT NULL                COMMENT '客户端生成的幂等键',
+  `event_type`   VARCHAR(16) NOT NULL                COMMENT 'play / skip / complete / error',
+  `song_id`      BIGINT      DEFAULT NULL            COMMENT '歌曲 id，可为空',
+  `duration_sec` INT         DEFAULT NULL            COMMENT '曲目时长（秒），0..3600',
+  `position_sec` INT         DEFAULT NULL            COMMENT '事件发生时的播放位置（秒）',
+  `seconds`      INT         NOT NULL DEFAULT 0      COMMENT '折算收听时长（秒）',
+  `occurred_at`  DATETIME    NOT NULL                COMMENT '事件发生时间（客户端时间）',
+  `create_time`  DATETIME    DEFAULT NULL            COMMENT '创建时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_user_event` (`user_id`, `event_id`),
+  KEY `idx_user_time` (`user_id`, `occurred_at`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '用户收听事件';
 
 DROP TABLE IF EXISTS `user_singer_dislike`;
 CREATE TABLE `user_singer_dislike` (

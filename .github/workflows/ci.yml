@@ -34,7 +34,25 @@ jobs:
       - name: Security audit
         run: npm audit --audit-level=moderate
       - name: Mock API integration tests
-        run: npm test
+        # 日志主机不在白名单、无法下载 run log 时，把失败摘要打成 job 注解（可用 API 读取）
+        shell: bash
+        run: |
+          set +e
+          npm test > /tmp/vitest.log 2>&1
+          status=$?
+          cat /tmp/vitest.log
+          if [ "$status" -ne 0 ]; then
+            {
+              echo "### Vitest 失败摘要"
+              echo
+              echo '```'
+              grep -n -E '✗|×|FAIL|AssertionError|Error:' /tmp/vitest.log | tail -n 40
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            summary=$(grep -n -E '✗|×|FAIL|AssertionError|Error:' /tmp/vitest.log | tail -n 40 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            echo "::error title=Vitest 失败（前端单测）::$summary"
+          fi
+          exit "$status"
       - name: Production build
         run: npm run build
 
@@ -57,11 +75,11 @@ jobs:
         run: npm ci
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
-      - name: Run production-build browser journeys
+      - name: Run production-build browser journeys（排除 @live：第三方依赖另开非阻断 job）
         shell: bash
         run: |
           set +e
-          npm run test:e2e > /tmp/playwright-e2e.log 2>&1
+          npm run test:e2e:journeys > /tmp/playwright-e2e.log 2>&1
           status=$?
           cat /tmp/playwright-e2e.log
           if [ "$status" -ne 0 ]; then
@@ -75,6 +93,69 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: music-holo-playwright-debug
+          path: |
+            music-holo-web/playwright-report/
+            music-holo-web/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  live-source:
+    name: Live third-party source journey
+    runs-on: ubuntu-24.04
+    # 依赖第三方音源与其上游平台是否在线：失败只记录，不阻断合并。
+    continue-on-error: true
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: music-holo-web
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: music-holo-web/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Run live custom-source journey against the real service
+        shell: bash
+        run: |
+          set +e
+          npm run test:e2e:live > /tmp/live-source.log 2>&1
+          status=$?
+          cat /tmp/live-source.log
+          {
+            echo "### 真实第三方音源在线旅程（@live，非阻断）"
+            echo
+            echo "退出码：$status（0 = 真实直链已解码播放；非 0 见下方日志，可能是第三方离线或返回明文 http 直链被安全边界拒绝）"
+            echo
+            echo '```'
+            tail -n 60 /tmp/live-source.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # 结论打成 job 注解，方便通过 API（而不是下载日志）查看。
+          # 无论成功、失败还是第三方离线，都要留下一条能读到的记录。
+          outcome=$(grep 'LIVE_OUTCOME=' /tmp/live-source.log | tail -n 1 || true)
+          if [ -n "$outcome" ]; then
+            echo "::notice title=真实音源在线结果（退出码 $status）::${outcome#LIVE_OUTCOME=}"
+          else
+            fallback=$(grep -n -E 'LIVE_STEP|LIVE_OUTCOME|Error:|waiting for|intercepts|not stable|detached|pointer events' /tmp/live-source.log | tail -n 30 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            echo "::notice title=真实音源在线结果（退出码 $status，未打印结论）::$fallback"
+          fi
+          if [ "$status" -ne 0 ]; then
+            taildetail=$(grep -n -E 'LIVE_STEP|✘|Error:|AssertionError|Timed out|waiting for|intercepts|not stable|detached|pointer events' /tmp/live-source.log | tail -n 40 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            echo "::warning title=真实音源旅程未通过（非阻断）::$taildetail"
+          fi
+          exit 0
+      - name: Upload live journey diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: music-holo-live-source-diagnostics
           path: |
             music-holo-web/playwright-report/
             music-holo-web/test-results/
@@ -130,8 +211,50 @@ jobs:
         uses: actions/checkout@v5
       - name: Validate Compose configuration
         run: docker compose config --quiet
+      - name: Prefetch base images
+        # Docker Hub 对匿名拉取按 IP 限流（第三方服务故障，与代码无关）：
+        # 先退避重试，仍失败时改用公共镜像代理 mirror.gcr.io（同一官方镜像，只换拉取源）。
+        run: |
+          set +e
+          # 运行镜像（compose 服务）与构建基础镜像（两个 Dockerfile 的 FROM）都要预先拉到本地：
+          # 本地已有镜像时 buildkit 不会再向 registry-1.docker.io 请求元数据，从而避开限流。
+          for image in mysql:8.0 redis:7 node:22-bookworm-slim nginx:stable-alpine maven:3.9.11-eclipse-temurin-17 eclipse-temurin:17-jre-jammy; do
+            if docker image inspect "$image" > /dev/null 2>&1; then echo "$image 已在本地"; continue; fi
+            for attempt in 1 2 3; do
+              docker pull "$image" && break
+              echo "::warning title=Image pull retry::$image 第 $attempt 次拉取失败，20 秒后重试"
+              sleep 20
+            done
+            if ! docker image inspect "$image" > /dev/null 2>&1; then
+              # mirror.gcr.io 是 Docker Hub 官方镜像的公共代理（内容一致，仅换拉取源）。
+              docker pull "mirror.gcr.io/library/$image" && docker tag "mirror.gcr.io/library/$image" "$image"
+            fi
+            docker image inspect "$image" > /dev/null 2>&1 || echo "::error title=Base image unavailable::$image 无法从 Docker Hub 或公共代理拉取"
+          done
       - name: Start and wait for the production-like stack
-        run: docker compose up --build --detach --wait --wait-timeout 300
+        run: |
+          set +e
+          docker version 2>&1 | head -n 20 || true
+          docker compose version 2>&1 | head -n 5 || true
+          df -h / /var/lib/docker 2>&1 | head -n 5 || true
+          # Docker Hub 对匿名拉取有按 IP 的限流（第三方服务故障，与代码无关），失败时退避重试。
+          for attempt in 1 2 3; do
+            docker compose up --build --detach --wait --wait-timeout 300 > /tmp/compose-up.log 2>&1
+            status=$?
+            cat /tmp/compose-up.log
+            [ "$status" -eq 0 ] && break
+            grep -q 'toomanyrequests\|pull rate limit\|Error response from daemon: Get' /tmp/compose-up.log || break
+            echo "::warning title=Docker Hub rate limited::第 $attempt 次镜像拉取被限流，等待 90 秒后重试"
+            docker compose down --volumes --remove-orphans > /dev/null 2>&1
+            [ "$attempt" -lt 3 ] && sleep 90
+          done
+          if [ "$status" -ne 0 ]; then
+            docker compose ps || true
+            docker compose logs --no-color --tail 200 || true
+            summary=$(tail -n 60 /tmp/compose-up.log | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            echo "::error title=Compose stack failed to start::exit=$status log=$summary"
+          fi
+          exit $status
       - name: Smoke-test same-origin web, API, playback, and persistent uploads
         shell: bash
         run: |
@@ -240,6 +363,43 @@ jobs:
           curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/dislike" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["data"]["songIds"] == [] and d["data"]["singerIds"] == []'
           curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/recommend/songs?limit=24" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert any(row.get("id") == 5 for row in d["data"])'
           curl --silent --show-error -X POST "$base/api/dislike/song/5" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 401'
+          # 真实后端 smoke 通过后，docs 中 P2 服务端项的“未实测”标注才可解除（本轮由 CI 记录）。
+          # P2-9/P2-7/P2-8 的新迁移先各跑两遍（与上面 20261009 三个迁移相同的幂等双跑口径）。
+          docker compose exec -T mysql mysql -uroot -proot music_holo < sql/migration_20261010_lyric_offset_correction.sql
+          docker compose exec -T mysql mysql -uroot -proot music_holo < sql/migration_20261010_lyric_offset_correction.sql
+          docker compose exec -T mysql mysql -uroot -proot music_holo < sql/migration_20261011_stat_event.sql
+          docker compose exec -T mysql mysql -uroot -proot music_holo < sql/migration_20261011_stat_event.sql
+          docker compose exec -T mysql mysql -uroot -proot music_holo < sql/migration_20261011_song_loudness.sql
+          docker compose exec -T mysql mysql -uroot -proot music_holo < sql/migration_20261011_song_loudness.sql
+          # P2-9 歌词时间轴校正：匿名只读共识；提交/撤回需登录；满 3 个账号才形成中位数共识。
+          curl --fail --silent --show-error "$base/api/lyric/offset?songId=1" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and d["data"]["offsetMs"] is None and d["data"]["count"] == 0 and d["data"]["minReports"] == 3, d'
+          curl --silent --show-error -X POST -H 'Content-Type: application/json' -d '{"songId":1,"offsetMs":100}' "$base/api/lyric/offset" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 401'
+          curl --fail --silent --show-error -X POST -H "music-holo-token: $token" -H 'Content-Type: application/json' -d '{"songId":1,"offsetMs":800}' "$base/api/lyric/offset" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and d["data"]["mine"] == 800 and d["data"]["count"] == 1 and d["data"]["offsetMs"] is None, d'
+          curl --silent --show-error -X POST -H "music-holo-token: $token" -H 'Content-Type: application/json' -d '{"songId":1,"offsetMs":6000}' "$base/api/lyric/offset" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 400 and d["msg"] == "偏移需在 ±5000 毫秒以内", d'
+          curl --fail --silent --show-error -X POST -H "music-holo-token: $admin_token" -H 'Content-Type: application/json' -d '{"songId":1,"offsetMs":900}' "$base/api/lyric/offset" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and d["data"]["count"] == 2 and d["data"]["offsetMs"] is None, d'
+          curl --fail --silent --show-error -H 'Content-Type: application/json' -d '{"username":"offsetci","password":"123456","nickname":"CI校正"}' "$base/api/auth/register" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 200'
+          offset_login=$(curl --fail --silent --show-error -H 'Content-Type: application/json' -d '{"username":"offsetci","password":"123456"}' "$base/api/auth/login")
+          offset_token=$(printf '%s' "$offset_login" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200; print(d["data"]["token"])')
+          curl --fail --silent --show-error -X POST -H "music-holo-token: $offset_token" -H 'Content-Type: application/json' -d '{"songId":1,"offsetMs":850}' "$base/api/lyric/offset" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and d["data"]["count"] == 3 and d["data"]["offsetMs"] == 850, d'
+          curl --fail --silent --show-error -X DELETE -H "music-holo-token: $token" "$base/api/lyric/offset?songId=1" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 200'
+          curl --fail --silent --show-error "$base/api/lyric/offset?songId=1" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and d["data"]["count"] == 2 and d["data"]["offsetMs"] is None, d'
+          # P2-7 会话快照（只存曲库 id/位置/模式/倍速，版本 1，TTL 7 天）：登录用户 PUT/GET 往返、校验、删除。
+          curl --fail --silent --show-error -X PUT -H "music-holo-token: $token" -H 'Content-Type: application/json' -d '{"queueIds":[1,2,3],"currentSongId":2,"position":12.5,"mode":"loop","playbackRate":1.5}' "$base/api/session" | python3 -c 'import json,sys; d=json.load(sys.stdin); v=d["data"]; assert d["code"] == 200 and v["version"] == 1 and isinstance(v["savedAt"], int) and isinstance(v["expiresAt"], int) and v["expiresAt"] - v["savedAt"] == 7*24*3600*1000, d'
+          curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/session" | python3 -c 'import json,sys; d=json.load(sys.stdin); v=d["data"]; assert d["code"] == 200 and v["version"] == 1 and isinstance(v["savedAt"], int) and isinstance(v["expiresAt"], int) and v["expiresAt"] > v["savedAt"] and v["queueIds"] == [1,2,3] and v["currentSongId"] == 2 and v["position"] == 12.5 and v["mode"] == "loop" and v["playbackRate"] == 1.5, d'
+          curl --silent --show-error -X PUT -H "music-holo-token: $token" -H 'Content-Type: application/json' -d '{"queueIds":[1],"currentSongId":1,"position":0,"mode":"nope","playbackRate":1}' "$base/api/session" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 400'
+          curl --silent --show-error -X PUT -H "music-holo-token: $token" -H 'Content-Type: application/json' -d '{"queueIds":[99999],"currentSongId":99999,"position":0,"mode":"loop","playbackRate":1}' "$base/api/session" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 400 and d["msg"].startswith("歌曲不存在"), d'
+          curl --silent --show-error -X PUT -H 'Content-Type: application/json' -d '{"queueIds":[1],"currentSongId":1,"position":0,"mode":"loop","playbackRate":1}' "$base/api/session" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 401'
+          curl --fail --silent --show-error -X DELETE -H "music-holo-token: $token" "$base/api/session" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 200'
+          curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/session" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and d.get("data") is None, d'
+          # P2-8 收听统计：eventId 幂等批量入库（只含 id/类型/秒数），匿名拒绝、201 条超限拒绝、汇总可查。
+          stat_now=$(date +%s%3N)
+          curl --fail --silent --show-error -X POST -H "music-holo-token: $token" -H 'Content-Type: application/json' -d "[{\"eventId\":\"ci-e1\",\"type\":\"play\",\"songId\":1,\"at\":$stat_now},{\"eventId\":\"ci-e2\",\"type\":\"complete\",\"songId\":1,\"duration\":240,\"position\":240,\"at\":$stat_now}]" "$base/api/stat/batch" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and d["data"]["accepted"] == 2 and d["data"]["duplicates"] == 0, d'
+          curl --fail --silent --show-error -X POST -H "music-holo-token: $token" -H 'Content-Type: application/json' -d "[{\"eventId\":\"ci-e1\",\"type\":\"play\",\"songId\":1,\"at\":$stat_now},{\"eventId\":\"ci-e2\",\"type\":\"complete\",\"songId\":1,\"duration\":240,\"position\":240,\"at\":$stat_now}]" "$base/api/stat/batch" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200 and d["data"]["accepted"] == 0 and d["data"]["duplicates"] == 2, d'
+          python3 -c 'import json,sys,time; now=int(time.time()*1000); json.dump([{"eventId":"ci-of%d"%i,"type":"play","songId":1,"at":now} for i in range(201)], open(sys.argv[1],"w"))' /tmp/music-holo-stat-overflow.json
+          python3 -c 'import json,sys; events=json.load(open(sys.argv[1])); assert len(events) == 201 and all(event["eventId"].startswith("ci-of") for event in events), sys.argv[1]' /tmp/music-holo-stat-overflow.json
+          curl --silent --show-error -X POST -H "music-holo-token: $token" -H 'Content-Type: application/json' --data-binary @/tmp/music-holo-stat-overflow.json "$base/api/stat/batch" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 400'
+          curl --silent --show-error -X POST -H 'Content-Type: application/json' -d "[]" "$base/api/stat/batch" | python3 -c 'import json,sys; assert json.load(sys.stdin)["code"] == 401'
+          curl --fail --silent --show-error -H "music-holo-token: $token" "$base/api/stat/summary?days=7" | python3 -c 'import json,sys; d=json.load(sys.stdin); s=d["data"]; assert d["code"] == 200 and s["plays"] >= 1 and s["completes"] >= 1 and s["seconds"] >= 240 and s["topSongs"][0]["songId"] == 1, json.dumps(d, ensure_ascii=False)[:900]'
           printf 'upload volume survives a server restart\n' > /tmp/music-holo-upload-smoke.txt
           upload=$(curl --fail --silent --show-error -H "music-holo-token: $token" -F file=@/tmp/music-holo-upload-smoke.txt "$base/api/common/upload")
           profile=$(printf '%s' "$upload" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["code"] == 200; print(d["data"]["url"])')

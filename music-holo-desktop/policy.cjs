@@ -1,3 +1,4 @@
+const { randomBytes } = require('node:crypto')
 const dns = require('node:dns/promises')
 const ipaddr = require('ipaddr.js')
 const BLOCKED_HEADERS = /^(?:authorization|proxy-authorization|cookie2?|host|origin|referer|connection|content-length|transfer-encoding|upgrade|te|trailer|expect|accept-encoding|music-holo-token|sec-.*|proxy-.*)$/i
@@ -24,6 +25,25 @@ async function resolvePublic(url, lookup = dns.lookup) {
   if (!answers.length || answers.some(({ address }) => !isPublicAddress(address))) throw new Error('音源 DNS 指向非公网地址')
   return answers[0].address
 }
+/**
+ * 构造 multipart/form-data 请求体。字段名必须是不含 CR/LF/引号的简单文本，
+ * 避免脚本通过字段名注入额外请求头或分部；值一律按 UTF-8 文本发送。
+ */
+function buildMultipartBody(rawForm) {
+  if (!rawForm || typeof rawForm !== 'object' || Array.isArray(rawForm)) throw new Error('formData 格式无效')
+  const entries = Object.entries(rawForm)
+  if (entries.length > 32) throw new Error('formData 字段过多')
+  const boundary = `----MusicHoloFormBoundary${randomBytes(16).toString('hex')}`
+  const parts = []
+  for (const [name, value] of entries) {
+    const field = String(name)
+    if (!field || !/^[\w.$[\]-]{1,128}$/.test(field)) throw new Error('formData 字段名无效')
+    parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${field}"\r\n\r\n${String(value)}\r\n`, 'utf8'))
+  }
+  parts.push(Buffer.from(`--${boundary}--\r\n`, 'utf8'))
+  return { buffer: Buffer.concat(parts), contentType: `multipart/form-data; boundary=${boundary}` }
+}
+
 function requestOptions(raw = {}) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('请求选项无效')
   const method = String(raw.method || 'GET').toUpperCase()
@@ -39,8 +59,11 @@ function requestOptions(raw = {}) {
   headers['accept-encoding'] = 'identity'
   let body
   if (method === 'POST') {
-    if (raw.formData) throw new Error('桌面桥暂不支持 multipart formData；请使用 form 或 body')
-    if (raw.form) {
+    if (raw.formData) {
+      body = buildMultipartBody(raw.formData)
+      headers['content-type'] = body.contentType
+      body = body.buffer
+    } else if (raw.form) {
       body = Buffer.from(new URLSearchParams(raw.form).toString())
       headers['content-type'] = 'application/x-www-form-urlencoded;charset=UTF-8'
     } else if (raw.body != null) {

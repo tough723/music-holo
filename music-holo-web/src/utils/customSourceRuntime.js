@@ -50,7 +50,13 @@ export function normalizeLxSourceCapabilities(payload) {
       qualities: normalizeStringList(value.qualitys || value.qualities)
     }
   })
-  return { sources, initializedAt: new Date().toISOString() }
+  // LX 会真的弹出 DevTools。隔离 iframe 无法附加开发者工具，也不应让脚本操控宿主 UI，
+  // 因此这里只把它记录为「调试模式」：宿主打开请求日志，并在界面提示用户。
+  return {
+    sources,
+    devToolsRequested: Boolean(payload.openDevTools || payload.openDevMode),
+    initializedAt: new Date().toISOString()
+  }
 }
 
 export function validateCustomSourceMediaUrl(value, { pageOrigin = globalThis.location?.origin } = {}) {
@@ -78,7 +84,9 @@ export function buildCustomSourceMusicInfo(song) {
   const duration = Number(song.duration)
   const songId = cleanText(song.id, 128)
   return {
-    ...(songId ? { musicHoloId: songId, id: songId } : {}),
+    // Music Holo 曲库 ID 只放在 musicHoloId：原曲库 ID 不能伪装成第三方平台 ID，
+    // 需要 id/songmid/hash 的音源必须由用户或平台适配器提供真实平台字段。
+    ...(songId ? { musicHoloId: songId } : {}),
     title,
     name: title,
     ...(singerName ? { singerName, singer: singerName } : {}),
@@ -117,7 +125,13 @@ export function mergeCustomSourceMusicInfo(song, extraJson = '{}') {
     throw new Error('平台专属曲目字段不能超过 64 KB')
   }
 
-  const combined = { ...extra, ...base }
+  // 平台专属字段优先（如网易云 id、QQ songmid、酷狗 hash），但标题、歌手、专辑、
+  // 时长与 musicHoloId 由曲库事实决定，不允许被覆盖，避免界面信息被改写。
+  const PROTECTED_KEYS = new Set(['musicHoloId', 'title', 'name', 'singerName', 'singer', 'album', 'duration'])
+  const combined = { ...base }
+  for (const [key, value] of Object.entries(extra)) {
+    if (!PROTECTED_KEYS.has(key)) combined[key] = value
+  }
   if (new TextEncoder().encode(JSON.stringify(combined)).byteLength > MAX_CUSTOM_SOURCE_MUSIC_INFO_BYTES) {
     throw new Error('发送给音源的曲目信息不能超过 64 KB')
   }
@@ -158,6 +172,92 @@ export function parseCustomSourceLyrics(value) {
     for (const time of timestamps) lines.push({ time, text })
   }
   return lines.sort((left, right) => left.time - right.time).slice(0, 1000)
+}
+
+/**
+ * 解析 LX 逐字歌词（lxlyric）：`[分钟:秒.毫秒]<开始时间(毫秒),持续时间(毫秒)>文字`
+ * 多行按时间排序，返回 [{ time, words: [{ time, duration, text }] }]。
+ */
+export function parseCustomSourceVerbatimLyrics(value) {
+  const raw = typeof value === 'string' ? value : ''
+  if (!raw.trim()) return []
+  const lines = []
+  const timestamp = /^\s*\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]\s*/
+  const word = /<(-?\d{1,7}),(-?\d{1,7})>([^<]*)/g
+  for (const rawLine of raw.slice(0, 256 * 1024).replace(/\\+r?\\+n/g, '\n').replace(/\\+n/g, '\n').split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (!line) continue
+    const head = line.match(timestamp)
+    if (!head) continue
+    const minutes = Number(head[1])
+    const seconds = Number(head[2])
+    const fraction = head[3] ? Number(`0.${head[3]}`) : 0
+    const time = minutes * 60 + seconds + fraction
+    const words = []
+    let match
+    word.lastIndex = 0
+    while ((match = word.exec(line)) !== null) {
+      const start = Number(match[1])
+      const duration = Number(match[2])
+      const text = cleanText(match[3], 120)
+      if (!Number.isFinite(start) || !Number.isFinite(duration) || duration < 0 || !text) continue
+      words.push({ time: Math.max(0, start), duration, text })
+      if (words.length >= 200) break
+    }
+    if (!words.length) continue
+    lines.push({ time, words })
+  }
+  return lines.sort((left, right) => left.time - right.time).slice(0, 1000)
+}
+
+/**
+ * 解析音源 lyric 动作的完整返回值：主歌词 + 译文 + 罗马音 + 逐字。
+ * 兼容官方文档的字段名与文档示例里的拼写（`lryic/tlryic/rlyric/lxlyric`）。
+ */
+export function parseCustomSourceLyricBundle(value) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const pick = (...keys) => {
+    for (const key of keys) {
+      const candidate = source[key]
+      if (typeof candidate === 'string' && candidate.trim()) return candidate
+      if (Array.isArray(candidate) && candidate.length) return candidate
+    }
+    return ''
+  }
+  const verbatimLines = parseCustomSourceVerbatimLyrics(
+    typeof source.lxlyric === 'string' ? source.lxlyric : typeof source.verbatimLyric === 'string' ? source.verbatimLyric : ''
+  )
+  let lines = parseCustomSourceLyrics(source.lyric ?? source.lryic ?? value)
+  // 只有逐字歌词时，用逐字文本合成主歌词行，保证歌词面板仍有内容可显示。
+  if (!lines.length && verbatimLines.length) {
+    lines = verbatimLines.map((entry) => ({ time: entry.time, text: entry.words.map((word) => word.text).join('') }))
+  }
+  return {
+    lines,
+    translationLines: parseCustomSourceLyrics(pick('tlyric', 'tlryic', 'translationLyric', 'translation', 'txlyric')),
+    romajiLines: parseCustomSourceLyrics(pick('rlyric', 'romajiLyric', 'romaji', 'rlyrics')),
+    verbatimLines
+  }
+}
+
+/** 校验音源 updateAlert 声明：log 必填且 ≤1024，updateUrl 可选且必须是 HTTP(S)。 */
+export function normalizeCustomSourceUpdateAlert(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error('音源更新提示格式无效')
+  }
+  const log = cleanText(payload.log, 1024)
+  if (!log) throw new Error('音源更新提示缺少 log 内容')
+  let updateUrl = ''
+  if (payload.updateUrl != null && String(payload.updateUrl).trim()) {
+    updateUrl = cleanText(payload.updateUrl, 1024)
+    let parsed
+    try { parsed = new URL(updateUrl) } catch { throw new Error('音源更新地址不是有效 URL') }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      throw new Error('音源更新地址必须是 HTTP(S) 地址')
+    }
+    updateUrl = parsed.href
+  }
+  return { log, updateUrl }
 }
 
 async function readResponseBody(response, maxBytes) {
@@ -276,7 +376,10 @@ export async function performCustomSourceRequest(rawUrl, rawOptions = {}, { sign
       if (headerBytes > 8 * 1024) break
       responseHeaders[name] = value
     }
-    return { statusCode: response.status, headers: responseHeaders, body }
+    const result = { statusCode: response.status, headers: responseHeaders, body }
+    // 与桌面桥保持一致：提供 resp.status 别名，且不可枚举以免影响序列化。
+    Object.defineProperty(result, 'status', { enumerable: false, configurable: true, get: () => result.statusCode })
+    return result
   } catch (error) {
     if (error?.name === 'AbortError') {
       throw new Error(externalSignal?.aborted ? '音源请求已取消' : '音源接口请求超时')
@@ -342,6 +445,8 @@ export function createCustomSourceSession(source, {
   startupTimeoutMs = CUSTOM_SOURCE_RUNTIME_TIMEOUT_MS,
   sessionTimeoutMs = CUSTOM_SOURCE_SESSION_TIMEOUT_MS,
   actionTimeoutMs = CUSTOM_SOURCE_ACTION_TIMEOUT_MS,
+  onUpdateAlert,
+  onDebugLog,
   signal
 } = {}) {
   if (typeof document === 'undefined' || typeof window === 'undefined') {
@@ -367,6 +472,9 @@ export function createCustomSourceSession(source, {
     let initSettled = false
     let requestSequence = 0
     let activeNetworkCount = 0
+    // 官方协议规定 updateAlert 每次运行只允许一次，重复声明直接忽略。
+    let updateAlertDelivered = false
+    let deliveredUpdateAlert = null
     const startupLimit = Math.max(1000, Math.min(desktopSourceBridge() ? 60000 : 30000, Number(startupTimeoutMs) || CUSTOM_SOURCE_RUNTIME_TIMEOUT_MS))
     const sessionLimit = Math.max(1000, Math.min(desktopSourceBridge() ? 600000 : 60000, Number(sessionTimeoutMs) || CUSTOM_SOURCE_SESSION_TIMEOUT_MS))
     const actionLimit = Math.max(1000, Math.min(desktopSourceBridge() ? 120000 : 30000, Number(actionTimeoutMs) || CUSTOM_SOURCE_ACTION_TIMEOUT_MS))
@@ -416,6 +524,7 @@ export function createCustomSourceSession(source, {
     const session = {
       get capabilities() { return capabilities },
       get isActive() { return initialized && !destroyed },
+      get updateAlert() { return deliveredUpdateAlert },
       request({ source: sourceKey, action, info = {} } = {}) {
         if (destroyed) return Promise.reject(new Error('隔离音源会话已结束'))
         if (!initialized || !capabilities) return Promise.reject(new Error('音源尚未初始化'))
@@ -469,6 +578,17 @@ export function createCustomSourceSession(source, {
         }
         return
       }
+      if (message.type === 'source-event' && message.eventName === 'updateAlert') {
+        if (!initialized || updateAlertDelivered) return
+        let alert = null
+        try { alert = normalizeCustomSourceUpdateAlert(message.data) } catch { return }
+        updateAlertDelivered = true
+        deliveredUpdateAlert = alert
+        if (typeof onUpdateAlert === 'function') {
+          try { onUpdateAlert(alert) } catch { /* 宿主提示失败不影响解析 */ }
+        }
+        return
+      }
       if (message.type === 'source-response') {
         const pending = pendingActions.get(message.requestId)
         if (!pending) return
@@ -490,6 +610,15 @@ export function createCustomSourceSession(source, {
         const controller = new AbortController()
         pendingNetwork.set(message.requestId, controller)
         activeNetworkCount += 1
+        if (capabilities?.devToolsRequested || typeof onDebugLog === 'function') {
+          const entry = {
+            at: new Date().toISOString(),
+            method: String(message.options?.method || 'GET').toUpperCase(),
+            url: String(message.url || '').slice(0, 4096)
+          }
+          if (capabilities?.devToolsRequested) console.debug('[音源调试模式] %s %s', entry.method, entry.url)
+          try { onDebugLog?.(entry) } catch { /* 日志回调失败不影响请求 */ }
+        }
         Promise.resolve().then(() => onRequest(message.url, message.options || {}, controller.signal)).then((response) => {
           replyToWorker(message.requestId, { ok: true, response })
         }).catch((error) => {
@@ -530,10 +659,24 @@ export function createCustomSourceSession(source, {
 }
 
 export async function runCustomSourceCompatibility(source, options = {}) {
-  const session = await createCustomSourceSession(source, options)
+  let alert = null
+  const session = await createCustomSourceSession(source, {
+    ...options,
+    onUpdateAlert: (value) => {
+      alert = value
+      options.onUpdateAlert?.(value)
+    }
+  })
   try {
+    // 脚本通常在 inited 之后紧接着发出 updateAlert；给一个很短的窗口，避免检测
+    // 会话立刻销毁而丢掉提示。窗口内没有提示就立即结束，不做额外等待。
+    const deadline = Date.now() + 80
+    while (!alert && Date.now() < deadline && session.isActive) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
     return {
       ...session.capabilities,
+      updateAlert: alert || session.updateAlert || null,
       sourceName: cleanText(source.name, 80),
       fileName: cleanText(source.fileName, 120)
     }

@@ -33,3 +33,23 @@ export function hashCode(text) {
   }
   return Math.abs(hash)
 }
+
+/** 字节 -> 人类可读体积（下载中心/缓存统计用）。 */
+export function formatBytes(bytes) {
+  const value = Number(bytes)
+  if (!Number.isFinite(value) || value <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  const exponent = Math.min(units.length - 1, Math.floor(Math.log(value) / Math.log(1024)))
+  const size = value / (1024 ** exponent)
+  return `${size >= 10 || exponent === 0 ? Math.round(size) : size.toFixed(1)} ${units[exponent]}`
+}
+
+/** 秒 -> 人类可读时长（下载剩余时间可能超过 1 小时）。 */
+export function formatDuration(seconds) {
+  const value = Math.max(0, Math.round(Number(seconds) || 0))
+  const hours = Math.floor(value / 3600)
+  const minutes = Math.floor((value % 3600) / 60)
+  const rest = value % 60
+  const pad = (number) => String(number).padStart(2, '0')
+  return hours > 0 ? `${hours}:${pad(minutes)}:${pad(rest)}` : `${pad(minutes)}:${pad(rest)}`
+}

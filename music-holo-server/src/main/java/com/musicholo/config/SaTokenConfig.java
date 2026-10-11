@@ -33,8 +33,8 @@ public class SaTokenConfig implements WebMvcConfigurer {
     private static final List<String> PUBLIC_GET_PREFIX = List.of(
             "/search", "/recommend", "/album", "/singer", "/song", "/category", "/playlist", "/review/page",
             "/common/dict", "/common/download",
-            "/lyric/parse", "/lyric/export",
-            "/system/theme", "/system/config",
+            "/lyric/parse", "/lyric/export", "/lyric/offset",
+            "/system/theme", "/system/config", "/catalog", "/catalog/wy/charts",
             "/profile"
     );
 

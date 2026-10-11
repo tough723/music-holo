@@ -95,9 +95,11 @@
             <div class="source-title-row">
               <h3>{{ source.name }}</h3>
               <el-tag size="small" effect="plain">v{{ source.version }}</el-tag>
-              <el-tag v-if="!compatibilityBySource[source.id]" size="small" type="info" effect="plain">已导入 · 未运行</el-tag>
-              <el-tag v-else-if="!compatibilityBySource[source.id].error" size="small" type="success" effect="plain">隔离检测通过</el-tag>
-              <el-tag v-else size="small" type="danger" effect="plain">检测失败</el-tag>
+              <el-tag v-if="!compatibilityBySource[source.id]" size="small" type="info" effect="plain">已导入 · 自动初始化中</el-tag>
+              <el-tag v-else-if="compatibilityBySource[source.id].error" size="small" type="danger" effect="plain">检测失败</el-tag>
+              <el-tag v-else size="small" type="success" effect="plain">隔离检测通过</el-tag>
+              <el-tag v-if="source.autoRun !== false" size="small" type="warning" effect="plain">自动运行已启用</el-tag>
+              <el-tag v-if="source.autoApproveNetwork !== false" size="small" type="danger" effect="plain">公网请求自动授权</el-tag>
             </div>
             <p v-if="source.description" class="source-description">{{ source.description }}</p>
             <p v-else class="source-description source-filename">{{ source.fileName }}</p>
@@ -120,6 +122,7 @@
           </div>
           <div class="source-file-actions">
             <el-button text size="small" :loading="checkingSourceId === source.id" :aria-label="`隔离兼容检测 ${source.name}`" @click="checkCompatibility(source)">兼容检测</el-button>
+            <el-button text size="small" :type="source.autoRun !== false ? 'warning' : 'primary'" @click="toggleSourceAutomation(source)">{{ source.autoRun !== false ? '关闭自动模式' : '启用自动模式' }}</el-button>
             <el-button text size="small" @click="renameSource(source)">重命名</el-button>
             <el-button text size="small" @click="toggleSourceCode(source.id)">{{ expandedSourceId === source.id ? '收起代码' : '查看代码' }}</el-button>
             <el-button text size="small" @click="exportSource(source)">导出</el-button>
@@ -180,9 +183,9 @@
     >
       <div class="source-audition">
         <el-alert type="warning" :closable="false" show-icon>
-          <template #title>LX 自定义源负责解析，不负责搜索</template>
+          <template #title>LX 自定义音源负责解析，不负责搜索</template>
           <template #default>
-            试听会重新运行此脚本并调用其 musicUrl。<span v-if="props.catalogAvailable">先选 Music Holo 曲库歌曲可自动填入通用信息；</span>请在 JSON 中填写音源所需的 songmid、musicmid 等真实平台 ID。
+            试听会重新运行此脚本并调用其 musicUrl。搜索与榜单由 Music Holo 的平台适配器单独实现，产出真实平台曲目 ID 后自动填入下方 JSON。<span v-if="props.catalogAvailable">也可先选 Music Holo 曲库歌曲自动填入通用信息；</span>仍可手动编辑 songmid、musicmid 等字段。
             <span v-if="isDesktop">桌面支持公网 HTTP(S) 媒体，通过原生授权与 DNS 校验后匿名流式加载；HTTP 明文传输，重定向会拒绝。</span>
             <span v-else>音频仅接受 HTTPS，并通过播放器以匿名 CORS 模式加载；常见本地/私网主机名会拦截，但浏览器无法验证任意域名最终解析的 IP。目标音频站未开放 CORS 时浏览器会阻止播放。</span>
           </template>
@@ -201,6 +204,33 @@
               <el-option v-for="quality in auditionQualities" :key="quality" :label="quality" :value="quality" />
             </el-select>
           </label>
+        </div>
+
+        <div v-if="catalogPlatformAvailable" class="source-audition-catalog">
+          <label>平台曲目搜索 · {{ selectedAuditionPlatform?.name }}（Music Holo 适配器{{ catalogVerifiedLabel }}）</label>
+          <div class="source-audition-search">
+            <el-input v-model="catalogKeyword" clearable placeholder="按歌名或歌手搜索真实平台曲目 ID" aria-label="平台曲目搜索" @keyup.enter="searchCatalogTracks" />
+            <el-button type="primary" plain :loading="catalogSearching" :disabled="!catalogKeyword.trim()" @click="searchCatalogTracks">搜索平台</el-button>
+            <el-button v-if="catalogSupportsCharts" :loading="catalogChartsLoading" @click="loadCatalogCharts">加载榜单</el-button>
+          </div>
+          <el-select
+            v-if="catalogCharts.length"
+            v-model="catalogChartId"
+            class="source-audition-chart-select"
+            placeholder="选择榜单后自动填入曲目"
+            aria-label="选择平台榜单"
+            :loading="catalogChartsLoading"
+            @change="loadCatalogChartTracks"
+          >
+            <el-option v-for="chart in catalogCharts" :key="chart.id" :label="`${chart.name}${chart.updateFrequency ? ' · ' + chart.updateFrequency : ''}`" :value="chart.id" />
+          </el-select>
+          <div v-if="catalogTracks.length" class="source-audition-results" aria-label="平台曲目结果">
+            <el-button v-for="(track, index) in catalogTracks" :key="index" text size="small" @click="useCatalogTrack(track)">
+              {{ track.name }} · {{ track.singer || '未知歌手' }}
+            </el-button>
+          </div>
+          <small v-else-if="catalogMessage" class="source-audition-note">{{ catalogMessage }}</small>
+          <small v-else class="source-audition-note">搜索或加载榜单后点击曲目，即可自动填入该平台真实曲目 ID（如网易 id、酷我 songmid、酷狗 hash）。适配器只用公开无凭据接口，不经过音源脚本。</small>
         </div>
 
         <div v-if="props.catalogAvailable" class="source-audition-catalog">
@@ -265,11 +295,19 @@ import {
 } from '@/utils/customSources'
 import {
   createCustomSourceSession,
-  parseCustomSourceLyrics,
+  parseCustomSourceLyricBundle,
   runCustomSourceCompatibility,
   validateCustomSourceMediaUrl
 } from '@/utils/customSourceRuntime'
 import { createCustomSourceRequestBridge } from '@/utils/customSourceConsent'
+import { settleOptionalRequest } from '@/utils/optionalTimeout'
+import {
+  fetchPlatformChartTracks,
+  fetchPlatformTrackExtras,
+  getCatalogAdapter,
+  listPlatformCharts,
+  searchPlatformTracks
+} from '@/utils/sourceCatalog'
 
 const props = defineProps({ catalogAvailable: { type: Boolean, default: true } })
 const isDesktop = !!desktopSourceBridge()
@@ -284,6 +322,35 @@ const importing = ref(false)
 const importingUrl = ref(false)
 const checkingSourceId = ref('')
 const compatibilityBySource = ref({})
+const updateAlertsBySource = ref({})
+/** 音源脚本声明的更新提示：只展示日志与官方下载地址，绝不自动下载或执行。 */
+function reportUpdateAlert(source, alert) {
+  if (!alert?.log) return
+  updateAlertsBySource.value = { ...updateAlertsBySource.value, [source.id]: alert }
+  const message = alert.updateUrl
+    ? `「${source.name}」提示更新：${alert.log}。是否打开音源作者提供的更新地址？`
+    : `「${source.name}」提示更新：${alert.log}`
+  if (alert.updateUrl) {
+    ElMessageBox.confirm(message, '音源更新提示', {
+      type: 'warning',
+      confirmButtonText: '打开更新地址',
+      cancelButtonText: '稍后处理',
+      closeOnClickModal: false,
+      // 允许复制地址：只提供官方主页/下载地址，不代用户下载或替换脚本。
+      dangerouslyUseHTMLString: false
+    }).then(() => {
+      globalThis.open?.(alert.updateUrl, '_blank', 'noopener,noreferrer')
+    }).catch(() => {})
+  } else {
+    ElMessage.info(message)
+  }
+}
+
+/** 音源请求了 openDevTools：隔离 iframe 无法附加开发者工具，改为提示并打开请求日志。 */
+function reportDevToolsRequest(source) {
+  ElMessage.info(`「${source.name}」请求了调试模式（openDevTools）。隔离运行环境不会打开开发者工具，但本次会话的网络请求已打印到浏览器控制台。`)
+}
+
 const expandedSourceId = ref('')
 const auditionVisible = ref(false)
 const auditioning = ref(false)
@@ -295,6 +362,14 @@ const auditionSearchResults = ref([])
 const auditionSearchLoading = ref(false)
 const auditionMusicInfoText = ref('')
 const resolvedAuditionTrack = ref(null)
+const catalogKeyword = ref('')
+const catalogSearching = ref(false)
+const catalogTracks = ref([])
+const catalogCharts = ref([])
+const catalogChartId = ref('')
+const catalogChartsLoading = ref(false)
+const catalogMessage = ref('')
+const selectedCatalogTrack = ref(null)
 let activeAuditionSession = null
 let activeAuditionController = null
 let activeCompatibilityController = null
@@ -314,6 +389,10 @@ const auditionPlatforms = computed(() => {
 })
 const selectedAuditionPlatform = computed(() => auditionPlatforms.value.find((platform) => platform.key === auditionPlatformKey.value) || null)
 const auditionQualities = computed(() => selectedAuditionPlatform.value?.qualities || [])
+const catalogAdapter = computed(() => getCatalogAdapter(auditionPlatformKey.value))
+const catalogPlatformAvailable = computed(() => Boolean(catalogAdapter.value && (typeof catalogAdapter.value.search === 'function' || catalogAdapter.value.charts)))
+const catalogSupportsCharts = computed(() => Boolean(catalogAdapter.value?.charts))
+const catalogVerifiedLabel = computed(() => (catalogAdapter.value?.verified ? '· 已实测' : '· 未实测'))
 
 watch(storageKey, (key) => {
   sources.value = readCustomSources(localStorage, key)
@@ -342,6 +421,28 @@ function persist(nextSources) {
   return true
 }
 
+async function toggleSourceAutomation(source) {
+  const enabling = source.autoRun === false
+  if (enabling) {
+    try {
+      await ElMessageBox.confirm(
+        `启用后「${source.name}」会在应用启动时自动执行，并自动允许其访问合法公网 HTTPS 域名。仍不会携带 Cookie、令牌或访问内网。`,
+        '启用音源自动模式',
+        { type: 'warning', confirmButtonText: '启用自动模式', cancelButtonText: '保持关闭', closeOnClickModal: false }
+      )
+    } catch { return }
+  }
+  const next = sources.value.map((item) => item.id === source.id
+    ? { ...item, autoRun: enabling, autoApproveNetwork: enabling ? item.autoApproveNetwork !== false : false }
+    : item)
+  persist(next)
+  if (enabling) {
+    ElMessage.success(`已启用「${source.name}」自动运行`)
+  } else {
+    ElMessage.info(`已关闭「${source.name}」自动运行与自动授权`)
+  }
+}
+
 function openFilePicker() {
   fileInput.value?.click()
 }
@@ -361,7 +462,7 @@ function addSource(fileName, script) {
     return false
   }
   if (persist([source, ...sources.value])) {
-    ElMessage.success(`已导入「${source.name}」，不会自动运行`)
+    ElMessage.success(`已导入「${source.name}」，系统将自动初始化并接入在线搜索`)
     return true
   }
   return false
@@ -418,7 +519,7 @@ async function onBackupFileSelected(event) {
     if (sources.value.length + imported.length > MAX_CUSTOM_SOURCES) {
       throw new Error(`导入后会超过 ${MAX_CUSTOM_SOURCES} 个音源上限，请先删除部分脚本`)
     }
-    if (persist([...imported, ...sources.value])) ElMessage.success(`已恢复 ${imported.length} 个音源，不会自动运行`)
+    if (persist([...imported, ...sources.value])) ElMessage.success(`已恢复 ${imported.length} 个音源，系统将自动初始化`)
   } catch (error) {
     ElMessage.warning(error?.message || '音源备份读取失败')
   } finally {
@@ -526,8 +627,10 @@ async function checkCompatibility(source) {
     executionStarted = true
     const result = await runCustomSourceCompatibility(source, {
       onRequest: createCustomSourceRequestBridge(source),
+      onUpdateAlert: (alert) => reportUpdateAlert(source, alert),
       signal: controller.signal
     })
+    if (result?.devToolsRequested) reportDevToolsRequest(source)
     if (controller.signal.aborted) return
     compatibilityBySource.value = { ...compatibilityBySource.value, [source.id]: result }
     ElMessage.success(`隔离初始化通过：声明 ${result.sources.length} 个平台；本次仅检测协议能力，未解析或播放歌曲`)
@@ -551,6 +654,15 @@ function supportsMusicUrl(result) {
   return Boolean(result?.sources?.some((platform) => platform.actions.includes('musicUrl')))
 }
 
+function resetCatalogState() {
+  catalogKeyword.value = ''
+  catalogTracks.value = []
+  catalogCharts.value = []
+  catalogChartId.value = ''
+  catalogMessage.value = ''
+  selectedCatalogTrack.value = null
+}
+
 function openAudition(source) {
   if (!supportsMusicUrl(compatibilityBySource.value[source.id])) {
     ElMessage.warning('请先完成隔离兼容检测，并确认音源声明了 musicUrl')
@@ -563,12 +675,67 @@ function openAudition(source) {
   auditionSearchResults.value = []
   auditionMusicInfoText.value = JSON.stringify({ title: '', singerName: '' }, null, 2)
   resolvedAuditionTrack.value = null
+  resetCatalogState()
   auditionVisible.value = true
 }
 
 function onAuditionPlatformChange(platformKey) {
   const platform = auditionPlatforms.value.find((item) => item.key === platformKey)
   auditionQuality.value = platform?.qualities?.[0] || ''
+  resetCatalogState()
+}
+
+async function searchCatalogTracks() {
+  const query = catalogKeyword.value.trim()
+  if (!query || catalogSearching.value) return
+  catalogSearching.value = true
+  catalogMessage.value = ''
+  try {
+    catalogTracks.value = await searchPlatformTracks(auditionPlatformKey.value, query, { limit: 10 })
+    if (!catalogTracks.value.length) catalogMessage.value = '该平台没有找到曲目；可手动编辑 musicInfo JSON。'
+  } catch (error) {
+    catalogTracks.value = []
+    catalogMessage.value = error?.message || '平台搜索失败（网页端还受浏览器 CORS 限制）'
+  } finally {
+    catalogSearching.value = false
+  }
+}
+
+async function loadCatalogCharts() {
+  if (catalogChartsLoading.value) return
+  catalogChartsLoading.value = true
+  catalogMessage.value = ''
+  try {
+    catalogCharts.value = await listPlatformCharts(auditionPlatformKey.value)
+    if (!catalogCharts.value.length) catalogMessage.value = '该平台榜单为空。'
+  } catch (error) {
+    catalogCharts.value = []
+    catalogMessage.value = error?.message || '榜单加载失败'
+  } finally {
+    catalogChartsLoading.value = false
+  }
+}
+
+async function loadCatalogChartTracks(chartId) {
+  if (!chartId || catalogChartsLoading.value) return
+  catalogChartsLoading.value = true
+  catalogMessage.value = ''
+  try {
+    catalogTracks.value = await fetchPlatformChartTracks(auditionPlatformKey.value, chartId, { limit: 50 })
+    if (!catalogTracks.value.length) catalogMessage.value = '该榜单没有返回曲目。'
+  } catch (error) {
+    catalogTracks.value = []
+    catalogMessage.value = error?.message || '榜单曲目加载失败（响应过大或接口不可用）'
+  } finally {
+    catalogChartsLoading.value = false
+  }
+}
+
+function useCatalogTrack(track) {
+  if (!track?.musicInfo) return
+  selectedCatalogTrack.value = track
+  auditionMusicInfoText.value = JSON.stringify(track.musicInfo, null, 2)
+  ElMessage.success(`已填入${track.platform === 'wy' ? '网易云' : '平台'}真实曲目 ID；确认音质后即可解析`)
 }
 
 async function searchAuditionCatalog() {
@@ -650,9 +817,11 @@ async function resolveAudition() {
     consentGranted = true
     session = await createCustomSourceSession(source, {
       onRequest: createCustomSourceRequestBridge(source),
+      onUpdateAlert: (alert) => reportUpdateAlert(source, alert),
       signal: controller.signal
     })
     activeAuditionSession = session
+    if (session.capabilities?.devToolsRequested) reportDevToolsRequest(source)
     const runtimePlatform = session.capabilities.sources.find((platform) => platform.key === selectedPlatform.key)
     if (!runtimePlatform?.actions.includes('musicUrl')) throw new Error('本次初始化没有声明所选平台的 musicUrl 能力')
 
@@ -666,19 +835,65 @@ async function resolveAudition() {
     })
     if (controller.signal.aborted) throw new Error('隔离试听已取消')
     const media = validateCustomSourceMediaUrl(rawMediaUrl)
-    let customLyrics = []
+    let lyricBundle = { lines: [], translationLines: [], romajiLines: [], verbatimLines: [] }
+    let sessionUsable = true
     if (runtimePlatform.actions.includes('lyric')) {
-      try {
-        const lyricResult = await session.request({
-          source: runtimePlatform.key,
-          action: 'lyric',
-          info: { musicInfo }
-        })
-        customLyrics = parseCustomSourceLyrics(lyricResult)
-      } catch {
-        // 歌词是可选能力；失败不影响已解析的音频。
+      const lyricResult = await settleOptionalRequest(session.request({
+        source: runtimePlatform.key,
+        action: 'lyric',
+        info: { musicInfo }
+      }), {
+        timeoutMs: 8_000,
+        onTimeout: () => {
+          // Audio already resolved: a stalled lyrics callback must never hold the
+          // playable track hostage. Destroy the isolated script session before
+          // continuing so late network callbacks/prompts cannot leak behind playback.
+          sessionUsable = false
+          session.destroy()
+          if (activeAuditionSession === session) activeAuditionSession = null
+        }
+      })
+      if (!lyricResult.timedOut && !lyricResult.error) {
+        try { lyricBundle = parseCustomSourceLyricBundle(lyricResult.value) } catch { /* optional */ }
       }
     }
+    // The picture action is also optional. If the lyric timeout destroyed the
+    // worker session, skip it and continue with catalog/song cover metadata.
+    let coverUrl = ''
+    if (sessionUsable && runtimePlatform.actions.includes('pic')) {
+      const picResult = await settleOptionalRequest(session.request({
+        source: runtimePlatform.key,
+        action: 'pic',
+        info: { musicInfo }
+      }), {
+        timeoutMs: 8_000,
+        onTimeout: () => {
+          sessionUsable = false
+          session.destroy()
+          if (activeAuditionSession === session) activeAuditionSession = null
+        }
+      })
+      if (!picResult.timedOut && !picResult.error && typeof picResult.value === 'string' && picResult.value.trim()) {
+        coverUrl = picResult.value.trim()
+      }
+    }
+    const catalogTrack = selectedCatalogTrack.value && selectedCatalogTrack.value.platform === runtimePlatform.key
+      ? { ...selectedCatalogTrack.value, musicInfo }
+      : { musicInfo }
+    const extrasController = new AbortController()
+    const abortExtras = () => extrasController.abort()
+    if (controller.signal.aborted) extrasController.abort()
+    else controller.signal.addEventListener('abort', abortExtras, { once: true })
+    const extrasResult = await settleOptionalRequest(
+      fetchPlatformTrackExtras(runtimePlatform.key, catalogTrack, { signal: extrasController.signal }),
+      { timeoutMs: 8_000, onTimeout: abortExtras }
+    )
+    controller.signal.removeEventListener('abort', abortExtras)
+    const extras = extrasResult.timedOut || extrasResult.error ? null : extrasResult.value
+    if (!lyricBundle.lines.length && extras?.lyric) {
+      try { lyricBundle = parseCustomSourceLyricBundle({ lyric: extras.lyric }) } catch { /* optional */ }
+    }
+    if (!coverUrl && extras?.coverUrl) coverUrl = String(extras.coverUrl)
     if (controller.signal.aborted) throw new Error('隔离试听已取消')
     await ElMessageBox.confirm(
       isDesktop ? `音频来自 ${media.origin}。桌面将再次确认域名，并通过不带 Cookie 的受控媒体流加载。HTTP 为明文传输。请确认你有权试听。` : `音频来自 ${media.origin}。播放器将使用 crossorigin=anonymous（不发送 Cookie/登录态）；若该站未允许 CORS，浏览器将阻止播放。请确认你有权试听。`,
@@ -696,11 +911,14 @@ async function resolveAudition() {
       title,
       singerName,
       album: firstMusicText(musicInfo.album, musicInfo.albumName),
-      cover: '',
+      cover: coverUrl,
       duration: Number.isFinite(duration) && duration > 0 && duration <= 3600 ? duration : 0,
       audioUrl: playbackUrl,
       audioOrigin: media.origin,
-      customLyrics,
+      customLyrics: lyricBundle.lines,
+      customTranslationLyrics: lyricBundle.translationLines,
+      customRomajiLyrics: lyricBundle.romajiLines,
+      customVerbatimLyrics: lyricBundle.verbatimLines,
       categoryName: '自定义源',
       sourceName: source.name,
       sourcePlatform: runtimePlatform.name,
@@ -744,6 +962,7 @@ function onAuditionClosed() {
   activeAuditionSession = null
   auditionSource.value = null
   auditionSearchResults.value = []
+  resetCatalogState()
   if (!auditioning.value) resolvedAuditionTrack.value = null
 }
 
@@ -885,6 +1104,9 @@ function formatDate(value) {
 .source-audition-field :deep(.el-select) { width: 100%; }
 .source-audition-catalog { display: flex; flex-direction: column; gap: 8px; color: var(--text-main); font-size: 12px; }
 .source-audition-search { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.source-audition-catalog .source-audition-search { grid-template-columns: minmax(0, 1fr) auto auto; }
+.source-audition-chart-select { width: 100%; margin: 8px 0 0; }
+.source-audition-note { display: block; margin-top: 6px; color: var(--text-sub); font-size: 10px; line-height: 1.6; }
 .source-audition-results { display: flex; max-height: 110px; flex-wrap: wrap; gap: 4px; overflow-y: auto; padding: 6px; border: 1px solid var(--border-color); border-radius: 8px; }
 .source-audition-info small, .source-audition-ready small { color: var(--text-sub); font-size: 10px; line-height: 1.5; }
 .source-audition-ready { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 12px; border: 1px solid color-mix(in srgb, var(--holo-primary) 32%, transparent); border-radius: 12px; background: color-mix(in srgb, var(--holo-primary) 6%, transparent); }
@@ -910,7 +1132,7 @@ function formatDate(value) {
   .source-toolbar-actions { width: 100%; align-items: stretch !important; flex-direction: column; gap: 2px; }
   .source-search { width: 100%; }
   .source-backup-actions { justify-content: flex-start; }
-  .source-audition-fields, .source-audition-search { grid-template-columns: 1fr; }
+  .source-audition-fields, .source-audition-search, .source-audition-catalog .source-audition-search { grid-template-columns: 1fr; }
   .source-audition-ready-actions { width: 100%; }
   .source-audition-ready-actions :deep(.el-button) { flex: 1; }
   .source-card { padding: 12px; }

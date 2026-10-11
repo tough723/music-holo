@@ -9,6 +9,7 @@ import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 
 import java.io.Serializable;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 /**
@@ -58,6 +59,9 @@ public class Song implements Serializable {
 
     /** 播放量 */
     private Long playCount;
+
+    /** LUFS 实测响度；音频预扫描未实现前恒为 null */
+    private BigDecimal loudness;
 
     @TableLogic
     private Integer deleted;

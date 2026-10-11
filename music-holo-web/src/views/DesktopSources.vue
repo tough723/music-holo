@@ -6,7 +6,7 @@
         <h1>本机音源工作台</h1>
         <p>无需登录即可导入可信脚本、检测能力和解析试听。脚本不会上传，也不会在启动时自动执行。</p>
         <p v-if="!userStore.isLogin" class="desktop-source-note">当前使用本机访客源库；登录后切换到独立的账号源库，不自动迁移。账号、收藏和站内曲库需要连接业务后端，音源试听不需要。</p>
-        <p class="desktop-source-note">第三方搜索与榜单尚未接入。请在试听台填写音源所需的真实平台曲目 ID；不要填入账号密码或登录令牌。</p>
+        <p class="desktop-source-note">第三方搜索与榜单由 Music Holo 平台适配器提供，与音源脚本无关；在试听台按平台搜索或加载榜单即可自动填入真实平台曲目 ID。不要填入账号密码或登录令牌。</p>
       </div>
       <el-button v-if="!userStore.isLogin" @click="router.push('/login')">连接账号（可选）</el-button>
     </section>

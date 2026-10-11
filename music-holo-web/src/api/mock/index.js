@@ -1592,6 +1592,190 @@ route('get', '/common/stats', async (ctx) => {
 })
 
 // ------------------------------------------------------------
+// 播放会话快照 / 收听统计 / 歌词时间轴校正（与 music-holo-server 语义一致）
+// ------------------------------------------------------------
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
+const SESSION_MODES = ['order', 'loop', 'single', 'random', 'shuffle', 'heart']
+const SESSION_RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
+/** userId -> 会话快照 */
+const sessionStore = new Map()
+/** userId -> Map(eventId -> 事件行) */
+const statEventStore = new Map()
+/** `${userId}:${songId}` -> offsetMs */
+const lyricOffsetStore = new Map()
+
+route('put', '/session', async (ctx) => {
+  const user = requireUser(ctx)
+  const body = ctx.body || {}
+  const queueIds = (Array.isArray(body.queueIds) ? body.queueIds : []).filter((id) => id != null)
+  if (queueIds.length === 0) throw mockError(400, '队列不能为空')
+  if (queueIds.length > 500) throw mockError(400, '队列最多 500 首')
+  if (body.currentSongId != null && !queueIds.includes(body.currentSongId)) throw mockError(400, '当前曲目不在队列中')
+  const mode = body.mode == null || body.mode === '' ? 'order' : String(body.mode).trim().toLowerCase()
+  if (!SESSION_MODES.includes(mode)) throw mockError(400, '播放模式不支持')
+  const playbackRate = body.playbackRate == null ? 1 : Number(body.playbackRate)
+  if (!Number.isFinite(playbackRate) || !SESSION_RATES.includes(playbackRate)) throw mockError(400, '播放倍速不支持')
+  const missing = queueIds.find((id) => !state.songs.some((s) => s.id === id))
+  if (missing !== undefined) throw mockError(400, `歌曲不存在：${missing}`)
+
+  const savedAt = Date.now()
+  const expiresAt = savedAt + SESSION_TTL_MS
+  sessionStore.set(user.id, {
+    version: 1,
+    queueIds,
+    currentSongId: body.currentSongId ?? null,
+    position: Number.isFinite(Number(body.position)) && Number(body.position) > 0 ? Number(body.position) : 0,
+    mode,
+    playbackRate,
+    savedAt,
+    expiresAt
+  })
+  return { version: 1, savedAt, expiresAt }
+})
+
+route('get', '/session', async (ctx) => {
+  const user = requireUser(ctx)
+  const snapshot = sessionStore.get(user.id) || null
+  if (snapshot && snapshot.expiresAt <= Date.now()) {
+    sessionStore.delete(user.id)
+    return null
+  }
+  return snapshot ? { ...snapshot } : null
+})
+
+route('delete', '/session', async (ctx) => {
+  const user = requireUser(ctx)
+  sessionStore.delete(user.id)
+  return null
+})
+
+function normalizeStatEvent(raw, now) {
+  const eventId = String(raw?.eventId ?? '').trim()
+  if (!eventId) throw mockError(400, '事件 id 不能为空')
+  if (eventId.length > 64) throw mockError(400, '事件 id 最长 64 个字符')
+  const type = String(raw?.type ?? '').trim().toLowerCase()
+  if (!['play', 'skip', 'complete', 'error'].includes(type)) throw mockError(400, '事件类型不支持')
+  const at = Number(raw?.at) || 0
+  if (at <= 0 || at < now - 180 * 24 * 3600 * 1000 || at > now + 24 * 3600 * 1000) throw mockError(400, '事件时间异常')
+  const duration = raw?.duration == null ? null : Math.max(0, Math.min(3600, Math.round(Number(raw.duration) || 0)))
+  let position = raw?.position == null ? null : Math.max(0, Math.round(Number(raw.position) || 0))
+  if (position != null && duration != null && duration > 0) position = Math.min(position, duration)
+  let seconds = 0
+  if (type === 'complete') seconds = duration == null ? 0 : duration
+  else if (type === 'skip') seconds = position != null ? position : Math.max(0, Math.round(Number(raw?.seconds) || 0))
+  return { eventId, type, songId: raw?.songId ?? null, duration, position, seconds, at }
+}
+
+route('post', '/stat/batch', async (ctx) => {
+  const user = requireUser(ctx)
+  const items = Array.isArray(ctx.body) ? ctx.body : []
+  if (items.length === 0) throw mockError(400, '没有需要上报的事件')
+  if (items.length > 200) throw mockError(400, '批量上报最多 200 条')
+  const now = Date.now()
+  const events = items.map((item) => normalizeStatEvent(item, now))
+  let bucket = statEventStore.get(user.id)
+  if (!bucket) {
+    bucket = new Map()
+    statEventStore.set(user.id, bucket)
+  }
+  let accepted = 0
+  let duplicates = 0
+  for (const event of events) {
+    if (bucket.has(event.eventId)) {
+      duplicates++
+      continue
+    }
+    bucket.set(event.eventId, event)
+    accepted++
+  }
+  return { accepted, duplicates }
+})
+
+route('get', '/stat/summary', async (ctx) => {
+  const user = requireUser(ctx)
+  const days = Math.max(1, Math.min(90, num(ctx.params.days, 7)))
+  const since = Date.now() - days * 24 * 3600 * 1000
+  const events = [...(statEventStore.get(user.id)?.values() || [])].filter((e) => e.at >= since)
+  const summary = { plays: 0, completes: 0, skips: 0, errors: 0, seconds: 0, topSongs: [] }
+  const perSong = new Map()
+  for (const event of events) {
+    if (event.type === 'play') summary.plays++
+    if (event.type === 'complete') summary.completes++
+    if (event.type === 'skip') summary.skips++
+    if (event.type === 'error') summary.errors++
+    summary.seconds += event.seconds
+    if (event.songId != null && event.seconds > 0) {
+      perSong.set(event.songId, (perSong.get(event.songId) || 0) + event.seconds)
+    }
+  }
+  summary.topSongs = [...perSong.entries()]
+    .map(([songId, seconds]) => {
+      const song = state.songs.find((s) => s.id === songId)
+      return { songId, title: song?.title || '未知曲目', seconds }
+    })
+    .sort((a, b) => b.seconds - a.seconds)
+    .slice(0, 5)
+  return summary
+})
+
+function lyricOffsetRowsFor(songId) {
+  return [...lyricOffsetStore.entries()].filter(([key]) => {
+    const parts = key.split(':')
+    return Number(parts[1]) === songId
+  })
+}
+
+function lyricOffsetConsensus(songId) {
+  const offsets = lyricOffsetRowsFor(songId).map(([, value]) => value).sort((a, b) => a - b)
+  if (offsets.length < 3) return null
+  const mid = Math.floor(offsets.length / 2)
+  return offsets.length % 2 === 1 ? offsets[mid] : Math.round((offsets[mid - 1] + offsets[mid]) / 2)
+}
+
+route('get', '/lyric/offset', async (ctx) => {
+  const songId = num(ctx.params.songId)
+  const rows = lyricOffsetRowsFor(songId)
+  return {
+    songId,
+    offsetMs: lyricOffsetConsensus(songId),
+    count: rows.length,
+    minReports: 3,
+    mine: ctx.user ? lyricOffsetStore.get(`${ctx.user.id}:${songId}`) ?? null : null
+  }
+})
+
+route('post', '/lyric/offset', async (ctx) => {
+  const user = requireUser(ctx)
+  const songId = num(ctx.body?.songId)
+  const offsetMs = Math.round(Number(ctx.body?.offsetMs))
+  if (!Number.isFinite(offsetMs) || offsetMs < -5000 || offsetMs > 5000) throw mockError(400, '偏移需在 ±5000 毫秒以内')
+  if (!state.songs.some((s) => s.id === songId)) throw mockError(400, '歌曲不存在或已下架')
+  lyricOffsetStore.set(`${user.id}:${songId}`, Math.max(-5000, Math.min(5000, offsetMs)))
+  const rows = lyricOffsetRowsFor(songId)
+  return {
+    songId,
+    offsetMs: lyricOffsetConsensus(songId),
+    count: rows.length,
+    minReports: 3,
+    mine: lyricOffsetStore.get(`${user.id}:${songId}`)
+  }
+})
+
+route('delete', '/lyric/offset', async (ctx) => {
+  const user = requireUser(ctx)
+  const songId = num(ctx.params.songId)
+  lyricOffsetStore.delete(`${user.id}:${songId}`)
+  const rows = lyricOffsetRowsFor(songId)
+  return {
+    songId,
+    offsetMs: lyricOffsetConsensus(songId),
+    count: rows.length,
+    minReports: 3,
+    mine: null
+  }
+})
+
+// ------------------------------------------------------------
 // 请求入口
 // ------------------------------------------------------------
 export async function mockRequest(config) {

@@ -47,7 +47,7 @@
       <div class="results-heading">
         <div>
           <div class="section-title">“{{ results.keyword || route.query.q }}” 的搜索结果</div>
-          <div class="minor-title">歌曲 {{ results.songs.length }} · 歌手 {{ results.singers.length }} · 歌单 {{ results.playlists.length }}</div>
+          <div class="minor-title">本站歌曲 {{ results.songs.length }} · 歌手 {{ results.singers.length }} · 歌单 {{ results.playlists.length }} · 在线平台 {{ onlineTotalCount }}</div>
         </div>
         <el-button text type="primary" @click="router.push('/charts')">
           <el-icon><TrendCharts /></el-icon> 去排行榜发现
@@ -65,7 +65,7 @@
             @toggle-favorite="onToggleFavorite"
             @add-queue="onAddQueue"
           />
-          <el-empty v-else description="没有找到相关歌曲，试试歌词中的另一段文字。" :image-size="90" />
+          <el-empty v-else description="本站曲库未找到相关歌曲；可以切换到“在线平台”搜索实时平台曲目。" :image-size="90" />
         </el-tab-pane>
         <el-tab-pane :label="`歌手 ${results.singers.length}`" name="singers">
           <div v-if="results.singers.length" class="entity-grid">
@@ -87,13 +87,37 @@
           </div>
           <el-empty v-else description="没有找到公开歌单。" :image-size="90" />
         </el-tab-pane>
+        <el-tab-pane :label="`在线平台 ${onlineTotalCount}`" name="online">
+          <el-tabs v-model="activeOnlinePlatform" class="online-platform-tabs" @tab-change="onOnlinePlatformChange">
+            <el-tab-pane v-for="platform in ONLINE_PLATFORMS" :key="platform.key" :name="platform.key" :label="`${platform.name} ${onlineResultsByPlatform[platform.key].length}`">
+              <div class="online-tab-toolbar">
+                <span class="minor-title">{{ platform.name }} · {{ currentOnlineState.loaded ? '已加载' : '等待搜索' }}</span>
+                <el-button size="small" type="primary" :loading="currentOnlineState.loading" @click="loadOnlineResults(platform.key, true)">搜索当前平台</el-button>
+              </div>
+              <div v-if="currentOnlineState.error" class="online-error" role="alert">{{ currentOnlineState.error }}</div>
+              <div v-else-if="currentOnlineResults.length" class="online-results" aria-label="在线平台结果">
+                <div v-for="track in currentOnlineResults" :key="`${track.platform}-${track.musicInfo?.id || track.musicInfo?.songmid || track.name}`" class="online-track">
+                  <div class="online-track-copy">
+                    <strong>{{ track.name }}</strong>
+                    <span>{{ track.singer || '未知歌手' }}<template v-if="track.album"> · {{ track.album }}</template></span>
+                  </div>
+                  <el-button size="small" type="primary" :loading="onlinePlaying === track" @click="playOnline(track)">播放</el-button>
+                </div>
+              </div>
+              <el-empty v-else-if="currentOnlineState.loaded && !currentOnlineState.loading" description="在线平台未找到曲目" :image-size="70" />
+              <div v-else class="online-hint">切换或点击“搜索当前平台”加载实时平台结果。</div>
+            </el-tab-pane>
+          </el-tabs>
+        </el-tab-pane>
       </el-tabs>
     </section>
+
+
   </div>
 </template>
 
 <script setup>
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import * as searchApi from '@/api/search'
@@ -102,6 +126,8 @@ import { usePlayerStore } from '@/store/player'
 import { usePreferencesStore, RECENT_SEARCH_STORAGE_KEY } from '@/store/preferences'
 import { useUserStore } from '@/store/user'
 import { fmtCount } from '@/utils/format'
+import { bootstrapOnlineSources, searchOnlineTracks, resolveOnlineTrack } from '@/utils/onlineTrackService'
+import { ONLINE_PLATFORMS, createOnlinePlatformResults, createOnlinePlatformStates } from '@/utils/onlinePlatformState'
 import SongList from '@/components/SongList.vue'
 import Cover from '@/components/Cover.vue'
 
@@ -117,6 +143,14 @@ const favoriteIds = ref([])
 const recentTerms = ref([])
 const results = ref({ keyword: '', songs: [], singers: [], playlists: [] })
 const suggestionTerms = ['霓虹', '月光', '夏夜', '回声', '远方']
+const activeOnlinePlatform = ref('wy')
+const onlineResultsByPlatform = reactive(createOnlinePlatformResults())
+const onlineStateByPlatform = reactive(createOnlinePlatformStates())
+const onlinePlaying = ref(null)
+const onlineTotalCount = computed(() => Object.values(onlineResultsByPlatform).reduce((total, items) => total + items.length, 0))
+const currentOnlineResults = computed(() => onlineResultsByPlatform[activeOnlinePlatform.value] || [])
+const currentOnlineState = computed(() => onlineStateByPlatform[activeOnlinePlatform.value] || { loading: false, loaded: false, error: '' })
+let onlineSearchGeneration = 0
 
 const readRecent = () => {
   if (!preferences.rememberSearchHistory) {
@@ -181,7 +215,15 @@ watch(
   () => [preferences.rememberSearchHistory, preferences.searchHistoryLimit],
   readRecent
 )
-watch(() => route.query.q, (value) => { loadResults(value) }, { immediate: true })
+watch(() => route.query.q, (value) => {
+  onlineSearchGeneration += 1
+  activeOnlinePlatform.value = 'wy'
+  Object.assign(onlineResultsByPlatform, createOnlinePlatformResults())
+  Object.assign(onlineStateByPlatform, createOnlinePlatformStates())
+  activeTab.value = 'songs'
+  loadResults(value)
+  if (String(value || '').trim()) loadOnlineResults('wy')
+}, { immediate: true })
 
 const submitSearch = () => {
   const q = keyword.value.trim()
@@ -197,6 +239,48 @@ const onPlay = (song) => playerStore.playAll(results.value.songs, song.id)
 const onAddQueue = (song) => {
   playerStore.addToQueue(song)
   ElMessage.success(`已加入播放队列：《${song.title}》`)
+}
+
+async function loadOnlineResults(platform = activeOnlinePlatform.value, force = false) {
+  const q = String(route.query.q || keyword.value || '').trim()
+  if (!q || !onlineStateByPlatform[platform] || (onlineStateByPlatform[platform].loaded && !force)) return
+  const generation = onlineSearchGeneration
+  const state = onlineStateByPlatform[platform]
+  state.loading = true
+  state.error = ''
+  try {
+    await bootstrapOnlineSources()
+    const resultsForPlatform = await searchOnlineTracks(platform, q, { limit: 10 })
+    if (generation !== onlineSearchGeneration) return
+    onlineResultsByPlatform[platform] = resultsForPlatform
+    state.loaded = true
+    if (!results.value.songs.length && onlineTotalCount.value) activeTab.value = 'online'
+  } catch (error) {
+    if (generation !== onlineSearchGeneration) return
+    onlineResultsByPlatform[platform] = []
+    state.error = error?.message || '在线平台搜索失败，请检查网络或浏览器跨域授权'
+    state.loaded = true
+  } finally {
+    if (generation === onlineSearchGeneration) state.loading = false
+  }
+}
+
+const onOnlinePlatformChange = (platform) => {
+  activeOnlinePlatform.value = platform
+  loadOnlineResults(platform)
+}
+
+const playOnline = async (track) => {
+  onlinePlaying.value = track
+  try {
+    const song = await resolveOnlineTrack(track, { quality: '320k' })
+    await playerStore.playSong(song)
+    ElMessage.success(`已开始播放《${song.title}》`)
+  } catch (error) {
+    ElMessage.warning(error?.message || '在线曲目解析失败，请先导入自动音源')
+  } finally {
+    onlinePlaying.value = null
+  }
 }
 
 const onToggleFavorite = async (song) => {
@@ -301,6 +385,19 @@ h1 {
 .result-tabs :deep(.el-tabs__content) {
   padding-top: 4px;
 }
+.online-tab-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.online-panel {
+  padding: 22px 30px;
+  border-radius: 18px;
+}
+.online-actions { display: flex; align-items: center; gap: 8px; }
+.online-results { display: grid; gap: 8px; }
+.online-track { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; border: 1px solid var(--border-color); border-radius: 12px; }
+.online-track-copy { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.online-track-copy strong, .online-track-copy span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.online-track-copy span, .online-hint { color: var(--text-sub); font-size: 12px; }
+.online-error { color: var(--el-color-danger); font-size: 13px; padding: 10px 0; }
+@media (max-width: 600px) { .online-panel { padding: 20px 16px; } .online-actions { width: 100%; } .online-actions :deep(.el-select) { flex: 1; } }
 .entity-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
