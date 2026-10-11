@@ -1,4 +1,7 @@
 <template>
+  <div v-if="currentSong?.onlineQueueReference && isOnlineReferenceExpired(currentSong.onlineQueueReference)" class="online-expired-notice" role="alert">
+    当前在线音频地址已过期，重试时将重新解析来源
+  </div>
   <div v-if="resumePrompt" class="session-resume" role="status">
     <div class="session-resume-text">
       继续上次的收听？队列 {{ resumePrompt.count }} 首，上次播到第 {{ resumePrompt.index }} 首 · {{ resumePrompt.position }}
@@ -805,6 +808,7 @@ import { formatSeconds, formatPercent } from '@/utils/playStats'
 import * as favoriteApi from '@/api/favorite'
 import * as playlistApi from '@/api/playlist'
 import { fmtDuration } from '@/utils/format'
+import { isOnlineQueueReferenceExpired } from '@/utils/onlineQueue'
 import {
   MEDIA_ERR_NETWORK,
   hasProgress,
@@ -2256,9 +2260,34 @@ function recoverFromStall(song) {
   ElMessage.warning(`《${song.title}》缓冲卡住了，可点播放器上的${tail}`)
 }
 
-function retryAudio() {
+async function retryAudio() {
   const song = currentSong.value
   const audio = activeAudioElement()
+  if (song?.onlineQueueReference && isOnlineQueueReferenceExpired(song.onlineQueueReference)) {
+    try {
+      const { resolveOnlineTrack } = await import('@/utils/onlineTrackService')
+      const refreshed = await resolveOnlineTrack({
+        platform: song.onlineQueueReference.platform,
+        name: song.title,
+        singer: song.singerName,
+        album: song.album,
+        musicInfo: song.onlineQueueReference.musicInfo
+      })
+      if (currentSong.value?.id === song.id && refreshed?.audioUrl) {
+        playerStore.applySourceToCurrent({
+          audioUrl: refreshed.audioUrl,
+          sourceName: refreshed.sourceName,
+          sourcePlatform: refreshed.sourcePlatform,
+          sourceQuality: refreshed.sourceQuality,
+          isCustomSource: true,
+          onlineQueueReference: refreshed.onlineQueueReference
+        })
+      }
+    } catch {
+      ElMessage.error('在线音频重新解析失败，请稍后重试')
+      return
+    }
+  }
   if (song?.id !== undefined && song?.id !== null && failedSongIds.value.delete(song.id)) {
     failedSongIds.value = new Set(failedSongIds.value)
   }

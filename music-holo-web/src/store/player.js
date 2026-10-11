@@ -878,7 +878,7 @@ export const usePlayerStore = defineStore('player', {
      * 快速换源：用新的音频地址替换当前曲目（保留队列位置与播放进度）。
      * 只改播放地址与来源标注，不动曲库身份（id 不变，歌词/收藏等仍然有效）。
      */
-    applySourceToCurrent({ audioUrl, sourceName = '', sourcePlatform = '', sourceQuality = '', isCustomSource = true }) {
+    applySourceToCurrent({ audioUrl, sourceName = '', sourcePlatform = '', sourceQuality = '', isCustomSource = true, onlineQueueReference = null }) {
       const index = this.currentIndex
       if (index < 0 || index >= this.queue.length) return false
       const url = String(audioUrl || '').trim()
@@ -892,6 +892,7 @@ export const usePlayerStore = defineStore('player', {
         sourceName: String(sourceName || '') || previous.sourceName,
         sourcePlatform: String(sourcePlatform || '') || previous.sourcePlatform,
         sourceQuality: String(sourceQuality || '') || previous.sourceQuality,
+        onlineQueueReference: onlineQueueReference || previous.onlineQueueReference,
         isCustomSource: Boolean(isCustomSource),
         sourceSwitchedAt: Date.now()
       }
