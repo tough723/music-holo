@@ -72,13 +72,27 @@
       </div>
       <div v-if="onlineError" class="online-error">{{ onlineError }}</div>
       <template v-else>
-        <el-select v-if="onlineCharts.length" v-model="onlineChartId" placeholder="选择在线榜单" style="width: min(420px, 100%)" @change="loadOnlineTracks">
-          <el-option v-for="chart in onlineCharts" :key="chart.id" :label="chart.name" :value="chart.id" />
-        </el-select>
+        <div v-if="onlineCharts.length" class="online-chart-picker">
+          <button
+            v-for="chart in onlineCharts"
+            :key="chart.id"
+            type="button"
+            class="online-chart-card"
+            :class="{ 'is-selected': onlineChartId === chart.id }"
+            @click="selectOnlineChart(chart.id)"
+          >
+            <img v-if="chart.coverUrl" :src="chart.coverUrl" :alt="`${chart.name} 封面`" loading="lazy" />
+            <span v-else class="online-chart-card-placeholder"><el-icon><TrendCharts /></el-icon></span>
+            <span class="online-chart-card-copy"><strong>{{ chart.name }}</strong><small>{{ chart.updateFrequency || '平台实时榜单' }}</small></span>
+          </button>
+        </div>
         <div v-if="onlineTracks.length" class="online-chart-tracks">
           <div v-for="track in onlineTracks" :key="`${track.platform}-${track.musicInfo?.id || track.name}`" class="online-chart-track">
-            <span><strong>{{ track.name }}</strong> · {{ track.singer || '未知歌手' }}</span>
-            <el-button size="small" type="primary" :loading="onlinePlaying === track" @click="playOnlineTrack(track)">播放</el-button>
+            <span class="online-track-copy"><strong>{{ track.name }}</strong><small>{{ track.singer || '未知歌手' }}<template v-if="track.album"> · {{ track.album }}</template></small></span>
+            <div class="online-track-actions">
+              <el-button size="small" :loading="onlinePlaying === track" @click="queueOnlineTrack(track)">加入队列</el-button>
+              <el-button size="small" type="primary" :loading="onlinePlaying === track" @click="playOnlineTrack(track)">播放</el-button>
+            </div>
           </div>
         </div>
         <el-empty v-if="onlineLoaded && !onlineCharts.length" description="该平台没有返回可用榜单" :image-size="70" />
@@ -138,6 +152,13 @@ const selectCategory = (id) => {
   loadSongs()
 }
 
+const selectOnlineChart = async (id) => {
+  if (onlineChartId.value === id && onlineTracks.value.length) return
+  onlineChartId.value = id
+  onlineTracks.value = []
+  await loadOnlineTracks()
+}
+
 const onPlay = (song) => playerStore.playAll(songs.value, song.id)
 const onAddQueue = (song) => {
   playerStore.addToQueue(song)
@@ -165,9 +186,16 @@ const loadOnlineTracks = async () => {
   if (!onlineChartId.value) return
   try { onlineTracks.value = await fetchOnlineChartTracks(onlinePlatform.value, onlineChartId.value, { limit: 20 }) } catch (error) { onlineError.value = error?.message || '在线榜单曲目加载失败' }
 }
+const resolveChartTrack = async (track) => resolveOnlineTrack(track, { quality: '320k' })
 const playOnlineTrack = async (track) => {
   onlinePlaying.value = track
-  try { await playerStore.playSong(await resolveOnlineTrack(track, { quality: '320k' })); ElMessage.success(`已开始播放《${track.name}》`) }
+  try { await playerStore.playSong(await resolveChartTrack(track)); ElMessage.success(`已开始播放《${track.name}》`) }
+  catch (error) { ElMessage.warning(error?.message || '在线曲目解析失败，请先导入自动音源') }
+  finally { onlinePlaying.value = null }
+}
+const queueOnlineTrack = async (track) => {
+  onlinePlaying.value = track
+  try { playerStore.addToQueue(await resolveChartTrack(track)); ElMessage.success(`已加入队列《${track.name}》`) }
   catch (error) { ElMessage.warning(error?.message || '在线曲目解析失败，请先导入自动音源') }
   finally { onlinePlaying.value = null }
 }
@@ -263,8 +291,20 @@ h1 {
 }
 .online-chart-panel { margin-top: 0; }
 .online-chart-actions { display: flex; align-items: center; gap: 8px; }
+.online-chart-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; margin: 16px 0; }
+.online-chart-card { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 10px; border: 1px solid var(--border-color); border-radius: 14px; color: inherit; text-align: left; background: rgba(148, 163, 184, 0.05); cursor: pointer; transition: border-color .18s, transform .18s, background .18s; }
+.online-chart-card:hover, .online-chart-card.is-selected { border-color: var(--holo-primary); background: color-mix(in srgb, var(--holo-primary) 10%, transparent); transform: translateY(-2px); }
+.online-chart-card img, .online-chart-card-placeholder { flex: 0 0 48px; width: 48px; height: 48px; border-radius: 10px; object-fit: cover; }
+.online-chart-card-placeholder { display: grid; place-items: center; color: var(--holo-primary); background: color-mix(in srgb, var(--holo-primary) 12%, transparent); }
+.online-chart-card-copy { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.online-chart-card-copy strong, .online-chart-card-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.online-chart-card-copy small { color: var(--text-sub); font-size: 11px; }
 .online-chart-tracks { display: grid; gap: 8px; margin-top: 14px; }
 .online-chart-track { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 10px; }
+.online-track-copy { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.online-track-copy strong, .online-track-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.online-track-copy small { color: var(--text-sub); font-size: 12px; }
+.online-track-actions { display: flex; flex: 0 0 auto; gap: 6px; }
 .online-error { color: var(--el-color-danger); font-size: 13px; margin: 10px 0; }
 .chart-tabs {
   display: flex;
