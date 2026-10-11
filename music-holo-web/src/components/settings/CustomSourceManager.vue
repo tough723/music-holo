@@ -98,6 +98,7 @@
               <el-tag v-if="!compatibilityBySource[source.id]" size="small" type="info" effect="plain">已导入 · 自动初始化中</el-tag>
               <el-tag v-else-if="!compatibilityBySource[source.id].error" size="small" type="success" effect="plain">隔离检测通过</el-tag>
               <el-tag v-if="source.autoRun !== false" size="small" type="warning" effect="plain">自动运行已启用</el-tag>
+              <el-tag v-if="source.autoApproveNetwork !== false" size="small" type="danger" effect="plain">公网请求自动授权</el-tag>
               <el-tag v-else size="small" type="danger" effect="plain">检测失败</el-tag>
             </div>
             <p v-if="source.description" class="source-description">{{ source.description }}</p>

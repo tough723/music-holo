@@ -132,8 +132,7 @@ import { usePlayerStore } from '@/store/player'
 import { usePreferencesStore, RECENT_SEARCH_STORAGE_KEY } from '@/store/preferences'
 import { useUserStore } from '@/store/user'
 import { fmtCount } from '@/utils/format'
-import { searchPlatformTracks } from '@/utils/sourceCatalog'
-import { bootstrapAutoSources, resolveAutoTrack } from '@/utils/customSourceAuto'
+import { bootstrapOnlineSources, searchOnlineTracks, resolveOnlineTrack } from '@/utils/onlineTrackService'
 import SongList from '@/components/SongList.vue'
 import Cover from '@/components/Cover.vue'
 
@@ -250,8 +249,8 @@ const loadOnlineResults = async () => {
   onlineLoaded.value = false
   onlineError.value = ''
   try {
-    await bootstrapAutoSources()
-    onlineResults.value = await searchPlatformTracks(onlinePlatform.value, q, { limit: 10 })
+    await bootstrapOnlineSources()
+    onlineResults.value = await searchOnlineTracks(onlinePlatform.value, q, { limit: 10 })
   } catch (error) {
     onlineResults.value = []
     onlineError.value = error?.message || '在线平台搜索失败，请检查网络或浏览器跨域授权'
@@ -264,7 +263,7 @@ const loadOnlineResults = async () => {
 const playOnline = async (track) => {
   onlinePlaying.value = track
   try {
-    const song = await resolveAutoTrack(track, { quality: '320k' })
+    const song = await resolveOnlineTrack(track, { quality: '320k' })
     await playerStore.playSong(song)
     ElMessage.success(`已开始播放《${song.title}》`)
   } catch (error) {

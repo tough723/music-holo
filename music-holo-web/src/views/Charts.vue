@@ -85,8 +85,7 @@ import * as favoriteApi from '@/api/favorite'
 import { usePlayerStore } from '@/store/player'
 import { useUserStore } from '@/store/user'
 import SongList from '@/components/SongList.vue'
-import { fetchPlatformChartTracks, listPlatformCharts } from '@/utils/sourceCatalog'
-import { bootstrapAutoSources, resolveAutoTrack } from '@/utils/customSourceAuto'
+import { bootstrapOnlineSources, fetchOnlineChartTracks, listOnlineCharts, resolveOnlineTrack } from '@/utils/onlineTrackService'
 
 const router = useRouter()
 const playerStore = usePlayerStore()
@@ -134,8 +133,8 @@ const loadOnlineCharts = async () => {
   onlineError.value = ''
   onlineLoaded.value = false
   try {
-    await bootstrapAutoSources()
-    onlineCharts.value = await listPlatformCharts('wy')
+    await bootstrapOnlineSources()
+    onlineCharts.value = await listOnlineCharts('wy')
     onlineChartId.value = onlineCharts.value[0]?.id || ''
     if (onlineChartId.value) await loadOnlineTracks()
   } catch (error) {
@@ -149,11 +148,11 @@ const loadOnlineCharts = async () => {
 }
 const loadOnlineTracks = async () => {
   if (!onlineChartId.value) return
-  try { onlineTracks.value = await fetchPlatformChartTracks('wy', onlineChartId.value, { limit: 20 }) } catch (error) { onlineError.value = error?.message || '在线榜单曲目加载失败' }
+  try { onlineTracks.value = await fetchOnlineChartTracks('wy', onlineChartId.value, { limit: 20 }) } catch (error) { onlineError.value = error?.message || '在线榜单曲目加载失败' }
 }
 const playOnlineTrack = async (track) => {
   onlinePlaying.value = track
-  try { await playerStore.playSong(await resolveAutoTrack(track, { quality: '320k' })); ElMessage.success(`已开始播放《${track.name}》`) }
+  try { await playerStore.playSong(await resolveOnlineTrack(track, { quality: '320k' })); ElMessage.success(`已开始播放《${track.name}》`) }
   catch (error) { ElMessage.warning(error?.message || '在线曲目解析失败，请先导入自动音源') }
   finally { onlinePlaying.value = null }
 }

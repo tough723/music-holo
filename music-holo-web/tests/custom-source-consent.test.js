@@ -78,6 +78,17 @@ describe('自定义音源逐会话网络授权', () => {
     expect(request).toHaveBeenCalledOnce()
   })
 
+  it('导入即自动授权时跳过确认，但仍执行公网 HTTPS 校验', async () => {
+    const confirmRequest = vi.fn()
+    const request = vi.fn().mockResolvedValue({ statusCode: 200 })
+    const bridge = createCustomSourceRequestBridge({ name: '自动源', autoApproveNetwork: true }, { confirmRequest, request })
+
+    await bridge('https://api.example.org/song', { method: 'GET' })
+    expect(confirmRequest).not.toHaveBeenCalled()
+    expect(request).toHaveBeenCalledOnce()
+    await expect(bridge('http://api.example.org/song', { method: 'GET' })).rejects.toThrow('公网 HTTPS')
+  })
+
   it('只允许公网 HTTPS 目标，校验失败前不会询问或发出请求', async () => {
     const confirmRequest = vi.fn().mockResolvedValue(undefined)
     const request = vi.fn()
