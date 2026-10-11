@@ -7,7 +7,13 @@
       tabindex="-1"
       aria-live="off"
     >
-      <div v-if="immersive" class="lyric-backdrop" aria-hidden="true" @click="immersive = false">
+      <div
+        v-if="immersive"
+        class="lyric-backdrop"
+        :style="{ '--lyric-cover-image': coverImageStyle }"
+        aria-hidden="true"
+        @click="immersive = false"
+      >
         <div class="backdrop-orbit orbit-a"></div>
         <div class="backdrop-orbit orbit-b"></div>
         <div class="backdrop-sweep"></div>
@@ -239,6 +245,10 @@ const offsetLabel = computed(() => {
   return `校准 ${value > 0 ? '+' : '−'}${seconds.toFixed(1)}s`
 })
 const fontScale = computed(() => LYRIC_FONT_SIZES.find((item) => item.key === fontSize.value)?.scale || 1)
+const coverImageStyle = computed(() => {
+  const cover = String(playerStore.currentSong?.cover || '').replace(/["'()\\]/g, '')
+  return cover ? `url("${cover}")` : 'none'
+})
 /** 歌词时间轴：播放进度叠加校准偏移，只影响高亮/逐字判定，不影响真实播放进度。 */
 const lyricTime = computed(() => playerStore.currentTime + offsetMs.value / 1000)
 
@@ -1084,9 +1094,12 @@ onUnmounted(() => {
   inset: 0;
   overflow: hidden;
   background:
+    linear-gradient(115deg, rgba(3, 6, 18, 0.88), rgba(3, 6, 18, 0.62)),
+    var(--lyric-cover-image) center / cover no-repeat,
     radial-gradient(ellipse at 24% 38%, color-mix(in srgb, var(--holo-primary) 15%, transparent), transparent 45%),
     radial-gradient(ellipse at 82% 72%, color-mix(in srgb, var(--holo-secondary) 14%, transparent), transparent 43%),
     rgba(3, 6, 18, 0.72);
+  background-blend-mode: normal, soft-light, normal, normal, normal;
   backdrop-filter: blur(26px) saturate(1.2);
   -webkit-backdrop-filter: blur(26px) saturate(1.2);
 }
@@ -1134,6 +1147,13 @@ onUnmounted(() => {
   transform: translateX(-50%);
   background: linear-gradient(180deg, color-mix(in srgb, var(--holo-primary) 6%, transparent), transparent 78%);
   filter: blur(18px);
+}
+.lyric-backdrop::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, rgba(4, 8, 20, 0.56), transparent 46%, rgba(4, 8, 20, 0.42));
+  pointer-events: none;
 }
 .lyric-panel.immersive {
   width: min(1480px, 100%);
