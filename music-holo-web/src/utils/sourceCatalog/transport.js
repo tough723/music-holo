@@ -14,7 +14,27 @@ export function createCatalogRequest({ name = '平台曲目检索（无凭据）
     run.dispose = () => bridge.dispose?.()
     return run
   }
-  return (url, options, signal) => performCustomSourceRequest(url, options, { signal })
+  return async (url, options = {}, signal) => {
+    const proxyUrl = resolveCatalogProxyUrl(url)
+    if (proxyUrl.startsWith('/api/catalog/')) {
+      const controller = new AbortController()
+      const abort = () => controller.abort()
+      signal?.addEventListener('abort', abort, { once: true })
+      try {
+        const response = await fetch(proxyUrl, { method: options.method || 'GET', headers: options.headers, credentials: 'omit', cache: 'no-store', signal: controller.signal })
+        return { statusCode: response.status, headers: Object.fromEntries(response.headers.entries()), body: await response.text() }
+      } finally { signal?.removeEventListener('abort', abort) }
+    }
+    return performCustomSourceRequest(proxyUrl, options, { signal })
+  }
+}
+
+function resolveCatalogProxyUrl(url) {
+  const value = String(url || '')
+  if (value === 'https://music.163.com/api/toplist/detail') return '/api/catalog/wy/charts'
+  const match = value.match(/^https:\/\/music\.163\.com\/api\/playlist\/detail\?id=([0-9]{1,20})$/)
+  if (match) return `/api/catalog/wy/charts/${match[1]}`
+  return value
 }
 
 export async function requestJson(request, url, { headers, method, signal, loose = false, timeout = 10000 } = {}) {

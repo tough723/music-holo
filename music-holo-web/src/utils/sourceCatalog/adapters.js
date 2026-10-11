@@ -53,9 +53,9 @@ async function listWyCharts(options) {
   const { request, signal } = options
   const data = await requestJson(request, 'https://music.163.com/api/toplist/detail', { signal })
   const list = Array.isArray(data?.list) ? data.list : []
-  return list.filter((item) => item?.id && item?.title).slice(0, 12).map((item) => ({
+  return list.filter((item) => item?.id && (item?.title || item?.name)).slice(0, 12).map((item) => ({
     id: String(item.id),
-    name: clean(item.title, 80),
+    name: clean(item.title || item.name, 80),
     updateFrequency: clean(item.updateFrequency, 40),
     coverUrl: clean(item.coverImgUrl, 400) || ''
   }))

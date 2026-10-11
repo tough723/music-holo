@@ -72,7 +72,7 @@
       </div>
       <div v-if="onlineError" class="online-error">{{ onlineError }}</div>
       <template v-else>
-        <el-select v-model="onlineChartId" placeholder="选择在线榜单" style="width: min(420px, 100%)" @change="loadOnlineTracks">
+        <el-select v-if="onlineCharts.length" v-model="onlineChartId" placeholder="选择在线榜单" style="width: min(420px, 100%)" @change="loadOnlineTracks">
           <el-option v-for="chart in onlineCharts" :key="chart.id" :label="chart.name" :value="chart.id" />
         </el-select>
         <div v-if="onlineTracks.length" class="online-chart-tracks">
@@ -98,7 +98,7 @@ import * as favoriteApi from '@/api/favorite'
 import { usePlayerStore } from '@/store/player'
 import { useUserStore } from '@/store/user'
 import SongList from '@/components/SongList.vue'
-import { bootstrapOnlineSources, fetchOnlineChartTracks, listOnlineCharts, resolveOnlineTrack } from '@/utils/onlineTrackService'
+import { fetchOnlineChartTracks, listOnlineCharts, resolveOnlineTrack } from '@/utils/onlineTrackService'
 
 const router = useRouter()
 const playerStore = usePlayerStore()
@@ -148,7 +148,7 @@ const loadOnlineCharts = async () => {
   onlineError.value = ''
   onlineLoaded.value = false
   try {
-    await bootstrapOnlineSources()
+    // 榜单目录是公开平台能力，不应被某个自定义音源初始化失败阻断。
     onlineCharts.value = await listOnlineCharts(onlinePlatform.value)
     onlineChartId.value = onlineCharts.value[0]?.id || ''
     if (onlineChartId.value) await loadOnlineTracks()

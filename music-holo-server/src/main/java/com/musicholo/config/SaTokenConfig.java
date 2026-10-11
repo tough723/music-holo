@@ -34,7 +34,7 @@ public class SaTokenConfig implements WebMvcConfigurer {
             "/search", "/recommend", "/album", "/singer", "/song", "/category", "/playlist", "/review/page",
             "/common/dict", "/common/download",
             "/lyric/parse", "/lyric/export", "/lyric/offset",
-            "/system/theme", "/system/config",
+            "/system/theme", "/system/config", "/catalog", "/catalog/wy/charts",
             "/profile"
     );
 
