@@ -71,8 +71,9 @@ lx.send(lx.EVENT_NAMES.inited, { sources: {
     })
   })
 
-  // 榜单页：取第一行（按播放量排序，种子数据里是《霓虹海》）
+  // 榜单页默认展示实时平台榜；本旅程验证本站榜的受控自定义源流程。
   await page.goto('/charts')
+  await page.getByRole('tab', { name: '本站播放榜' }).click()
   const firstRow = page.locator('.el-table__row').first()
   await expect(firstRow).toBeVisible()
   // 标题从按钮的 aria-label 里取，保证和后续对话框的名字完全对得上

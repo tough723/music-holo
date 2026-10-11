@@ -71,7 +71,7 @@
         </div>
       </div>
       <div v-if="onlineError" class="online-error" role="alert">{{ onlineError }}</div>
-      <template v-else>
+      <template>
         <div v-if="onlineCharts.length" class="online-chart-picker">
           <button
             v-for="chart in onlineCharts"
