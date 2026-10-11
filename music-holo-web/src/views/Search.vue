@@ -47,7 +47,7 @@
       <div class="results-heading">
         <div>
           <div class="section-title">“{{ results.keyword || route.query.q }}” 的搜索结果</div>
-          <div class="minor-title">本站歌曲 {{ results.songs.length }} · 歌手 {{ results.singers.length }} · 歌单 {{ results.playlists.length }} · 在线平台 {{ onlineResults.length }}</div>
+          <div class="minor-title">本站歌曲 {{ results.songs.length }} · 歌手 {{ results.singers.length }} · 歌单 {{ results.playlists.length }} · 在线平台 {{ onlineTotalCount }}</div>
         </div>
         <el-button text type="primary" @click="router.push('/charts')">
           <el-icon><TrendCharts /></el-icon> 去排行榜发现
