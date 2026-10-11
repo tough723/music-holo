@@ -87,31 +87,27 @@
           </div>
           <el-empty v-else description="没有找到公开歌单。" :image-size="90" />
         </el-tab-pane>
-        <el-tab-pane :label="`在线平台 ${onlineResults.length}`" name="online">
-          <div class="online-tab-toolbar">
-            <div class="online-actions">
-              <el-select v-model="onlinePlatform" size="small" aria-label="在线搜索平台" style="width: 150px">
-                <el-option label="网易云音乐" value="wy" />
-                <el-option label="酷我音乐" value="kw" />
-                <el-option label="酷狗音乐" value="kg" />
-                <el-option label="咪咕音乐" value="mg" />
-              </el-select>
-              <el-button size="small" type="primary" :loading="onlineLoading" @click="loadOnlineResults">搜索在线平台</el-button>
-            </div>
-            <span class="minor-title">{{ onlinePlatformName }} · {{ onlineLoaded ? '已加载' : '等待搜索' }}</span>
-          </div>
-          <div v-if="onlineError" class="online-error">{{ onlineError }}</div>
-          <div v-else-if="onlineResults.length" class="online-results" aria-label="在线平台结果">
-            <div v-for="track in onlineResults" :key="`${track.platform}-${track.musicInfo?.id || track.musicInfo?.songmid || track.name}`" class="online-track">
-              <div class="online-track-copy">
-                <strong>{{ track.name }}</strong>
-                <span>{{ track.singer || '未知歌手' }}<template v-if="track.album"> · {{ track.album }}</template></span>
+        <el-tab-pane :label="`在线平台 ${onlineTotalCount}`" name="online">
+          <el-tabs v-model="activeOnlinePlatform" class="online-platform-tabs" @tab-change="onOnlinePlatformChange">
+            <el-tab-pane v-for="platform in ONLINE_PLATFORMS" :key="platform.key" :name="platform.key" :label="`${platform.name} ${onlineResultsByPlatform[platform.key].length}`">
+              <div class="online-tab-toolbar">
+                <span class="minor-title">{{ platform.name }} · {{ currentOnlineState.loaded ? '已加载' : '等待搜索' }}</span>
+                <el-button size="small" type="primary" :loading="currentOnlineState.loading" @click="loadOnlineResults(platform.key, true)">搜索当前平台</el-button>
               </div>
-              <el-button size="small" type="primary" :loading="onlinePlaying === track" @click="playOnline(track)">播放</el-button>
-            </div>
-          </div>
-          <el-empty v-else-if="onlineLoaded" description="在线平台未找到曲目" :image-size="70" />
-          <div v-else class="online-hint">切换或点击“搜索在线平台”加载实时平台结果。</div>
+              <div v-if="currentOnlineState.error" class="online-error" role="alert">{{ currentOnlineState.error }}</div>
+              <div v-else-if="currentOnlineResults.length" class="online-results" aria-label="在线平台结果">
+                <div v-for="track in currentOnlineResults" :key="`${track.platform}-${track.musicInfo?.id || track.musicInfo?.songmid || track.name}`" class="online-track">
+                  <div class="online-track-copy">
+                    <strong>{{ track.name }}</strong>
+                    <span>{{ track.singer || '未知歌手' }}<template v-if="track.album"> · {{ track.album }}</template></span>
+                  </div>
+                  <el-button size="small" type="primary" :loading="onlinePlaying === track" @click="playOnline(track)">播放</el-button>
+                </div>
+              </div>
+              <el-empty v-else-if="currentOnlineState.loaded && !currentOnlineState.loading" description="在线平台未找到曲目" :image-size="70" />
+              <div v-else class="online-hint">切换或点击“搜索当前平台”加载实时平台结果。</div>
+            </el-tab-pane>
+          </el-tabs>
         </el-tab-pane>
       </el-tabs>
     </section>
@@ -121,7 +117,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import * as searchApi from '@/api/search'
@@ -131,6 +127,7 @@ import { usePreferencesStore, RECENT_SEARCH_STORAGE_KEY } from '@/store/preferen
 import { useUserStore } from '@/store/user'
 import { fmtCount } from '@/utils/format'
 import { bootstrapOnlineSources, searchOnlineTracks, resolveOnlineTrack } from '@/utils/onlineTrackService'
+import { ONLINE_PLATFORMS, createOnlinePlatformResults, createOnlinePlatformStates } from '@/utils/onlinePlatformState'
 import SongList from '@/components/SongList.vue'
 import Cover from '@/components/Cover.vue'
 
@@ -146,13 +143,14 @@ const favoriteIds = ref([])
 const recentTerms = ref([])
 const results = ref({ keyword: '', songs: [], singers: [], playlists: [] })
 const suggestionTerms = ['霓虹', '月光', '夏夜', '回声', '远方']
-const onlinePlatform = ref('wy')
-const onlineResults = ref([])
-const onlineLoading = ref(false)
-const onlineLoaded = ref(false)
-const onlineError = ref('')
+const activeOnlinePlatform = ref('wy')
+const onlineResultsByPlatform = reactive(createOnlinePlatformResults())
+const onlineStateByPlatform = reactive(createOnlinePlatformStates())
 const onlinePlaying = ref(null)
-const onlinePlatformName = computed(() => ({ wy: '网易云音乐', kw: '酷我音乐', kg: '酷狗音乐', mg: '咪咕音乐' }[onlinePlatform.value] || onlinePlatform.value))
+const onlineTotalCount = computed(() => Object.values(onlineResultsByPlatform).reduce((total, items) => total + items.length, 0))
+const currentOnlineResults = computed(() => onlineResultsByPlatform[activeOnlinePlatform.value] || [])
+const currentOnlineState = computed(() => onlineStateByPlatform[activeOnlinePlatform.value] || { loading: false, loaded: false, error: '' })
+let onlineSearchGeneration = 0
 
 const readRecent = () => {
   if (!preferences.rememberSearchHistory) {
@@ -218,12 +216,13 @@ watch(
   readRecent
 )
 watch(() => route.query.q, (value) => {
-  onlineResults.value = []
-  onlineLoaded.value = false
-  onlineError.value = ''
+  onlineSearchGeneration += 1
+  activeOnlinePlatform.value = 'wy'
+  Object.assign(onlineResultsByPlatform, createOnlinePlatformResults())
+  Object.assign(onlineStateByPlatform, createOnlinePlatformStates())
   activeTab.value = 'songs'
   loadResults(value)
-  if (String(value || '').trim()) loadOnlineResults()
+  if (String(value || '').trim()) loadOnlineResults('wy')
 }, { immediate: true })
 
 const submitSearch = () => {
@@ -242,23 +241,33 @@ const onAddQueue = (song) => {
   ElMessage.success(`已加入播放队列：《${song.title}》`)
 }
 
-const loadOnlineResults = async () => {
+const loadOnlineResults = async (platform = activeOnlinePlatform.value, force = false) => {
   const q = String(route.query.q || keyword.value || '').trim()
-  if (!q) return
-  onlineLoading.value = true
-  onlineLoaded.value = false
-  onlineError.value = ''
+  if (!q || !onlineStateByPlatform[platform] || (onlineStateByPlatform[platform].loaded && !force)) return
+  const generation = onlineSearchGeneration
+  const state = onlineStateByPlatform[platform]
+  state.loading = true
+  state.error = ''
   try {
     await bootstrapOnlineSources()
-    onlineResults.value = await searchOnlineTracks(onlinePlatform.value, q, { limit: 10 })
-    if (!results.value.songs.length && onlineResults.value.length) activeTab.value = 'online'
+    const resultsForPlatform = await searchOnlineTracks(platform, q, { limit: 10 })
+    if (generation !== onlineSearchGeneration) return
+    onlineResultsByPlatform[platform] = resultsForPlatform
+    state.loaded = true
+    if (!results.value.songs.length && onlineTotalCount.value) activeTab.value = 'online'
   } catch (error) {
-    onlineResults.value = []
-    onlineError.value = error?.message || '在线平台搜索失败，请检查网络或浏览器跨域授权'
+    if (generation !== onlineSearchGeneration) return
+    onlineResultsByPlatform[platform] = []
+    state.error = error?.message || '在线平台搜索失败，请检查网络或浏览器跨域授权'
+    state.loaded = true
   } finally {
-    onlineLoaded.value = true
-    onlineLoading.value = false
+    if (generation === onlineSearchGeneration) state.loading = false
   }
+}
+
+const onOnlinePlatformChange = (platform) => {
+  activeOnlinePlatform.value = platform
+  loadOnlineResults(platform)
 }
 
 const playOnline = async (track) => {

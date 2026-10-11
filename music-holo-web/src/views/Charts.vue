@@ -11,8 +11,8 @@
 
     <section class="chart-panel glass-panel">
       <div class="chart-source-tabs" role="tablist" aria-label="排行榜来源">
-        <el-button :type="chartSource === 'online' ? 'primary' : 'default'" @click="chartSource = 'online'">在线平台榜单</el-button>
-        <el-button :type="chartSource === 'local' ? 'primary' : 'default'" @click="chartSource = 'local'">本站播放榜</el-button>
+        <el-button role="tab" :aria-selected="chartSource === 'online'" :type="chartSource === 'online' ? 'primary' : 'default'" @click="chartSource = 'online'">在线平台榜单</el-button>
+        <el-button role="tab" :aria-selected="chartSource === 'local'" :type="chartSource === 'local' ? 'primary' : 'default'" @click="chartSource = 'local'">本站播放榜</el-button>
       </div>
       <template v-if="chartSource === 'local'">
       <div class="chart-heading">
@@ -70,7 +70,7 @@
           <el-button size="small" :loading="onlineLoading" @click="loadOnlineCharts">刷新榜单</el-button>
         </div>
       </div>
-      <div v-if="onlineError" class="online-error">{{ onlineError }}</div>
+      <div v-if="onlineError" class="online-error" role="alert">{{ onlineError }}</div>
       <template v-else>
         <div v-if="onlineCharts.length" class="online-chart-picker">
           <button
@@ -79,6 +79,7 @@
             type="button"
             class="online-chart-card"
             :class="{ 'is-selected': onlineChartId === chart.id }"
+            :aria-selected="onlineChartId === chart.id"
             @click="selectOnlineChart(chart.id)"
           >
             <img v-if="chart.coverUrl" :src="chart.coverUrl" :alt="`${chart.name} 封面`" loading="lazy" />
@@ -86,7 +87,8 @@
             <span class="online-chart-card-copy"><strong>{{ chart.name }}</strong><small>{{ chart.updateFrequency || '平台实时榜单' }}</small></span>
           </button>
         </div>
-        <div v-if="onlineTracks.length" class="online-chart-tracks">
+        <div v-if="onlineTrackLoading" class="online-chart-loading" role="status" aria-live="polite">正在加载榜单曲目…</div>
+        <div v-if="onlineTracks.length && !onlineTrackLoading" class="online-chart-tracks">
           <div v-for="track in onlineTracks" :key="`${track.platform}-${track.musicInfo?.id || track.name}`" class="online-chart-track">
             <span class="online-track-copy"><strong>{{ track.name }}</strong><small>{{ track.singer || '未知歌手' }}<template v-if="track.album"> · {{ track.album }}</template></small></span>
             <div class="online-track-actions">
@@ -134,6 +136,9 @@ const onlineLoading = ref(false)
 const onlineLoaded = ref(false)
 const onlineError = ref('')
 const onlinePlaying = ref(null)
+const onlineTrackLoading = ref(false)
+let onlineChartRequestGeneration = 0
+let onlineTrackRequestGeneration = 0
 
 const loadSongs = async () => {
   loading.value = true
@@ -165,26 +170,49 @@ const onAddQueue = (song) => {
   ElMessage.success(`已加入播放队列：《${song.title}》`)
 }
 const loadOnlineCharts = async () => {
+  const generation = ++onlineChartRequestGeneration
   onlineLoading.value = true
   onlineError.value = ''
   onlineLoaded.value = false
+  onlineTracks.value = []
+  onlineChartId.value = ''
   try {
     // 榜单目录是公开平台能力，不应被某个自定义音源初始化失败阻断。
-    onlineCharts.value = await listOnlineCharts(onlinePlatform.value)
-    onlineChartId.value = onlineCharts.value[0]?.id || ''
+    const charts = await listOnlineCharts(onlinePlatform.value)
+    if (generation !== onlineChartRequestGeneration) return
+    onlineCharts.value = charts
+    onlineChartId.value = charts[0]?.id || ''
     if (onlineChartId.value) await loadOnlineTracks()
   } catch (error) {
+    if (generation !== onlineChartRequestGeneration) return
     onlineError.value = error?.message || '在线榜单加载失败，请检查网络/CORS'
     onlineCharts.value = []
     onlineTracks.value = []
   } finally {
-    onlineLoaded.value = true
-    onlineLoading.value = false
+    if (generation === onlineChartRequestGeneration) {
+      onlineLoaded.value = true
+      onlineLoading.value = false
+    }
   }
 }
 const loadOnlineTracks = async () => {
   if (!onlineChartId.value) return
-  try { onlineTracks.value = await fetchOnlineChartTracks(onlinePlatform.value, onlineChartId.value, { limit: 20 }) } catch (error) { onlineError.value = error?.message || '在线榜单曲目加载失败' }
+  const platform = onlinePlatform.value
+  const chartId = onlineChartId.value
+  const generation = ++onlineTrackRequestGeneration
+  onlineTrackLoading.value = true
+  onlineError.value = ''
+  onlineTracks.value = []
+  try {
+    const tracks = await fetchOnlineChartTracks(platform, chartId, { limit: 20 })
+    if (generation !== onlineTrackRequestGeneration || platform !== onlinePlatform.value || chartId !== onlineChartId.value) return
+    onlineTracks.value = tracks
+  } catch (error) {
+    if (generation !== onlineTrackRequestGeneration || platform !== onlinePlatform.value || chartId !== onlineChartId.value) return
+    onlineError.value = error?.message || '在线榜单曲目加载失败'
+  } finally {
+    if (generation === onlineTrackRequestGeneration) onlineTrackLoading.value = false
+  }
 }
 const resolveChartTrack = async (track) => resolveOnlineTrack(track, { quality: '320k' })
 const playOnlineTrack = async (track) => {
