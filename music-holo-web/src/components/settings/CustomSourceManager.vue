@@ -95,8 +95,9 @@
             <div class="source-title-row">
               <h3>{{ source.name }}</h3>
               <el-tag size="small" effect="plain">v{{ source.version }}</el-tag>
-              <el-tag v-if="!compatibilityBySource[source.id]" size="small" type="info" effect="plain">已导入 · 未运行</el-tag>
+              <el-tag v-if="!compatibilityBySource[source.id]" size="small" type="info" effect="plain">已导入 · 自动初始化中</el-tag>
               <el-tag v-else-if="!compatibilityBySource[source.id].error" size="small" type="success" effect="plain">隔离检测通过</el-tag>
+              <el-tag v-if="source.autoRun !== false" size="small" type="warning" effect="plain">自动运行已启用</el-tag>
               <el-tag v-else size="small" type="danger" effect="plain">检测失败</el-tag>
             </div>
             <p v-if="source.description" class="source-description">{{ source.description }}</p>
@@ -437,7 +438,7 @@ function addSource(fileName, script) {
     return false
   }
   if (persist([source, ...sources.value])) {
-    ElMessage.success(`已导入「${source.name}」，不会自动运行`)
+    ElMessage.success(`已导入「${source.name}」，系统将自动初始化并接入在线搜索`)
     return true
   }
   return false
@@ -494,7 +495,7 @@ async function onBackupFileSelected(event) {
     if (sources.value.length + imported.length > MAX_CUSTOM_SOURCES) {
       throw new Error(`导入后会超过 ${MAX_CUSTOM_SOURCES} 个音源上限，请先删除部分脚本`)
     }
-    if (persist([...imported, ...sources.value])) ElMessage.success(`已恢复 ${imported.length} 个音源，不会自动运行`)
+    if (persist([...imported, ...sources.value])) ElMessage.success(`已恢复 ${imported.length} 个音源，系统将自动初始化`)
   } catch (error) {
     ElMessage.warning(error?.message || '音源备份读取失败')
   } finally {

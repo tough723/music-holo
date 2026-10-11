@@ -3715,8 +3715,11 @@ watch(() => userStore.isLogin, (loggedIn) => {
 .pb-left,
 .pb-center,
 .pb-right {
-  transform: translateZ(12px);
-  transform-style: preserve-3d;
+  /* 3D column planes make Chromium hit-test clicks land on the parent div
+     instead of the controls. Keep the bar visually holographic, but flatten
+     interactive columns so mouse/touch events reach their buttons reliably. */
+  transform: none;
+  transform-style: flat;
 }
 
 /* 左侧 */

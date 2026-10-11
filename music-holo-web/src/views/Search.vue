@@ -89,6 +89,36 @@
         </el-tab-pane>
       </el-tabs>
     </section>
+
+    <section v-if="route.query.q" class="online-panel glass-panel">
+      <div class="results-heading">
+        <div>
+          <div class="section-title">在线平台结果</div>
+          <div class="minor-title">通过公开平台适配器搜索；播放时使用已导入的自动音源解析地址。</div>
+        </div>
+        <div class="online-actions">
+          <el-select v-model="onlinePlatform" size="small" aria-label="在线搜索平台" style="width: 150px">
+            <el-option label="网易云音乐" value="wy" />
+            <el-option label="酷我音乐" value="kw" />
+            <el-option label="酷狗音乐" value="kg" />
+            <el-option label="咪咕音乐" value="mg" />
+          </el-select>
+          <el-button type="primary" size="small" :loading="onlineLoading" @click="loadOnlineResults">搜索平台</el-button>
+        </div>
+      </div>
+      <div v-if="onlineError" class="online-error">{{ onlineError }}</div>
+      <div v-else-if="onlineResults.length" class="online-results" aria-label="在线平台结果">
+        <div v-for="track in onlineResults" :key="`${track.platform}-${track.musicInfo?.id || track.musicInfo?.songmid || track.name}`" class="online-track">
+          <div class="online-track-copy">
+            <strong>{{ track.name }}</strong>
+            <span>{{ track.singer || '未知歌手' }}<template v-if="track.album"> · {{ track.album }}</template></span>
+          </div>
+          <el-button size="small" type="primary" :loading="onlinePlaying === track" @click="playOnline(track)">播放</el-button>
+        </div>
+      </div>
+      <el-empty v-else-if="onlineLoaded" description="在线平台没有返回结果" :image-size="70" />
+      <div v-else class="online-hint">输入关键词后点击“搜索平台”，即可查找不在本站演示曲库中的歌曲。</div>
+    </section>
   </div>
 </template>
 
@@ -102,6 +132,8 @@ import { usePlayerStore } from '@/store/player'
 import { usePreferencesStore, RECENT_SEARCH_STORAGE_KEY } from '@/store/preferences'
 import { useUserStore } from '@/store/user'
 import { fmtCount } from '@/utils/format'
+import { searchPlatformTracks } from '@/utils/sourceCatalog'
+import { bootstrapAutoSources, resolveAutoTrack } from '@/utils/customSourceAuto'
 import SongList from '@/components/SongList.vue'
 import Cover from '@/components/Cover.vue'
 
@@ -117,6 +149,12 @@ const favoriteIds = ref([])
 const recentTerms = ref([])
 const results = ref({ keyword: '', songs: [], singers: [], playlists: [] })
 const suggestionTerms = ['霓虹', '月光', '夏夜', '回声', '远方']
+const onlinePlatform = ref('wy')
+const onlineResults = ref([])
+const onlineLoading = ref(false)
+const onlineLoaded = ref(false)
+const onlineError = ref('')
+const onlinePlaying = ref(null)
 
 const readRecent = () => {
   if (!preferences.rememberSearchHistory) {
@@ -181,7 +219,13 @@ watch(
   () => [preferences.rememberSearchHistory, preferences.searchHistoryLimit],
   readRecent
 )
-watch(() => route.query.q, (value) => { loadResults(value) }, { immediate: true })
+watch(() => route.query.q, (value) => {
+  onlineResults.value = []
+  onlineLoaded.value = false
+  onlineError.value = ''
+  loadResults(value)
+  if (String(value || '').trim()) loadOnlineResults()
+}, { immediate: true })
 
 const submitSearch = () => {
   const q = keyword.value.trim()
@@ -197,6 +241,37 @@ const onPlay = (song) => playerStore.playAll(results.value.songs, song.id)
 const onAddQueue = (song) => {
   playerStore.addToQueue(song)
   ElMessage.success(`已加入播放队列：《${song.title}》`)
+}
+
+const loadOnlineResults = async () => {
+  const q = String(route.query.q || keyword.value || '').trim()
+  if (!q) return
+  onlineLoading.value = true
+  onlineLoaded.value = false
+  onlineError.value = ''
+  try {
+    await bootstrapAutoSources()
+    onlineResults.value = await searchPlatformTracks(onlinePlatform.value, q, { limit: 10 })
+  } catch (error) {
+    onlineResults.value = []
+    onlineError.value = error?.message || '在线平台搜索失败，请检查网络或浏览器跨域授权'
+  } finally {
+    onlineLoaded.value = true
+    onlineLoading.value = false
+  }
+}
+
+const playOnline = async (track) => {
+  onlinePlaying.value = track
+  try {
+    const song = await resolveAutoTrack(track, { quality: '320k' })
+    await playerStore.playSong(song)
+    ElMessage.success(`已开始播放《${song.title}》`)
+  } catch (error) {
+    ElMessage.warning(error?.message || '在线曲目解析失败，请先导入自动音源')
+  } finally {
+    onlinePlaying.value = null
+  }
 }
 
 const onToggleFavorite = async (song) => {
@@ -301,6 +376,18 @@ h1 {
 .result-tabs :deep(.el-tabs__content) {
   padding-top: 4px;
 }
+.online-panel {
+  padding: 22px 30px;
+  border-radius: 18px;
+}
+.online-actions { display: flex; align-items: center; gap: 8px; }
+.online-results { display: grid; gap: 8px; }
+.online-track { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; border: 1px solid var(--border-color); border-radius: 12px; }
+.online-track-copy { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.online-track-copy strong, .online-track-copy span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.online-track-copy span, .online-hint { color: var(--text-sub); font-size: 12px; }
+.online-error { color: var(--el-color-danger); font-size: 13px; padding: 10px 0; }
+@media (max-width: 600px) { .online-panel { padding: 20px 16px; } .online-actions { width: 100%; } .online-actions :deep(.el-select) { flex: 1; } }
 .entity-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));

@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
 import * as songApi from '@/api/song'
 import * as lyricApi from '@/api/lyric'
+import { fetchSession, saveSession } from '@/api/session'
+import { useUserStore } from '@/store/user'
 import { useDislikeStore } from '@/store/dislike'
 import { findAdvanceIndex, isSkippedByDislike } from '@/utils/dislikeSkip'
 import { heartWeight, nextHeartIndex, nextShuffleIndex, shuffleList } from '@/utils/playMode'
@@ -1043,6 +1045,47 @@ export const usePlayerStore = defineStore('player', {
     clearSessionSnapshot() {
       this.sessionSnapshot = null
       persist(this)
+    },
+    /**
+     * 本地快照先行 + 服务端尽力同步（跨设备续播，P2-7）。
+     * 服务端失败（离线/未登录/后端故障）静默跳过：本地快照与播放体验不受影响。
+     */
+    pushSessionSnapshot({ now = Date.now() } = {}) {
+      const snapshot = this.saveSessionSnapshot({ now })
+      if (!snapshot) return null
+      try {
+        const userStore = useUserStore()
+        if (userStore.token) {
+          saveSession({
+            queueIds: snapshot.queueIds,
+            currentSongId: snapshot.currentSongId,
+            position: snapshot.position,
+            mode: snapshot.mode,
+            playbackRate: snapshot.playbackRate
+          }).catch(() => {})
+        }
+      } catch {
+        // useUserStore 依赖的 Pinia 未就绪等异常同样不影响本地快照。
+      }
+      return snapshot
+    },
+    /**
+     * 拉取服务端会话快照：比本地更新且未过期时覆盖本地快照，返回它供冷启动询问“继续收听”。
+     * 网络失败返回 null（离线优先，本地快照保持原样）。
+     */
+    async pullRemoteSession({ now = Date.now() } = {}) {
+      let remote = null
+      try {
+        remote = await fetchSession()
+      } catch {
+        return null
+      }
+      const normalized = normalizeSessionSnapshot(remote)
+      if (!normalized || !isSessionSnapshotFresh(normalized, now)) return null
+      if (this.sessionSnapshot && Number(this.sessionSnapshot.savedAt) >= normalized.savedAt) return null
+      this.sessionSnapshot = normalized
+      persist(this)
+      return normalized
     },
     /** 切歌交叉淡入淡出：只接受 0/30/60/120 毫秒，默认关闭。 */
     setCrossfade(ms) {

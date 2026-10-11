@@ -29,6 +29,12 @@ export function createCustomSourceRequestBridge(source, {
   const ensureOriginApproved = async (target, method, signal) => {
     if (signal?.aborted) throw new Error('网络请求已取消')
     if (approvedOrigins.has(target.origin)) return
+    // 用户明确启用“导入即自动授权”后，仍先经过 parseCustomSourceUrl 的
+    // HTTPS/公网校验，再静默批准该公网域名；不会携带 Cookie、令牌或访问内网。
+    if (source?.autoApproveNetwork === true) {
+      approvedOrigins.add(target.origin)
+      return
+    }
 
     let approval = pendingApprovals.get(target.origin)
     if (!approval) {

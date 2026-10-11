@@ -62,6 +62,7 @@ public class SongAssembler {
             // List endpoints stay lightweight; detail() explicitly attaches both LRC texts.
             vo.setStatus(song.getStatus());
             vo.setPlayCount(song.getPlayCount());
+            vo.setLoudness(song.getLoudness());
             vo.setFavorite(false);
             vo.setCreateTime(song.getCreateTime());
             result.add(vo);

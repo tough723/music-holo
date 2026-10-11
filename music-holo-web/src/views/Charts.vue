@@ -49,6 +49,29 @@
       />
       <el-empty v-if="!loading && songs.length === 0" description="这个分类暂时还没有歌曲。" :image-size="100" />
     </section>
+
+    <section class="chart-panel glass-panel online-chart-panel">
+      <div class="chart-heading">
+        <div>
+          <div class="section-title">在线平台榜单</div>
+          <div class="section-sub">默认尝试加载网易云公开榜单；播放时使用已导入的自动音源解析。</div>
+        </div>
+        <el-button size="small" :loading="onlineLoading" @click="loadOnlineCharts">刷新在线榜单</el-button>
+      </div>
+      <div v-if="onlineError" class="online-error">{{ onlineError }}</div>
+      <template v-else>
+        <el-select v-model="onlineChartId" placeholder="选择在线榜单" style="width: min(420px, 100%)" @change="loadOnlineTracks">
+          <el-option v-for="chart in onlineCharts" :key="chart.id" :label="chart.name" :value="chart.id" />
+        </el-select>
+        <div v-if="onlineTracks.length" class="online-chart-tracks">
+          <div v-for="track in onlineTracks" :key="`${track.platform}-${track.musicInfo?.id || track.name}`" class="online-chart-track">
+            <span><strong>{{ track.name }}</strong> · {{ track.singer || '未知歌手' }}</span>
+            <el-button size="small" type="primary" :loading="onlinePlaying === track" @click="playOnlineTrack(track)">播放</el-button>
+          </div>
+        </div>
+        <el-empty v-else-if="onlineLoaded" description="暂无在线榜单曲目" :image-size="70" />
+      </template>
+    </section>
   </div>
 </template>
 
@@ -62,6 +85,8 @@ import * as favoriteApi from '@/api/favorite'
 import { usePlayerStore } from '@/store/player'
 import { useUserStore } from '@/store/user'
 import SongList from '@/components/SongList.vue'
+import { fetchPlatformChartTracks, listPlatformCharts } from '@/utils/sourceCatalog'
+import { bootstrapAutoSources, resolveAutoTrack } from '@/utils/customSourceAuto'
 
 const router = useRouter()
 const playerStore = usePlayerStore()
@@ -74,6 +99,13 @@ const categoryId = ref(null)
 const selectedName = computed(() => categoryId.value === null
   ? '全站热歌榜'
   : `${categories.value.find((item) => item.id === categoryId.value)?.name || '分类'}热歌榜`)
+const onlineCharts = ref([])
+const onlineChartId = ref('')
+const onlineTracks = ref([])
+const onlineLoading = ref(false)
+const onlineLoaded = ref(false)
+const onlineError = ref('')
+const onlinePlaying = ref(null)
 
 const loadSongs = async () => {
   loading.value = true
@@ -97,6 +129,35 @@ const onAddQueue = (song) => {
   playerStore.addToQueue(song)
   ElMessage.success(`已加入播放队列：《${song.title}》`)
 }
+const loadOnlineCharts = async () => {
+  onlineLoading.value = true
+  onlineError.value = ''
+  onlineLoaded.value = false
+  try {
+    await bootstrapAutoSources()
+    onlineCharts.value = await listPlatformCharts('wy')
+    onlineChartId.value = onlineCharts.value[0]?.id || ''
+    if (onlineChartId.value) await loadOnlineTracks()
+  } catch (error) {
+    onlineError.value = error?.message || '在线榜单加载失败，请检查网络/CORS'
+    onlineCharts.value = []
+    onlineTracks.value = []
+  } finally {
+    onlineLoaded.value = true
+    onlineLoading.value = false
+  }
+}
+const loadOnlineTracks = async () => {
+  if (!onlineChartId.value) return
+  try { onlineTracks.value = await fetchPlatformChartTracks('wy', onlineChartId.value, { limit: 20 }) } catch (error) { onlineError.value = error?.message || '在线榜单曲目加载失败' }
+}
+const playOnlineTrack = async (track) => {
+  onlinePlaying.value = track
+  try { await playerStore.playSong(await resolveAutoTrack(track, { quality: '320k' })); ElMessage.success(`已开始播放《${track.name}》`) }
+  catch (error) { ElMessage.warning(error?.message || '在线曲目解析失败，请先导入自动音源') }
+  finally { onlinePlaying.value = null }
+}
+
 const onToggleFavorite = async (song) => {
   if (!userStore.isLogin) {
     ElMessage.warning('请先登录后再收藏')
@@ -120,6 +181,7 @@ onMounted(async () => {
     try { favoriteIds.value = await favoriteApi.ids() } catch { /* ignore */ }
   }
   await loadSongs()
+  loadOnlineCharts()
 })
 </script>
 
@@ -184,6 +246,10 @@ h1 {
 .section-sub {
   margin-top: 6px;
 }
+.online-chart-panel { margin-top: 0; }
+.online-chart-tracks { display: grid; gap: 8px; margin-top: 14px; }
+.online-chart-track { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 10px; }
+.online-error { color: var(--el-color-danger); font-size: 13px; margin: 10px 0; }
 .chart-tabs {
   display: flex;
   flex-wrap: wrap;

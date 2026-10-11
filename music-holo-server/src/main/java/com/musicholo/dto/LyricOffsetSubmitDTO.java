@@ -1,5 +1,7 @@
 package com.musicholo.dto;
 
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 
@@ -16,5 +18,7 @@ public class LyricOffsetSubmitDTO implements Serializable {
 
     /** 偏移毫秒，正值＝歌词提前出现；范围 ±5000，与前端时间校准一致 */
     @NotNull(message = "偏移不能为空")
+    @Min(value = -5000, message = "偏移需在 ±5000 毫秒以内")
+    @Max(value = 5000, message = "偏移需在 ±5000 毫秒以内")
     private Integer offsetMs;
 }

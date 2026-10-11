@@ -3,6 +3,7 @@ package com.musicholo.vo;
 import lombok.Data;
 
 import java.io.Serializable;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 /**
@@ -46,6 +47,9 @@ public class SongVO implements Serializable {
     private Integer status;
 
     private Long playCount;
+
+    /** LUFS 实测响度；音频预扫描未实现前恒为 null */
+    private BigDecimal loudness;
 
     /** 当前用户是否已收藏（未登录时为 false） */
     private Boolean favorite;
