@@ -2263,6 +2263,7 @@ function recoverFromStall(song) {
 async function retryAudio() {
   const song = currentSong.value
   const audio = activeAudioElement()
+  let playableSong = song
   if (song?.onlineQueueReference && isOnlineQueueReferenceExpired(song.onlineQueueReference)) {
     try {
       const { resolveOnlineTrack } = await import('@/utils/onlineTrackService')
@@ -2282,21 +2283,22 @@ async function retryAudio() {
           isCustomSource: true,
           onlineQueueReference: refreshed.onlineQueueReference
         })
+        playableSong = currentSong.value
       }
     } catch {
       ElMessage.error('在线音频重新解析失败，请稍后重试')
       return
     }
   }
-  if (song?.id !== undefined && song?.id !== null && failedSongIds.value.delete(song.id)) {
+  if (playableSong?.id !== undefined && playableSong?.id !== null && failedSongIds.value.delete(playableSong.id)) {
     failedSongIds.value = new Set(failedSongIds.value)
   }
-  if (!song?.audioUrl || !audio) return
+  if (!playableSong?.audioUrl || !audio) return
   // 用户手动重试：清空自动重试的账本，重新给满三次机会。
   resetAutoRetry()
   audioError.value = false
   offlineFallbackAttempted.value = null
-  reloadAudio(audio, song)
+  reloadAudio(audio, playableSong)
   seekAudioWhenReady(audio, playerStore.currentTime)
   if (playerStore.playing) playActiveAudio(audio)
 }
