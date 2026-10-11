@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createOnlineQueueReference, isOnlineQueueReferenceExpired } from '@/utils/onlineQueue'
+import { createOnlineQueueReference, isOnlineQueueReferenceExpired, ONLINE_AUDIO_TTL_MS } from '@/utils/onlineQueue'
 
 describe('online queue references', () => {
   it('keeps platform identity and short-lived resolved URL separately', () => {
@@ -11,7 +11,9 @@ describe('online queue references', () => {
     expect(isOnlineQueueReferenceExpired(ref, 2000)).toBe(true)
   })
 
-  it('supports platform-specific IDs when id is absent', () => {
-    expect(createOnlineQueueReference({ platform: 'kw', musicInfo: { songmid: 'abc' } }).platformTrackId).toBe('abc')
+  it('uses a bounded default expiry when the resolver omits one', () => {
+    const ref = createOnlineQueueReference({ platform: 'kw', musicInfo: { songmid: 'abc' } }, { resolvedAt: 1000 })
+    expect(ref.platformTrackId).toBe('abc')
+    expect(ref.audioExpiresAt).toBe(1000 + ONLINE_AUDIO_TTL_MS)
   })
 })

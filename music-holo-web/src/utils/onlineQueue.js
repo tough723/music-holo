@@ -1,6 +1,8 @@
 /**
  * 在线曲目队列引用：保留平台/音源身份，临时音频地址只做短期运行时缓存。
  */
+export const ONLINE_AUDIO_TTL_MS = 30 * 60 * 1000
+
 export function createOnlineQueueReference(track, resolved = {}) {
   const musicInfo = { ...(track?.musicInfo || {}) }
   const platform = String(track?.platform || musicInfo.platform || '').trim()
@@ -14,7 +16,7 @@ export function createOnlineQueueReference(track, resolved = {}) {
     sourceId: String(resolved.sourceId || resolved.sourceName || '').trim(),
     resolvedAt: Number(resolved.resolvedAt) || Date.now(),
     audioUrl: String(resolved.audioUrl || '').trim(),
-    audioExpiresAt: Number(resolved.audioExpiresAt) || 0
+    audioExpiresAt: Number(resolved.audioExpiresAt) || (Number(resolved.resolvedAt) || Date.now()) + ONLINE_AUDIO_TTL_MS
   }
 }
 
